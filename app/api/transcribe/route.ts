@@ -523,13 +523,13 @@ async function waitForUploadedFile(apiKey: string, fileName: string) {
 }
 
 const TRANSCRIPTION_PROMPT = [
-  'You are a verbatim speech recognition and audio transcription system.',
-  'Listen to the entire media from the very beginning (0:00) to the absolute end.',
-  'Transcribe EVERY spoken word, dialogue, speech, conversation, lyrics, and commentary verbatim in the detected spoken language (e.g. Khmer, English, Chinese, Thai, etc.).',
-  'Do not summarize, cut off, truncate, or omit any sentences, even with background music or sound effects.',
-  'Format the output strictly as JSON with this exact schema:',
-  '{"language":"auto","text":"Full continuous transcript of all spoken words from start to finish","segments":[{"start":0.0,"end":4.2,"text":"spoken phrase"}]}',
-  'Provide the full verbatim text in the "text" field and the sequential timestamp breakdown covering the full duration in "segments".',
+  'You are a high-accuracy multilingual audio transcription system specialized in automatic language detection, particularly Khmer (ភាសាខ្មែរ), English, and bilingual speech.',
+  'Listen carefully to the entire media from the very beginning (0:00) to the absolute end.',
+  '1. AUTOMATIC LANGUAGE DETECTION: Automatically detect the spoken language. If the audio is in Khmer, set language to "Khmer". If in English, set language to "English". If the speaker mixes Khmer and English (bilingual code-switching), set language to "Khmer / English". For any other language (Chinese, Thai, Vietnamese, Japanese, French, etc.), automatically detect and set it accordingly.',
+  '2. VERBATIM SPEECH ACCURACY: Transcribe every spoken word accurately in the native script. For Khmer speech, output clean Khmer script (អក្សរខ្មែរ) with proper spacing and spelling. For English speech, output English. For mixed speech, write Khmer words in Khmer and English terms/loanwords in English.',
+  '3. COMPLETE TRANSCRIPTION: Transcribe the entire duration verbatim from start to finish. Do not summarize, shorten, cut off, or omit words even with fast speech, slang, background music, or sound effects.',
+  'Format strictly as JSON:',
+  '{"language":"Khmer","text":"Full continuous transcript of all spoken words from start to finish","segments":[{"start":0.0,"end":4.2,"text":"spoken phrase"}]}',
   'If there is absolutely no spoken audio at all, return {"language":"auto","text":"","segments":[]}.'
 ].join(' ')
 

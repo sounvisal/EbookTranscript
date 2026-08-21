@@ -93,6 +93,11 @@ export default function TranscriptPanel() {
           <div className="flex items-center gap-2 text-sm font-semibold text-emerald-700">
             <span className="h-2 w-2 rounded-full bg-emerald-500" />
             Transcript ready
+            {transcript?.language && transcript.language !== 'auto' && (
+              <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-blue-50 border border-blue-200 px-2.5 py-0.5 text-xs font-semibold text-blue-700">
+                🌐 {transcript.language}
+              </span>
+            )}
           </div>
           <h2 className="mt-2 truncate text-xl font-semibold text-slate-950">{sourceName}</h2>
           <p className="mt-1 text-xs text-slate-500">{wordCount.toLocaleString()} words · {text.length.toLocaleString()} characters</p>
