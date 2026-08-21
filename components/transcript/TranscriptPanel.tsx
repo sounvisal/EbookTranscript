@@ -10,6 +10,7 @@ import {
 import { useTranscriptStore } from '@/store/transcriptStore'
 import { Check, Copy, Download, RefreshCw } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import ReportErrorButton from '@/components/common/ReportErrorButton'
 
 export default function TranscriptPanel() {
   const { transcript, file, resetAll } = useTranscriptStore()
@@ -114,9 +115,17 @@ export default function TranscriptPanel() {
         <button onClick={() => downloadVtt(text, sourceName, displaySegments)} className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
           <Download className="h-4 w-4" /> VTT
         </button>
-        <button onClick={resetAll} className="ml-auto flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium text-slate-500 transition-colors hover:bg-white hover:text-slate-900">
-          <RefreshCw className="h-4 w-4" /> New transcript
-        </button>
+        <div className="ml-auto flex items-center gap-2">
+          <ReportErrorButton
+            errorMessage="User reported inaccurate transcript or quality issue"
+            filename={sourceName}
+            inputType="file"
+            className="text-slate-600 border-slate-200 hover:bg-slate-100"
+          />
+          <button onClick={resetAll} className="flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium text-slate-500 transition-colors hover:bg-white hover:text-slate-900">
+            <RefreshCw className="h-4 w-4" /> New transcript
+          </button>
+        </div>
       </div>
 
       <div className="p-4 sm:p-7">

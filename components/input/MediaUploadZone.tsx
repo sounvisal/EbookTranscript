@@ -8,6 +8,8 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { MAX_MEDIA_UPLOAD_BYTES, MAX_MEDIA_UPLOAD_MB } from '@/lib/uploadLimits'
 import { transcribeWithProgress } from '@/lib/transcribeClient'
 
+import ReportErrorButton from '@/components/common/ReportErrorButton'
+
 export default function MediaUploadZone() {
   const { file, setFile, status, setStatus, setProgress, setTranscript, errorMessage, setErrorMessage } = useTranscriptStore()
   const [sourceUrl, setSourceUrl] = useState('')
@@ -63,9 +65,18 @@ export default function MediaUploadZone() {
   return (
     <div className="flex flex-col gap-5">
       {status === 'error' && (
-        <div className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-          <span>{errorMessage || 'Transcription failed. Try another file or direct media link.'}</span>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{errorMessage || 'Transcription failed. Try another file or direct media link.'}</span>
+          </div>
+          <ReportErrorButton
+            errorMessage={errorMessage || 'Transcription failed.'}
+            filename={file?.name || sourceUrl || undefined}
+            fileSizeBytes={file?.size}
+            inputType={file ? 'file' : 'url'}
+            className="self-end sm:self-auto shrink-0"
+          />
         </div>
       )}
 

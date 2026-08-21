@@ -9,6 +9,7 @@ import { getPlainTranscriptText } from '@/lib/transcript'
 import { downloadTxt } from '@/lib/download'
 import type { TranscriptSegment } from '@/lib/transcript'
 import { transcribeWithProgress } from '@/lib/transcribeClient'
+import ReportErrorButton from '@/components/common/ReportErrorButton'
 
 // Max files a user can queue at once, and how far apart we kick off each
 // request. Every job still runs concurrently ("max at the same time"); the
@@ -243,7 +244,19 @@ export default function BatchUploadZone() {
               )}
 
               {job.status === 'error' && (
-                <div className="flex items-start gap-2 rounded-lg bg-red-50 p-3 text-xs text-red-700"><AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" /><span>{job.error}</span></div>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 rounded-lg bg-red-50 p-3 text-xs text-red-700">
+                  <div className="flex items-start gap-2">
+                    <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    <span>{job.error}</span>
+                  </div>
+                  <ReportErrorButton
+                    errorMessage={job.error || 'Batch transcription failed.'}
+                    filename={job.file.name}
+                    fileSizeBytes={job.file.size}
+                    inputType="batch"
+                    className="self-end sm:self-auto shrink-0"
+                  />
+                </div>
               )}
 
               {job.status === 'complete' && job.transcript && (
