@@ -9,7 +9,6 @@ import { getPlainTranscriptText } from '@/lib/transcript'
 import { downloadTxt } from '@/lib/download'
 import type { TranscriptSegment } from '@/lib/transcript'
 import { transcribeWithProgress } from '@/lib/transcribeClient'
-import { prepareMediaForUpload } from '@/lib/clientAudio'
 
 // Max files a user can queue at once, and how far apart we kick off each
 // request. Every job still runs concurrently ("max at the same time"); the
@@ -125,11 +124,8 @@ export default function BatchUploadZone() {
       updateJob(job.id, { status: 'processing', progress: 0, error: undefined })
 
       try {
-        // Fast client-side audio preparation (bypasses Vercel 4.5MB limit)
-        const fileToUpload = await prepareMediaForUpload(job.file)
-
-        // Real progress: driven by Gemini's streamed transcript timestamps.
-        const data = await transcribeWithProgress({ file: fileToUpload }, (event) => {
+        // Real progress: driven by direct-to-Gemini upload and streamed transcript
+        const data = await transcribeWithProgress({ file: job.file }, (event) => {
           if (event.type === 'progress') {
             updateJob(job.id, { progress: event.progress })
           }

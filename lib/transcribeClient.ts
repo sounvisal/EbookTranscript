@@ -18,24 +18,122 @@ type StreamEvent =
   | { type: 'error'; error: string }
 
 /**
- * Calls /api/transcribe in streaming mode and forwards real progress events
- * (upload -> processing -> incremental progress derived from Gemini's streamed
- * transcript) via onEvent. Resolves with the final transcript result.
+ * Uploads a file directly to Gemini Files API from the browser.
+ * This bypasses Vercel Serverless 4.5MB request body limits completely (supporting files up to 2GB).
+ */
+async function directUploadToGemini(
+  file: File,
+  apiKey: string,
+  host: string,
+  onProgress?: (percent: number) => void
+): Promise<{ uri: string; name: string; mimeType: string }> {
+  const boundary = '----GeminiBoundary' + Math.random().toString(16).slice(2)
+  const metadata = JSON.stringify({
+    file: {
+      mimeType: file.type || 'application/octet-stream',
+      displayName: file.name
+    }
+  })
+
+  const preamble = `--${boundary}\r\nContent-Type: application/json; charset=utf-8\r\n\r\n${metadata}\r\n--${boundary}\r\nContent-Type: ${file.type || 'application/octet-stream'}\r\n\r\n`
+  const epilogue = `\r\n--${boundary}--`
+
+  const bodyBlob = new Blob([preamble, file, epilogue], {
+    type: `multipart/related; boundary=${boundary}`
+  })
+
+  const uploadUrl = `https://${host}/upload/v1beta/files`
+
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', uploadUrl, true)
+    xhr.setRequestHeader('x-goog-api-client', 'transcript-client/1.0')
+    xhr.setRequestHeader('x-goog-api-key', apiKey)
+    xhr.setRequestHeader('X-Goog-Upload-Protocol', 'multipart')
+    xhr.setRequestHeader('Content-Type', `multipart/related; boundary=${boundary}`)
+
+    if (xhr.upload && onProgress) {
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          const percent = Math.min(99, Math.round((e.loaded / e.total) * 100))
+          onProgress(percent)
+        }
+      }
+    }
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const res = JSON.parse(xhr.responseText)
+          if (res.file) {
+            resolve(res.file)
+            return
+          }
+        } catch {}
+      }
+      try {
+        const res = JSON.parse(xhr.responseText)
+        reject(new Error(res.error?.message || `Upload failed with status ${xhr.status}`))
+      } catch {
+        reject(new Error(`Upload failed with status ${xhr.status}`))
+      }
+    }
+
+    xhr.onerror = () => {
+      reject(new Error('Network error during file upload to Gemini.'))
+    }
+
+    xhr.send(bodyBlob)
+  })
+}
+
+/**
+ * Calls /api/transcribe in streaming mode and forwards real progress events.
+ * For local files, uses Direct-to-Gemini upload to prevent Vercel 413 Payload Too Large errors.
  */
 export async function transcribeWithProgress(
   input: { file?: File; url?: string },
   onEvent?: (event: TranscribeProgressEvent) => void
 ): Promise<TranscribeResult> {
-  const requestInit: RequestInit = { method: 'POST' }
+  let requestInit: RequestInit = { method: 'POST' }
 
   if (input.file) {
-    const formData = new FormData()
-    formData.append('file', input.file)
-    requestInit.headers = { 'x-stream': '1' }
-    requestInit.body = formData
+    onEvent?.({ type: 'status', phase: 'uploading' })
+
+    // 1. Get direct upload authorization
+    const sessionRes = await fetch('/api/upload-session', { method: 'POST' })
+    if (!sessionRes.ok) {
+      const errData = await sessionRes.json().catch(() => null)
+      throw new Error(errData?.error || 'Please sign in to transcribe files.')
+    }
+    const { apiKey, host } = await sessionRes.json()
+
+    // 2. Upload file directly to Gemini Files API (2GB limit)
+    const uploadedFile = await directUploadToGemini(input.file, apiKey, host, (progress) => {
+      onEvent?.({ type: 'progress', progress })
+    })
+
+    onEvent?.({ type: 'status', phase: 'processing' })
+
+    // 3. Send lightweight 200-byte JSON request to /api/transcribe
+    requestInit = {
+      method: 'POST',
+      headers: {
+        'x-stream': '1',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        fileUri: uploadedFile.uri,
+        mimeType: uploadedFile.mimeType || input.file.type || 'video/mp4',
+        displayName: input.file.name
+      })
+    }
   } else if (input.url) {
-    requestInit.headers = { 'x-stream': '1', 'Content-Type': 'application/json' }
-    requestInit.body = JSON.stringify({ url: input.url })
+    requestInit = {
+      method: 'POST',
+      headers: { 'x-stream': '1', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: input.url })
+    }
   } else {
     throw new Error('Choose a file or paste a media link first.')
   }

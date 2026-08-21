@@ -7,7 +7,6 @@ import { useTranscriptStore } from '@/store/transcriptStore'
 import { motion, AnimatePresence } from 'framer-motion'
 import { MAX_MEDIA_UPLOAD_BYTES, MAX_MEDIA_UPLOAD_MB } from '@/lib/uploadLimits'
 import { transcribeWithProgress } from '@/lib/transcribeClient'
-import { prepareMediaForUpload } from '@/lib/clientAudio'
 
 export default function MediaUploadZone() {
   const { file, setFile, status, setStatus, setProgress, setTranscript, errorMessage, setErrorMessage } = useTranscriptStore()
@@ -36,15 +35,11 @@ export default function MediaUploadZone() {
     setProgress(0)
 
     try {
-      let uploadInput = input
-      if (input.file) {
-        const optimizedFile = await prepareMediaForUpload(input.file)
-        uploadInput = { ...input, file: optimizedFile }
-      }
-
-      setStatus('processing')
-      // Real progress streamed from the transcribe API.
-      const data = await transcribeWithProgress(uploadInput, (event) => {
+      // Real progress streamed from the direct-to-Gemini transcribe client.
+      const data = await transcribeWithProgress(input, (event) => {
+        if (event.type === 'status' && event.phase === 'processing') {
+          setStatus('processing')
+        }
         if (event.type === 'progress') {
           setProgress(event.progress)
         }

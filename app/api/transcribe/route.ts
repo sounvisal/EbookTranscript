@@ -58,7 +58,8 @@ const SOCIAL_MEDIA_HOSTS = [
 ]
 
 type MediaInput = {
-  buffer: Buffer
+  buffer?: Buffer
+  fileUri?: string
   mimeType: string
   displayName: string
   sourceName: string
@@ -395,10 +396,19 @@ async function getMediaInputFromRequest(req: Request): Promise<MediaInput> {
 
   if (contentType.includes('application/json')) {
     const body = await req.json()
+    // Direct Gemini File URI support (for files uploaded directly from browser to Gemini)
+    if (typeof body?.fileUri === 'string' && body.fileUri.trim()) {
+      return {
+        fileUri: body.fileUri.trim(),
+        mimeType: body.mimeType || 'video/mp4',
+        displayName: body.displayName || 'uploaded-media',
+        sourceName: body.displayName || 'uploaded-media'
+      }
+    }
     const urlValue = typeof body?.url === 'string' ? body.url.trim() : ''
 
     if (!urlValue) {
-      throw new Error('No media URL provided.')
+      throw new Error('No media provided.')
     }
 
     return getMediaInputFromUrl(urlValue)
@@ -691,7 +701,7 @@ async function mapWithConcurrency<TInput, TResult>(
 // Throws on failure so the caller can rotate to another key.
 async function transcribeWithKey(
   apiKey: string,
-  audioInput: { buffer: Buffer; mimeType: string; displayName: string; durationSeconds: number },
+  audioInput: { buffer?: Buffer; fileUri?: string; mimeType: string; displayName: string; durationSeconds?: number },
   sourceName: string,
   models: string[],
   emit: (event: ProgressEvent) => void
@@ -699,33 +709,36 @@ async function transcribeWithKey(
   let uploadedFileName = ''
 
   try {
-    // Fast path: small audio goes inline in the request — no upload, no polling.
-    // Video files and media over 8MB always use the Files API.
-    const useInline =
-      audioInput.buffer.byteLength <= INLINE_AUDIO_LIMIT_BYTES &&
-      !audioInput.mimeType.startsWith('video/')
     let mediaMimeType = audioInput.mimeType
-    let fileUri: string | undefined
+    let fileUri = audioInput.fileUri
     let metadataDuration = 0
 
-    if (!useInline) {
-      emit({ type: 'status', phase: 'uploading' })
+    if (!fileUri && audioInput.buffer) {
+      // Fast path: small audio goes inline in the request — no upload, no polling.
+      // Video files and media over 8MB always use the Files API.
+      const useInline =
+        audioInput.buffer.byteLength <= INLINE_AUDIO_LIMIT_BYTES &&
+        !audioInput.mimeType.startsWith('video/')
 
-      const uploadResult = await withGeminiRetry(
-        () =>
-          uploadGeminiFile(apiKey, {
-            buffer: audioInput.buffer,
-            mimeType: audioInput.mimeType,
-            displayName: audioInput.displayName
-          }),
-        'upload'
-      )
-      uploadedFileName = uploadResult.file.name
+      if (!useInline) {
+        emit({ type: 'status', phase: 'uploading' })
 
-      const uploadedFile = await waitForUploadedFile(apiKey, uploadedFileName)
-      mediaMimeType = uploadedFile.mimeType
-      fileUri = uploadedFile.uri
-      metadataDuration = parseDurationSeconds(uploadedFile.videoMetadata?.videoDuration)
+        const uploadResult = await withGeminiRetry(
+          () =>
+            uploadGeminiFile(apiKey, {
+              buffer: audioInput.buffer!,
+              mimeType: audioInput.mimeType,
+              displayName: audioInput.displayName
+            }),
+          'upload'
+        )
+        uploadedFileName = uploadResult.file.name
+
+        const uploadedFile = await waitForUploadedFile(apiKey, uploadedFileName)
+        mediaMimeType = uploadedFile.mimeType
+        fileUri = uploadedFile.uri
+        metadataDuration = parseDurationSeconds(uploadedFile.videoMetadata?.videoDuration)
+      }
     }
 
     const totalDuration = audioInput.durationSeconds || metadataDuration
@@ -811,8 +824,26 @@ async function runTranscriptionPipeline(
 
   emit({ type: 'status', phase: 'uploading' })
   const mediaInput = await getMediaInputFromRequest(req)
+  const models = getGeminiModels()
+
+  // Fast direct path for files uploaded directly from browser to Gemini Files API
+  if (mediaInput.fileUri) {
+    return await transcribeWithKey(
+      keys[0],
+      {
+        fileUri: mediaInput.fileUri,
+        mimeType: mediaInput.mimeType,
+        displayName: mediaInput.displayName,
+        durationSeconds: 0
+      },
+      mediaInput.sourceName,
+      models,
+      emit
+    )
+  }
+
   const audioInput = await extractSpeechAudio({
-    buffer: mediaInput.buffer,
+    buffer: mediaInput.buffer!,
     mimeType: mediaInput.mimeType,
     displayName: mediaInput.displayName
   })
@@ -830,8 +861,6 @@ async function runTranscriptionPipeline(
       source: mediaInput.sourceName || 'cache'
     }
   }
-
-  const models = getGeminiModels()
 
   const runAcrossKeys = async (
     audio: { buffer: Buffer; mimeType: string; displayName: string; durationSeconds: number },
