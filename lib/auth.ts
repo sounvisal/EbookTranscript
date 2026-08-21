@@ -6,6 +6,13 @@ import { PrismaAdapter } from "@auth/prisma-adapter"
 import { prisma } from "@/lib/prisma"
 import { verifyPassword } from "@/lib/password"
 
+// Ensure NEXTAUTH_URL is never empty in NextAuth
+if (!process.env.NEXTAUTH_URL || process.env.NEXTAUTH_URL.trim() === '') {
+  process.env.NEXTAUTH_URL = process.env.VERCEL_URL
+    ? `https://${process.env.VERCEL_URL}`
+    : 'http://localhost:3000'
+}
+
 const providers: NextAuthOptions["providers"] = [
   CredentialsProvider({
     name: "Email and Password",
