@@ -1,0 +1,125 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Account {
+  id                 String  @id @default(cuid())
+  userId             String
+  type               String
+  provider           String
+  providerAccountId  String
+  refresh_token      String?  
+  access_token       String?  
+  expires_at         Int?
+  token_type         String?
+  scope              String?
+  id_token           String?  
+  session_state      String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  passwordHash  String?
+  role          String    @default("user") // "admin" | "user"
+  emailVerified DateTime?
+  image         String?
+  accounts      Account[]
+  sessions      Session[]
+  transcripts   Transcript[]
+  metrics       UsageMetric[]
+  errors        ErrorLog[]
+  createdAt     DateTime  @default(now())
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model Transcript {
+  id        String   @id @default(cuid())
+  text      String
+  source    String   
+  filename  String?
+  duration  Float?
+  wordCount Int?
+  language  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+/// Caches transcription results keyed by a hash of the extracted audio bytes, so
+/// re-transcribing the same media returns instantly without using API quota.
+model TranscriptCache {
+  id        String   @id @default(cuid())
+  audioHash String   @unique
+  text      String
+  segments  String?
+  language  String?
+  duration  Float?
+  createdAt DateTime @default(now())
+
+  @@index([audioHash])
+}
+
+/// Privacy-safe telemetry for admin: tracks tokens, models, duration, and user metrics WITHOUT storing private transcript content.
+model UsageMetric {
+  id                 String   @id @default(cuid())
+  userId             String?
+  user               User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  model              String   @default("gemini-2.5-flash-lite")
+  inputType          String   // "file" | "url" | "batch" | "voice"
+  fileFormat         String?  // "mp3" | "wav" | "mp4" etc.
+  fileSizeBytes      Int?
+  durationSeconds    Float?
+  wordCount          Int?
+  estimatedInputTokens  Int   @default(0)
+  estimatedOutputTokens Int   @default(0)
+  totalTokens        Int      @default(0)
+  status             String   @default("success") // "success" | "error"
+  createdAt          DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([model])
+  @@index([status])
+}
+
+/// Error report log for admins to diagnose and fix issues for users.
+model ErrorLog {
+  id           String   @id @default(cuid())
+  userId       String?
+  user         User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  endpoint     String   // "/api/transcribe" | "/api/report"
+  errorMessage String
+  errorType    String?  // "API_TIMEOUT" | "RATE_LIMIT" | "INVALID_FORMAT" | "NETWORK_ERROR" etc.
+  model        String?
+  fileFormat   String?
+  metadata     String?  // JSON metadata (file size, duration, status code, IP etc.)
+  createdAt    DateTime @default(now())
+
+  @@index([createdAt])
+}
