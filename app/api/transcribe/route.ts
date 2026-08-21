@@ -33,10 +33,9 @@ const MAX_REMOTE_FILE_BYTES = MAX_MEDIA_UPLOAD_BYTES
 const MODEL_NAME = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite'
 const DEFAULT_FALLBACK_MODELS = ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-1.5-flash']
 
-// Audio at or below this size is sent inline in the transcribe request, skipping
-// the Files API upload and its polling loop (a few seconds faster per request).
-// Gemini's total inline request limit is ~20MB; we stay well under it.
-const INLINE_AUDIO_LIMIT_BYTES = 15 * 1024 * 1024
+// Audio at or below this size is sent inline in the transcribe request.
+// Video files or audio larger than 8MB always use the Files API (supports up to 2GB).
+const INLINE_AUDIO_LIMIT_BYTES = 8 * 1024 * 1024
 
 // Recordings longer than this are split into parallel chunks so long media
 // finishes far faster than transcribing it in one sequential pass and ensures
@@ -699,9 +698,11 @@ async function transcribeWithKey(
 ): Promise<TranscriptResultPayload> {
   let uploadedFileName = ''
 
-  try {
     // Fast path: small audio goes inline in the request — no upload, no polling.
-    const useInline = audioInput.buffer.byteLength <= INLINE_AUDIO_LIMIT_BYTES
+    // Video files and media over 8MB always use the Files API.
+    const useInline =
+      audioInput.buffer.byteLength <= INLINE_AUDIO_LIMIT_BYTES &&
+      !audioInput.mimeType.startsWith('video/')
     let mediaMimeType = audioInput.mimeType
     let fileUri: string | undefined
     let metadataDuration = 0

@@ -4,16 +4,15 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import ffmpegPath from 'ffmpeg-static'
 
-// Audio settings tuned for speech transcription. Mono + 16kHz is what speech
-// recognition models expect. Opus at a low bitrate keeps speech clear while
-// producing a much smaller file than MP3 — faster uploads and fewer tokens.
+// Audio settings tuned for speech transcription. Mono + 16kHz MP3 is universally
+// supported by ffmpeg and Google Gemini on all platforms.
 const TARGET_CHANNELS = 1
 const TARGET_SAMPLE_RATE = 16000
-const TARGET_BITRATE = '24k'
-const TARGET_CODEC = 'libopus'
-const TARGET_FORMAT = 'ogg'
-const TARGET_EXTENSION = 'ogg'
-const TARGET_MIME_TYPE = 'audio/ogg'
+const TARGET_BITRATE = '32k'
+const TARGET_CODEC = 'libmp3lame'
+const TARGET_FORMAT = 'mp3'
+const TARGET_EXTENSION = 'mp3'
+const TARGET_MIME_TYPE = 'audio/mpeg'
 const EXTRACTION_TIMEOUT_MS = 300000
 
 export type ExtractedAudio = {

@@ -40,12 +40,21 @@ export async function transcribeWithProgress(
     throw new Error('Choose a file or paste a media link first.')
   }
 
-  const res = await fetch('/api/transcribe', requestInit)
-
   // Errors before the stream starts (auth, etc.) come back as plain JSON.
   if (!res.ok || !res.body) {
-    const data = await res.json().catch(() => null)
-    throw new Error(data?.error || 'Transcription failed')
+    let errorMsg = ''
+    try {
+      const data = await res.json()
+      errorMsg = data?.error || data?.message || ''
+    } catch {
+      try {
+        errorMsg = await res.text()
+      } catch {}
+    }
+    if (res.status === 401) {
+      throw new Error(errorMsg || 'Please sign in to transcribe files.')
+    }
+    throw new Error(errorMsg || `Request failed (${res.status} ${res.statusText})`)
   }
 
   const reader = res.body.getReader()
