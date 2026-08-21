@@ -421,19 +421,128 @@ export function parseStructuredTranscriptText(text: string): ParsedStructuredTra
   }
 }
 
+/**
+ * Formats transcript segments into a clean, well-punctuated, readable article with natural paragraphs.
+ * Removes chopped line breaks, fixes punctuation spacing, and groups sentences naturally.
+ */
+export function formatCleanArticle(textOrSegments: string | TranscriptSegmentInput[] | null): string {
+  if (!textOrSegments) return ''
+
+  let segments: TranscriptSegment[] = []
+  if (Array.isArray(textOrSegments)) {
+    segments = normalizeTranscriptSegments(textOrSegments)
+  } else if (typeof textOrSegments === 'string') {
+    const structured = parseStructuredTranscriptText(textOrSegments)
+    if (structured?.segments?.length) {
+      segments = structured.segments
+    } else {
+      const extracted = extractTimestampedSegments(textOrSegments)
+      if (extracted.length) {
+        segments = extracted
+      } else {
+        return formatRawTextAsArticle(textOrSegments)
+      }
+    }
+  }
+
+  if (!segments.length) return ''
+
+  const paragraphs: string[] = []
+  let currentParagraphText = ''
+  let wordCountInParagraph = 0
+  let isNewSentence = true
+
+  for (let i = 0; i < segments.length; i++) {
+    let piece = (segments[i].text || '').trim()
+    if (!piece) continue
+
+    // Clean stray timestamps, leading bullets, and duplicate spaces
+    piece = piece.replace(/^[\s•*-]+/, '').replace(/\s+/g, ' ').trim()
+
+    // Capitalize if it's the start of a new sentence in Latin scripts
+    if (isNewSentence && /^[a-z]/.test(piece)) {
+      piece = piece.charAt(0).toUpperCase() + piece.slice(1)
+    }
+
+    if (!currentParagraphText) {
+      currentParagraphText = piece
+    } else {
+      const lastChar = currentParagraphText.slice(-1)
+      const nextChar = piece.charAt(0)
+
+      if (/[.!?។。]/.test(lastChar)) {
+        currentParagraphText += ' ' + piece
+      } else if (/[,:;]/.test(lastChar) || /[,:;]/.test(nextChar)) {
+        currentParagraphText += ' ' + piece
+      } else {
+        currentParagraphText += ' ' + piece
+      }
+    }
+
+    wordCountInParagraph += countWords(piece)
+
+    // Check if current piece ends with sentence punctuation
+    const endsWithPunct = /[.!?។。]["')\]]?$/.test(piece)
+    isNewSentence = endsWithPunct
+
+    const nextSegment = segments[i + 1]
+    const timeGap = nextSegment ? (nextSegment.start - (segments[i].end || segments[i].start)) : 0
+
+    // Form a new paragraph if sentence ended and paragraph has sufficient length, or long pause
+    if (
+      (endsWithPunct && wordCountInParagraph >= 35) ||
+      timeGap >= 3.0 ||
+      wordCountInParagraph >= 70
+    ) {
+      let finalPara = currentParagraphText.trim()
+      if (!/[.!?។。…"')\]]$/.test(finalPara) && !/[\u1780-\u17FF\u4E00-\u9FFF]/.test(finalPara.slice(-5))) {
+        finalPara += '.'
+      }
+      paragraphs.push(finalPara)
+      currentParagraphText = ''
+      wordCountInParagraph = 0
+      isNewSentence = true
+    }
+  }
+
+  if (currentParagraphText.trim()) {
+    let finalPara = currentParagraphText.trim()
+    if (!/[.!?។。…"')\]]$/.test(finalPara) && !/[\u1780-\u17FF\u4E00-\u9FFF]/.test(finalPara.slice(-5))) {
+      finalPara += '.'
+    }
+    paragraphs.push(finalPara)
+  }
+
+  return paragraphs.join('\n\n')
+}
+
+function formatRawTextAsArticle(raw: string): string {
+  const cleaned = stripTimestampMarkers(raw)
+    .replace(/```(?:json)?[\s\S]*?```/g, '')
+    .trim()
+
+  if (!cleaned || looksLikeJsonStructure(cleaned)) return ''
+
+  const blocks = cleaned.split(/\n{2,}/)
+  return blocks
+    .map((b) => b.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .join('\n\n')
+}
+
 export function getPlainTranscriptText(text: string, segments?: TranscriptSegmentInput[] | null) {
   const normalizedSegments = normalizeTranscriptSegments(segments)
   if (normalizedSegments.length) {
-    return normalizedSegments.map((segment) => segment.text).join('\n\n')
+    return formatCleanArticle(normalizedSegments)
   }
 
   const structuredTranscript = parseStructuredTranscriptText(text)
   if (structuredTranscript?.segments.length) {
-    return structuredTranscript.segments.map((segment) => segment.text).join('\n\n')
+    return formatCleanArticle(structuredTranscript.segments)
   }
 
   if (structuredTranscript?.text) {
-    return structuredTranscript.text
+    return formatCleanArticle(structuredTranscript.text)
   }
 
   // If the text looks like a JSON structure/fragment but yielded no speech text,
@@ -442,7 +551,7 @@ export function getPlainTranscriptText(text: string, segments?: TranscriptSegmen
     return ''
   }
 
-  return stripTimestampMarkers(text)
+  return formatCleanArticle(text)
 }
 
 export function buildDisplaySegments(text: string, segments?: TranscriptSegmentInput[] | null, duration?: number | null) {
