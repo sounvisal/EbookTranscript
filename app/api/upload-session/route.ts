@@ -12,12 +12,18 @@ function getGeminiApiHost(): string {
     || 'generativelanguage.googleapis.com'
 }
 
-function getActiveGeminiKey(): string {
+let keyIndex = 0
+
+function getNextGeminiKey(): string {
   const multi = (process.env.GEMINI_API_KEYS || '')
     .split(',')
     .map((key) => key.trim().replace(/["'\r\n]/g, ''))
     .filter(Boolean)
-  if (multi.length) return multi[0]
+  if (multi.length) {
+    const key = multi[keyIndex % multi.length]
+    keyIndex = (keyIndex + 1) % multi.length
+    return key
+  }
   return (process.env.GEMINI_API_KEY || '').trim().replace(/["'\r\n]/g, '')
 }
 
@@ -27,7 +33,7 @@ export async function POST() {
     return NextResponse.json({ error: 'Please sign in to transcribe files.' }, { status: 401 })
   }
 
-  const apiKey = getActiveGeminiKey()
+  const apiKey = getNextGeminiKey()
   if (!apiKey || apiKey === 'AIzaSyYourGoogleApiKeyHere') {
     return NextResponse.json({ error: 'Gemini API key is not configured.' }, { status: 500 })
   }

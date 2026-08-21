@@ -15,9 +15,9 @@ import { transcribeWithProgress } from '@/lib/transcribeClient'
 // small stagger just avoids firing a single burst that trips the free-tier
 // requests-per-minute limit and causes 429 errors.
 const MAX_BATCH_FILES = 10
-const STAGGER_MS = 1000
-// Process 1 file at a time in sequence to guarantee zero rate-limit collisions
-const MAX_CONCURRENT_JOBS = 1
+const STAGGER_MS = 400
+// Process up to 3 files concurrently in parallel across the rotated Gemini keys
+const MAX_CONCURRENT_JOBS = 3
 
 type BatchJobStatus = 'queued' | 'processing' | 'complete' | 'error'
 
