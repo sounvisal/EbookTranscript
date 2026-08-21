@@ -559,12 +559,12 @@ function classifyTranscriptionError(error: unknown) {
 function getGeminiApiKeys(): string[] {
   const multi = (process.env.GEMINI_API_KEYS || '')
     .split(',')
-    .map((key) => key.trim())
+    .map((key) => key.trim().replace(/["'\r\n]/g, ''))
     .filter(Boolean)
   if (multi.length) {
     return multi
   }
-  const single = (process.env.GEMINI_API_KEY || '').trim()
+  const single = (process.env.GEMINI_API_KEY || '').trim().replace(/["'\r\n]/g, '')
   return single && single !== 'AIzaSyYourGoogleApiKeyHere' ? [single] : []
 }
 
@@ -574,12 +574,12 @@ function getGeminiApiKeys(): string[] {
 function getGeminiModels(): string[] {
   const multi = (process.env.GEMINI_MODELS || '')
     .split(',')
-    .map((model) => model.trim())
+    .map((model) => model.trim().replace(/["'\r\n]/g, ''))
     .filter(Boolean)
   if (multi.length) {
     return multi
   }
-  const single = (process.env.GEMINI_MODEL || '').trim()
+  const single = (process.env.GEMINI_MODEL || '').trim().replace(/["'\r\n]/g, '')
   if (single) {
     const list = [single, ...DEFAULT_FALLBACK_MODELS.filter((m) => m !== single)]
     return list

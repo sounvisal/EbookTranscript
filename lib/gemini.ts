@@ -1,10 +1,16 @@
 import { randomBytes } from 'node:crypto'
 import { request as httpsRequest } from 'node:https'
 
-// Defaults to Google's endpoint. Set GEMINI_API_HOST to a proxy host (e.g. a
-// Cloudflare Worker) to route calls through a Gemini-supported country when the
-// server itself is in a blocked region.
-const GEMINI_API_HOST = process.env.GEMINI_API_HOST || 'generativelanguage.googleapis.com'
+function getGeminiApiHost(): string {
+  const raw = process.env.GEMINI_API_HOST || 'generativelanguage.googleapis.com'
+  return raw
+    .trim()
+    .replace(/^https?:\/\//i, '') // Remove https:// or http:// if user included it
+    .replace(/\/.*$/, '')         // Remove any trailing path or slash
+    .replace(/["'\r\n]/g, '')     // Remove quotes or stray newlines
+    || 'generativelanguage.googleapis.com'
+}
+
 const GEMINI_API_VERSION = 'v1beta'
 const GEMINI_API_CLIENT = 'transcript-route/1.0'
 const DEFAULT_TIMEOUT_MS = 180000
@@ -88,18 +94,20 @@ async function geminiRequest<T>(
   { method = 'GET', headers = {}, body, timeoutMs = DEFAULT_TIMEOUT_MS }: GeminiRequestOptions = {}
 ): Promise<T> {
   const requestBody = typeof body === 'string' ? Buffer.from(body) : body
+  const cleanKey = (apiKey || '').trim().replace(/["'\r\n]/g, '')
+  const host = getGeminiApiHost()
 
   return new Promise<T>((resolve, reject) => {
     const req = httpsRequest(
       {
         protocol: 'https:',
-        hostname: GEMINI_API_HOST,
+        hostname: host,
         path,
         method,
         headers: {
           Accept: 'application/json',
           'x-goog-api-client': GEMINI_API_CLIENT,
-          'x-goog-api-key': apiKey,
+          'x-goog-api-key': cleanKey,
           ...(requestBody ? { 'Content-Length': String(requestBody.byteLength) } : {}),
           ...headers
         }
@@ -339,18 +347,21 @@ export async function streamGeminiTranscript(
   })
   const requestBody = Buffer.from(body)
 
+  const cleanKey = (apiKey || '').trim().replace(/["'\r\n]/g, '')
+  const host = getGeminiApiHost()
+
   return new Promise<string>((resolve, reject) => {
     const req = httpsRequest(
       {
         protocol: 'https:',
-        hostname: GEMINI_API_HOST,
+        hostname: host,
         path: `/${GEMINI_API_VERSION}/models/${input.modelName}:streamGenerateContent?alt=sse`,
         method: 'POST',
         headers: {
           Accept: 'text/event-stream',
           'Content-Type': 'application/json',
           'x-goog-api-client': GEMINI_API_CLIENT,
-          'x-goog-api-key': apiKey,
+          'x-goog-api-key': cleanKey,
           'Content-Length': String(requestBody.byteLength)
         }
       },
