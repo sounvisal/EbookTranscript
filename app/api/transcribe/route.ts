@@ -713,7 +713,17 @@ async function transcribeWithKey(
     let fileUri = audioInput.fileUri
     let metadataDuration = 0
 
-    if (!fileUri && audioInput.buffer) {
+    if (fileUri) {
+      const match = fileUri.match(/files\/[a-z0-9]+/i)
+      const fileName = match ? match[0] : fileUri
+      uploadedFileName = fileName
+
+      emit({ type: 'status', phase: 'processing' })
+      const uploadedFile = await waitForUploadedFile(apiKey, fileName)
+      mediaMimeType = uploadedFile.mimeType || mediaMimeType
+      fileUri = uploadedFile.uri
+      metadataDuration = parseDurationSeconds(uploadedFile.videoMetadata?.videoDuration)
+    } else if (audioInput.buffer) {
       // Fast path: small audio goes inline in the request — no upload, no polling.
       // Video files and media over 8MB always use the Files API.
       const useInline =
