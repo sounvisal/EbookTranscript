@@ -278,6 +278,7 @@ export async function streamGeminiTranscript(
         type: 'OBJECT',
         properties: {
           language: { type: 'STRING' },
+          text: { type: 'STRING' },
           segments: {
             type: 'ARRAY',
             items: {

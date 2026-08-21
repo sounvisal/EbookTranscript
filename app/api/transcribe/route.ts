@@ -25,6 +25,8 @@ import { MAX_MEDIA_UPLOAD_BYTES } from '@/lib/uploadLimits'
 import { trackUsage, trackError } from '@/lib/telemetry'
 
 export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+export const maxDuration = 60
 
 const MAX_LOCAL_FILE_BYTES = MAX_MEDIA_UPLOAD_BYTES
 const MAX_REMOTE_FILE_BYTES = MAX_MEDIA_UPLOAD_BYTES
@@ -513,7 +515,7 @@ async function waitForUploadedFile(apiKey: string, fileName: string) {
       throw new Error(remoteError)
     }
 
-    await sleep(2000)
+    await sleep(3000)
     mediaFile = await getGeminiFile(apiKey, fileName)
   }
 
@@ -521,13 +523,13 @@ async function waitForUploadedFile(apiKey: string, fileName: string) {
 }
 
 const TRANSCRIPTION_PROMPT = [
-  'Transcribe all spoken words and audio verbatim from start to finish without skipping, truncating, summarizing, or omitting any part of the recording.',
-  'Do not add commentary, notes, or explanations.',
+  'Listen carefully to the audio and transcribe all spoken words, speech, dialogue, and voiceover verbatim from start to finish.',
+  'Automatically detect the spoken language (e.g. Khmer, English, Chinese, etc.).',
+  'Do not omit or skip any words even with background music or sound effects.',
   'Format the output strictly as JSON with this exact shape:',
-  '{"language":"auto","segments":[{"start":0.0,"end":4.2,"text":"spoken text"}]}',
-  'Use precise seconds for start and end timestamps.',
-  'Create a new segment at natural sentence or short phrase boundaries.',
-  'Do not include timestamps or speaker labels inside the text field.'
+  '{"language":"auto","text":"Full continuous transcript of everything spoken","segments":[{"start":0.0,"end":4.2,"text":"spoken phrase"}]}',
+  'Ensure the "text" field contains the complete full transcript, and "segments" provides the timestamped breakdown.',
+  'If no speech is present at all in the audio, return {"language":"auto","text":"","segments":[]}.'
 ].join(' ')
 
 type TranscriptResultPayload = {
