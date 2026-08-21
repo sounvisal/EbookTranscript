@@ -230,7 +230,7 @@ export async function generateGeminiTranscript(apiKey: string, input: { modelNam
           }
         ],
         generationConfig: {
-          maxOutputTokens: 8192,
+          maxOutputTokens: 65536,
           temperature: 0.1
         }
       }),
@@ -271,7 +271,7 @@ export async function streamGeminiTranscript(
       }
     ],
     generationConfig: {
-      maxOutputTokens: 8192,
+      maxOutputTokens: 65536,
       temperature: 0.1,
       responseMimeType: 'application/json',
       responseSchema: {

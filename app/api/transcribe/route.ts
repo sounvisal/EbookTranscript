@@ -523,13 +523,14 @@ async function waitForUploadedFile(apiKey: string, fileName: string) {
 }
 
 const TRANSCRIPTION_PROMPT = [
-  'Listen carefully to the audio and transcribe all spoken words, speech, dialogue, and voiceover verbatim from start to finish.',
-  'Automatically detect the spoken language (e.g. Khmer, English, Chinese, etc.).',
-  'Do not omit or skip any words even with background music or sound effects.',
-  'Format the output strictly as JSON with this exact shape:',
-  '{"language":"auto","text":"Full continuous transcript of everything spoken","segments":[{"start":0.0,"end":4.2,"text":"spoken phrase"}]}',
-  'Ensure the "text" field contains the complete full transcript, and "segments" provides the timestamped breakdown.',
-  'If no speech is present at all in the audio, return {"language":"auto","text":"","segments":[]}.'
+  'You are a verbatim speech recognition and audio transcription system.',
+  'Listen to the entire media from the very beginning (0:00) to the absolute end.',
+  'Transcribe EVERY spoken word, dialogue, speech, conversation, lyrics, and commentary verbatim in the detected spoken language (e.g. Khmer, English, Chinese, Thai, etc.).',
+  'Do not summarize, cut off, truncate, or omit any sentences, even with background music or sound effects.',
+  'Format the output strictly as JSON with this exact schema:',
+  '{"language":"auto","text":"Full continuous transcript of all spoken words from start to finish","segments":[{"start":0.0,"end":4.2,"text":"spoken phrase"}]}',
+  'Provide the full verbatim text in the "text" field and the sequential timestamp breakdown covering the full duration in "segments".',
+  'If there is absolutely no spoken audio at all, return {"language":"auto","text":"","segments":[]}.'
 ].join(' ')
 
 type TranscriptResultPayload = {

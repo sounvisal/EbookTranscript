@@ -386,10 +386,15 @@ export function parseStructuredTranscriptText(text: string): ParsedStructuredTra
           ? payload.language.trim()
           : undefined
 
-        if (segments.length || plainText) {
+        // Always choose the complete full text from segments if segments are present and longer
+        const fullText = (segments.length > 0 && textFromSegments.length >= (plainText?.length || 0))
+          ? textFromSegments
+          : (plainText || textFromSegments)
+
+        if (segments.length || fullText) {
           return {
             language,
-            text: plainText || textFromSegments,
+            text: fullText,
             segments
           }
         }
