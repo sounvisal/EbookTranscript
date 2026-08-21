@@ -67,8 +67,11 @@ export async function trackUsage(params: TrackUsageParams) {
   }
 }
 
+import { sendTelegramErrorAlert } from '@/lib/telegram'
+
 /**
  * Logs system and API errors to the database for debugging and user issue resolution.
+ * Automatically dispatches real-time alerts to your Telegram bot.
  * Strictly avoids saving confidential user transcript text.
  */
 export async function trackError(params: TrackErrorParams) {
@@ -87,4 +90,17 @@ export async function trackError(params: TrackErrorParams) {
   } catch (error) {
     console.error('Failed to record error log:', error)
   }
+
+  // Non-blocking real-time Telegram incident notification
+  sendTelegramErrorAlert({
+    endpoint: params.endpoint,
+    errorMessage: params.errorMessage,
+    errorType: params.errorType,
+    model: params.model,
+    fileFormat: params.fileFormat,
+    userId: params.userId,
+    metadata: params.metadata
+  }).catch((err) => {
+    console.error('Telegram alert dispatch error:', err)
+  })
 }

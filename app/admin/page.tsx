@@ -18,6 +18,7 @@ import {
   Lock,
   RefreshCw,
   Search,
+  Send,
   ShieldAlert,
   ShieldCheck,
   Sparkles,
@@ -786,28 +787,68 @@ export default function AdminDashboardPage() {
             </div>
           )}
 
-          {/* TAB 5: ERROR DIAGNOSTICS */}
+          {/* TAB 5: ERROR DIAGNOSTICS & TELEGRAM ALERTS */}
           {activeTab === 'errors' && (
-            <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-              <div className="flex items-center justify-between border-b border-slate-200 p-5">
-                <div>
-                  <h3 className="text-base font-bold text-slate-900">Error Diagnostic Logs</h3>
-                  <p className="mt-0.5 text-xs text-slate-500">
-                    Real-time error traces captured from transcribe API to troubleshoot user issues.
-                  </p>
-                </div>
-                {stats && stats.errors.recent.length > 0 && (
+            <div className="space-y-6">
+              {/* Telegram Incident Alert Card */}
+              <div className="rounded-2xl border border-blue-200/80 bg-gradient-to-br from-blue-50/80 via-white to-indigo-50/50 p-5 shadow-sm">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-start gap-3">
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white shadow-md">
+                      <Send className="h-5 w-5" />
+                    </span>
+                    <div>
+                      <h4 className="text-sm font-bold text-slate-900">Telegram Instant Error Alerts</h4>
+                      <p className="mt-0.5 text-xs text-slate-600">
+                        Automatically sends an instant message to your Telegram bot whenever a transcription error or rate-limit incident occurs in production.
+                      </p>
+                    </div>
+                  </div>
+
                   <button
                     type="button"
-                    onClick={handleClearErrors}
-                    disabled={clearingErrors}
-                    className="flex items-center gap-1.5 rounded-xl border border-red-200 bg-red-50 px-3.5 py-2 text-xs font-bold text-red-700 hover:bg-red-100 disabled:opacity-50"
+                    onClick={async () => {
+                      try {
+                        const res = await fetch('/api/admin/telegram/test', { method: 'POST' })
+                        const data = await res.json()
+                        if (res.ok) {
+                          showNotification('Telegram test alert sent successfully!')
+                        } else {
+                          alert(`Telegram Test Error: ${data.error || 'Check your TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID'}`)
+                        }
+                      } catch {
+                        alert('Failed to send Telegram test alert.')
+                      }
+                    }}
+                    className="flex shrink-0 items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-bold text-white shadow-sm transition-all hover:bg-blue-700 active:scale-95"
                   >
-                    <Trash2 className="h-3.5 w-3.5" />
-                    <span>{clearingErrors ? 'Clearing...' : 'Clear All Errors'}</span>
+                    <Send className="h-3.5 w-3.5" />
+                    <span>Send Test Alert to Telegram</span>
                   </button>
-                )}
+                </div>
               </div>
+
+              {/* Error Log Table */}
+              <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <div className="flex items-center justify-between border-b border-slate-200 p-5">
+                  <div>
+                    <h3 className="text-base font-bold text-slate-900">Error Diagnostic Logs</h3>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      Real-time error traces captured from transcribe API to troubleshoot user issues.
+                    </p>
+                  </div>
+                  {stats && stats.errors.recent.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleClearErrors}
+                      disabled={clearingErrors}
+                      className="flex items-center gap-1.5 rounded-xl border border-red-200 bg-red-50 px-3.5 py-2 text-xs font-bold text-red-700 hover:bg-red-100 disabled:opacity-50"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      <span>{clearingErrors ? 'Clearing...' : 'Clear All Errors'}</span>
+                    </button>
+                  )}
+                </div>
 
               {stats?.errors.recent.length === 0 ? (
                 <div className="p-12 text-center text-emerald-600">
