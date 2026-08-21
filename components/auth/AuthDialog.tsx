@@ -331,7 +331,7 @@ export default function AuthDialog() {
                     required
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    placeholder="Visal Suon"
+                    placeholder="John Doe"
                     className="w-full rounded-xl border border-slate-300 bg-white py-3 pl-10 pr-4 text-sm text-slate-900 outline-none transition-all placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
                   />
                 </div>
@@ -347,7 +347,7 @@ export default function AuthDialog() {
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="sounvisal154@gmail.com"
+                  placeholder="you@example.com"
                   className="w-full rounded-xl border border-slate-300 bg-white py-3 pl-10 pr-4 text-sm text-slate-900 outline-none transition-all placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
                 />
               </div>
@@ -413,7 +413,7 @@ export default function AuthDialog() {
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="sounvisal154@gmail.com"
+                  placeholder="you@example.com"
                   className="w-full rounded-xl border border-slate-300 bg-white py-3 pl-10 pr-4 text-sm text-slate-900 outline-none transition-all placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
                 />
               </div>
