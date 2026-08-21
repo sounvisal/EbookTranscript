@@ -1,11 +1,10 @@
 import { randomBytes } from 'node:crypto'
-import { request as httpsRequest } from 'node:https'
 
 function getGeminiApiHost(): string {
   const raw = process.env.GEMINI_API_HOST || 'generativelanguage.googleapis.com'
   return raw
     .trim()
-    .replace(/^https?:\/\//i, '') // Remove https:// or http:// if user included it
+    .replace(/^https?:\/\//i, '') // Remove https:// or http://
     .replace(/\/.*$/, '')         // Remove any trailing path or slash
     .replace(/["'\r\n]/g, '')     // Remove quotes or stray newlines
     || 'generativelanguage.googleapis.com'
@@ -72,19 +71,13 @@ function getPositiveIntegerEnv(name: string, fallback: number) {
 }
 
 function parseGeminiErrorMessage(responseText: string) {
-  if (!responseText) {
-    return ''
-  }
-
+  if (!responseText) return ''
   try {
     const parsed = JSON.parse(responseText) as GeminiErrorResponse
     if (parsed.error?.message) {
       return parsed.error.message
     }
-  } catch {
-    // Ignore invalid JSON and fall back to the raw response text.
-  }
-
+  } catch {}
   return responseText.trim()
 }
 
@@ -93,77 +86,42 @@ async function geminiRequest<T>(
   path: string,
   { method = 'GET', headers = {}, body, timeoutMs = DEFAULT_TIMEOUT_MS }: GeminiRequestOptions = {}
 ): Promise<T> {
-  const requestBody = typeof body === 'string' ? Buffer.from(body) : body
-  const cleanKey = (apiKey || '').trim().replace(/["'\r\n]/g, '')
   const host = getGeminiApiHost()
+  const cleanKey = (apiKey || '').trim().replace(/["'\r\n]/g, '')
+  const cleanPath = path.startsWith('/') ? path : `/${path}`
+  const url = `https://${host}${cleanPath}`
 
-  return new Promise<T>((resolve, reject) => {
-    const req = httpsRequest(
-      {
-        protocol: 'https:',
-        hostname: host,
-        path,
-        method,
-        headers: {
-          Accept: 'application/json',
-          'x-goog-api-client': GEMINI_API_CLIENT,
-          'x-goog-api-key': cleanKey,
-          ...(requestBody ? { 'Content-Length': String(requestBody.byteLength) } : {}),
-          ...headers
-        }
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    const res = await fetch(url, {
+      method,
+      headers: {
+        Accept: 'application/json',
+        'x-goog-api-client': GEMINI_API_CLIENT,
+        'x-goog-api-key': cleanKey,
+        ...headers
       },
-      (res) => {
-        const chunks: Buffer[] = []
-
-        res.on('data', (chunk) => {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
-        })
-
-        res.on('end', () => {
-          const responseText = Buffer.concat(chunks).toString('utf8')
-          const statusCode = res.statusCode ?? 0
-          const statusMessage = res.statusMessage || ''
-
-          if (statusCode < 200 || statusCode >= 300) {
-            const errorMessage = parseGeminiErrorMessage(responseText)
-            reject(
-              new Error(
-                errorMessage
-                  ? `Gemini API request failed (${statusCode} ${statusMessage}): ${errorMessage}`
-                  : `Gemini API request failed (${statusCode} ${statusMessage}).`
-              )
-            )
-            return
-          }
-
-          if (!responseText) {
-            resolve(undefined as T)
-            return
-          }
-
-          try {
-            resolve(JSON.parse(responseText) as T)
-          } catch {
-            reject(new Error('Gemini API returned an invalid JSON response.'))
-          }
-        })
-      }
-    )
-
-    req.on('error', (error) => {
-      reject(new Error(`Network error while calling Gemini: ${error.message}`))
+      body: (body as BodyInit) || undefined,
+      signal: controller.signal
     })
 
-    req.setTimeout(timeoutMs, () => {
-      req.destroy(new Error(`Request to Gemini timed out after ${Math.ceil(timeoutMs / 1000)} seconds.`))
-    })
-
-    if (requestBody) {
-      req.write(requestBody)
+    const responseText = await res.text()
+    if (!res.ok) {
+      const errorMessage = parseGeminiErrorMessage(responseText)
+      throw new Error(
+        errorMessage
+          ? `Gemini API request failed (${res.status} ${res.statusText}): ${errorMessage}`
+          : `Gemini API request failed (${res.status} ${res.statusText}).`
+      )
     }
 
-    req.end()
-  })
+    if (!responseText) return undefined as T
+    return JSON.parse(responseText) as T
+  } finally {
+    clearTimeout(timeoutId)
+  }
 }
 
 function parseFileId(fileId: string) {
@@ -239,9 +197,7 @@ function extractTextFromGenerateContentResponse(response: GeminiGenerateContentR
     .join('')
     .trim()
 
-  if (text) {
-    return text
-  }
+  if (text) return text
 
   if (response.promptFeedback?.blockReason) {
     throw new Error(`Gemini blocked the transcription request: ${response.promptFeedback.blockReason}.`)
@@ -287,18 +243,14 @@ export async function generateGeminiTranscript(apiKey: string, input: { modelNam
 
 /**
  * Streams a transcription from Gemini using the Server-Sent Events variant of
- * streamGenerateContent. The onText callback fires with the accumulated text so
- * far each time a chunk arrives, which the API route uses to compute real
- * progress (latest transcribed timestamp / total media duration).
+ * streamGenerateContent with modern fetch.
  */
 export async function streamGeminiTranscript(
   apiKey: string,
   input: {
     modelName: string
     prompt: string
-    /** Use a Files API URI (for large audio)... */
     fileUri?: string
-    /** ...or send the audio inline as base64 (fast path, no upload/polling). */
     inlineData?: Buffer
     mimeType: string
     onText?: (accumulatedText: string) => void
@@ -318,8 +270,6 @@ export async function streamGeminiTranscript(
         parts: [{ text: input.prompt }, mediaPart]
       }
     ],
-    // Structured output: guarantees valid JSON segments instead of relying on
-    // the model to format text correctly.
     generationConfig: {
       maxOutputTokens: 8192,
       temperature: 0.1,
@@ -345,108 +295,91 @@ export async function streamGeminiTranscript(
       }
     }
   })
-  const requestBody = Buffer.from(body)
 
-  const cleanKey = (apiKey || '').trim().replace(/["'\r\n]/g, '')
   const host = getGeminiApiHost()
+  const cleanKey = (apiKey || '').trim().replace(/["'\r\n]/g, '')
+  const url = `https://${host}/${GEMINI_API_VERSION}/models/${input.modelName}:streamGenerateContent?alt=sse`
 
-  return new Promise<string>((resolve, reject) => {
-    const req = httpsRequest(
-      {
-        protocol: 'https:',
-        hostname: host,
-        path: `/${GEMINI_API_VERSION}/models/${input.modelName}:streamGenerateContent?alt=sse`,
-        method: 'POST',
-        headers: {
-          Accept: 'text/event-stream',
-          'Content-Type': 'application/json',
-          'x-goog-api-client': GEMINI_API_CLIENT,
-          'x-goog-api-key': cleanKey,
-          'Content-Length': String(requestBody.byteLength)
-        }
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), GENERATION_TIMEOUT_MS)
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Accept: 'text/event-stream',
+        'Content-Type': 'application/json',
+        'x-goog-api-client': GEMINI_API_CLIENT,
+        'x-goog-api-key': cleanKey
       },
-      (res) => {
-        const statusCode = res.statusCode ?? 0
+      body,
+      signal: controller.signal
+    })
 
-        if (statusCode < 200 || statusCode >= 300) {
-          const chunks: Buffer[] = []
-          res.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)))
-          res.on('end', () => {
-            const errorMessage = parseGeminiErrorMessage(Buffer.concat(chunks).toString('utf8'))
-            reject(
-              new Error(
-                errorMessage
-                  ? `Gemini API request failed (${statusCode} ${res.statusMessage || ''}): ${errorMessage}`
-                  : `Gemini API request failed (${statusCode} ${res.statusMessage || ''}).`
-              )
-            )
-          })
-          return
+    if (!res.ok) {
+      const responseText = await res.text()
+      const errorMessage = parseGeminiErrorMessage(responseText)
+      throw new Error(
+        errorMessage
+          ? `Gemini API request failed (${res.status} ${res.statusText}): ${errorMessage}`
+          : `Gemini API request failed (${res.status} ${res.statusText}).`
+      )
+    }
+
+    if (!res.body) {
+      throw new Error('Gemini returned an empty response body.')
+    }
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let sseBuffer = ''
+    let accumulatedText = ''
+    let blockReason = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      sseBuffer += decoder.decode(value, { stream: true })
+
+      let newlineIndex: number
+      while ((newlineIndex = sseBuffer.indexOf('\n')) !== -1) {
+        const line = sseBuffer.slice(0, newlineIndex).trim()
+        sseBuffer = sseBuffer.slice(newlineIndex + 1)
+
+        if (!line.startsWith('data:')) continue
+        const payload = line.slice('data:'.length).trim()
+        if (!payload || payload === '[DONE]') continue
+
+        try {
+          const parsed = JSON.parse(payload) as GeminiGenerateContentResponse
+          const text = parsed.candidates
+            ?.flatMap((candidate) => candidate.content?.parts || [])
+            .map((part) => part.text || '')
+            .join('')
+
+          if (text) {
+            accumulatedText += text
+            input.onText?.(accumulatedText)
+          }
+
+          if (parsed.promptFeedback?.blockReason) {
+            blockReason = parsed.promptFeedback.blockReason
+          }
+        } catch {
+          // Ignore partial or keep-alive lines
         }
-
-        let sseBuffer = ''
-        let accumulatedText = ''
-        let blockReason = ''
-
-        res.on('data', (chunk) => {
-          sseBuffer += (Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)).toString('utf8')
-
-          let newlineIndex: number
-          while ((newlineIndex = sseBuffer.indexOf('\n')) !== -1) {
-            const line = sseBuffer.slice(0, newlineIndex).trim()
-            sseBuffer = sseBuffer.slice(newlineIndex + 1)
-
-            if (!line.startsWith('data:')) continue
-            const payload = line.slice('data:'.length).trim()
-            if (!payload || payload === '[DONE]') continue
-
-            try {
-              const parsed = JSON.parse(payload) as GeminiGenerateContentResponse
-              const text = parsed.candidates
-                ?.flatMap((candidate) => candidate.content?.parts || [])
-                .map((part) => part.text || '')
-                .join('')
-
-              if (text) {
-                accumulatedText += text
-                input.onText?.(accumulatedText)
-              }
-
-              if (parsed.promptFeedback?.blockReason) {
-                blockReason = parsed.promptFeedback.blockReason
-              }
-            } catch {
-              // Ignore partial or non-JSON keep-alive lines.
-            }
-          }
-        })
-
-        res.on('end', () => {
-          const finalText = accumulatedText.trim()
-          if (finalText) {
-            resolve(finalText)
-            return
-          }
-          if (blockReason) {
-            reject(new Error(`Gemini blocked the transcription request: ${blockReason}.`))
-            return
-          }
-          reject(new Error('Gemini returned no transcript text.'))
-        })
       }
-    )
+    }
 
-    req.on('error', (error) => {
-      reject(new Error(`Network error while calling Gemini: ${error.message}`))
-    })
-
-    req.setTimeout(GENERATION_TIMEOUT_MS, () => {
-      req.destroy(new Error(`Request to Gemini timed out after ${Math.ceil(GENERATION_TIMEOUT_MS / 1000)} seconds.`))
-    })
-
-    req.write(requestBody)
-    req.end()
-  })
+    const finalText = accumulatedText.trim()
+    if (finalText) return finalText
+    if (blockReason) {
+      throw new Error(`Gemini blocked the transcription request: ${blockReason}.`)
+    }
+    throw new Error('Gemini returned no transcript text.')
+  } finally {
+    clearTimeout(timeoutId)
+  }
 }
 
 export async function generateGeminiText(apiKey: string, input: { modelName: string; prompt: string }) {
