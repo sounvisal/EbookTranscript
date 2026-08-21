@@ -698,6 +698,7 @@ async function transcribeWithKey(
 ): Promise<TranscriptResultPayload> {
   let uploadedFileName = ''
 
+  try {
     // Fast path: small audio goes inline in the request — no upload, no polling.
     // Video files and media over 8MB always use the Files API.
     const useInline =
