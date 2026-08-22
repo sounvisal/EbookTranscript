@@ -15,42 +15,58 @@ export async function POST(req: Request) {
       fileSizeBytes,
       fileFormat,
       inputType = 'file',
-      userComment
+      userComment,
+      transcriptSnippet,
+      detectedLanguage
     } = body
 
     const userEmail = session?.user?.email || 'Anonymous User'
     const userId = (session?.user as { id?: string })?.id || null
 
-    // 1. Record error in database
+    const formattedSize = typeof fileSizeBytes === 'number'
+      ? `${(fileSizeBytes / 1024 / 1024).toFixed(2)} MB`
+      : typeof fileSizeBytes === 'string'
+        ? fileSizeBytes
+        : undefined
+
+    // 1. Record error in database (skip automated alert because we send the full custom user report alert below)
     await trackError({
       userId,
+      userEmail,
       endpoint: '/api/transcribe',
-      errorMessage: `[USER REPORTED] ${filename ? `(${filename}) ` : ''}${errorMessage}`,
+      errorMessage: `[USER REPORTED] ${filename ? `(${filename}) ` : ''}${errorMessage}${userComment ? ` — Note: "${userComment}"` : ''}`,
       errorType: 'USER_REPORTED_ISSUE',
       fileFormat: fileFormat || filename?.split('.').pop() || 'unknown',
+      skipTelegramAlert: true,
       metadata: {
         filename,
-        fileSizeBytes,
+        fileSizeBytes: formattedSize,
         inputType,
         userComment,
         userEmail,
+        transcriptSnippet,
+        detectedLanguage,
         reportedAt: new Date().toISOString()
       }
     })
 
-    // 2. Dispatch real-time Telegram Alert directly to Admin
+    // 2. Dispatch real-time Telegram Alert directly to Admin with complete context
     await sendTelegramErrorAlert({
-      title: '📢 Direct User Error Report',
+      title: 'Direct User Incident Report',
       endpoint: '/api/transcribe (User Report)',
-      errorMessage: `${errorMessage}${userComment ? `\n\n💬 User Note: "${userComment}"` : ''}`,
+      errorMessage,
       errorType: 'USER_REPORTED_ISSUE',
       fileFormat: filename || fileFormat || 'media',
       userEmail,
       userId,
+      userComment,
       metadata: {
         filename,
-        fileSizeBytes: fileSizeBytes ? `${(fileSizeBytes / 1024 / 1024).toFixed(2)} MB` : undefined,
+        fileSizeBytes: formattedSize,
         inputType,
+        userComment,
+        transcriptSnippet,
+        detectedLanguage,
         reportedAt: new Date().toISOString()
       }
     })
