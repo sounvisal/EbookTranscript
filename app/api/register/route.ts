@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { hashPassword } from '@/lib/password'
 import { isUserAdmin } from '@/lib/auth'
+import { sendTelegramUserAlert } from '@/lib/telegram'
 
 function normalizeEmail(email: string) {
   return email.trim().toLowerCase()
@@ -74,6 +75,16 @@ export async function POST(req: Request) {
             role: true
           },
         })
+
+    // Non-blocking notification to Telegram admin
+    if (!existingUser && user.email) {
+      sendTelegramUserAlert({
+        email: user.email,
+        name: user.name || undefined,
+        isNewUser: true,
+        provider: 'email/password'
+      }).catch((err) => console.error('Registration Telegram alert error:', err))
+    }
 
     return NextResponse.json({ user }, { status: existingUser ? 200 : 201 })
   } catch (error) {
