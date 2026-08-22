@@ -9,7 +9,7 @@ async function pushToGitHub(token) {
       http,
       dir: '.',
       remote: 'origin',
-      ref: 'main',
+      ref: await git.currentBranch({ fs, dir: '.' }) || 'master',
       force: false,
       onAuth: () => ({
         username: token || process.env.GITHUB_TOKEN || '',
