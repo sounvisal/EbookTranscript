@@ -65,6 +65,7 @@ type MediaInput = {
   mimeType: string
   displayName: string
   sourceName: string
+  keyIndex?: number
 }
 
 type GeminiTranscriptPayload = {
@@ -404,7 +405,8 @@ async function getMediaInputFromRequest(req: Request): Promise<MediaInput> {
         fileUri: body.fileUri.trim(),
         mimeType: body.mimeType || 'video/mp4',
         displayName: body.displayName || 'uploaded-media',
-        sourceName: body.displayName || 'uploaded-media'
+        sourceName: body.displayName || 'uploaded-media',
+        keyIndex: typeof body?.keyIndex === 'number' ? body.keyIndex : undefined
       }
     }
     const urlValue = typeof body?.url === 'string' ? body.url.trim() : ''
@@ -841,11 +843,23 @@ async function runTranscriptionPipeline(
 
   // Fast direct path for files uploaded directly from browser to Gemini Files API
   if (mediaInput.fileUri) {
+    // If the browser uploaded under a specific keyIndex, prioritize trying that key first
+    const keyOrder = [...keys]
+    if (
+      typeof mediaInput.keyIndex === 'number' &&
+      mediaInput.keyIndex >= 0 &&
+      mediaInput.keyIndex < keys.length
+    ) {
+      const preferredKey = keys[mediaInput.keyIndex]
+      const otherKeys = keys.filter((_, i) => i !== mediaInput.keyIndex)
+      keyOrder.splice(0, keyOrder.length, preferredKey, ...otherKeys)
+    }
+
     let lastError: unknown
-    for (let k = 0; k < keys.length; k += 1) {
+    for (let k = 0; k < keyOrder.length; k += 1) {
       try {
         return await transcribeWithKey(
-          keys[k],
+          keyOrder[k],
           {
             fileUri: mediaInput.fileUri,
             mimeType: mediaInput.mimeType,
@@ -858,8 +872,8 @@ async function runTranscriptionPipeline(
         )
       } catch (err) {
         lastError = err
-        if (k < keys.length - 1) {
-          console.warn(`Key #${k + 1} failed for fileUri; trying next configured key...`)
+        if (k < keyOrder.length - 1) {
+          console.warn(`Key attempt #${k + 1} failed for fileUri; trying next configured key...`, err)
           continue
         }
         throw err
@@ -1020,6 +1034,7 @@ export async function POST(req: Request) {
           // Log error report for admin debugging
           trackError({
             userId: session.user?.id || null,
+            userEmail: session.user?.email || null,
             endpoint: '/api/transcribe',
             errorMessage: error instanceof Error ? error.message : 'Transcription failed',
             errorType: classified.message,
@@ -1058,6 +1073,7 @@ export async function POST(req: Request) {
     const { message, status } = classifyTranscriptionError(error)
     trackError({
       userId: session.user?.id || null,
+      userEmail: session.user?.email || null,
       endpoint: '/api/transcribe',
       errorMessage: error instanceof Error ? error.message : 'Transcription failed',
       errorType: message,
