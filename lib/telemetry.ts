@@ -13,11 +13,13 @@ export type TrackUsageParams = {
 
 export type TrackErrorParams = {
   userId?: string | null
+  userEmail?: string | null
   endpoint: string
   errorMessage: string
   errorType?: string
   model?: string
   fileFormat?: string
+  skipTelegramAlert?: boolean
   metadata?: Record<string, unknown>
 }
 
@@ -91,6 +93,10 @@ export async function trackError(params: TrackErrorParams) {
     console.error('Failed to record error log:', error)
   }
 
+  if (params.skipTelegramAlert) {
+    return
+  }
+
   // Non-blocking real-time Telegram incident notification
   sendTelegramErrorAlert({
     endpoint: params.endpoint,
@@ -98,6 +104,7 @@ export async function trackError(params: TrackErrorParams) {
     errorType: params.errorType,
     model: params.model,
     fileFormat: params.fileFormat,
+    userEmail: params.userEmail || (params.metadata?.userEmail as string) || undefined,
     userId: params.userId,
     metadata: params.metadata
   }).catch((err) => {
