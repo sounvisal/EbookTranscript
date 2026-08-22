@@ -1,4 +1,5 @@
 import type { TranscriptSegment } from '@/lib/transcript'
+import { prepareMediaForUpload } from '@/lib/clientAudio'
 
 export type TranscribeProgressEvent =
   | { type: 'status'; phase: 'uploading' | 'processing'; duration?: number }
@@ -139,6 +140,14 @@ export async function transcribeWithProgress(
   if (input.file) {
     onEvent?.({ type: 'status', phase: 'uploading' })
 
+    // Step 0: Optimize media for upload (extract compact speech audio if video or large file)
+    let fileToUpload = input.file
+    try {
+      fileToUpload = await prepareMediaForUpload(input.file)
+    } catch {
+      fileToUpload = input.file
+    }
+
     // 1. Get direct upload authorization
     const sessionRes = await fetch('/api/upload-session', { method: 'POST' })
     if (!sessionRes.ok) {
@@ -148,7 +157,7 @@ export async function transcribeWithProgress(
     const { apiKey, keyIndex, host } = await sessionRes.json()
 
     // 2. Upload file directly to Gemini Files API (2GB limit)
-    const uploadedFile = await directUploadToGemini(input.file, apiKey, host, (progress) => {
+    const uploadedFile = await directUploadToGemini(fileToUpload, apiKey, host, (progress) => {
       onEvent?.({ type: 'progress', progress })
     })
 
@@ -163,7 +172,7 @@ export async function transcribeWithProgress(
       },
       body: JSON.stringify({
         fileUri: uploadedFile.uri,
-        mimeType: uploadedFile.mimeType || input.file.type || 'video/mp4',
+        mimeType: uploadedFile.mimeType || fileToUpload.type || 'audio/wav',
         displayName: input.file.name,
         keyIndex
       })
