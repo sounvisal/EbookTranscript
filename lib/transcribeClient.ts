@@ -21,21 +21,60 @@ type StreamEvent =
  * Uploads a file directly to Gemini Files API from the browser.
  * This bypasses Vercel Serverless 4.5MB request body limits completely (supporting files up to 2GB).
  */
+function inferMimeType(file: File): string {
+  if (file.type && file.type !== 'application/octet-stream') {
+    return file.type
+  }
+  const ext = file.name.split('.').pop()?.toLowerCase()
+  switch (ext) {
+    case 'mp4':
+    case 'm4v':
+      return 'video/mp4'
+    case 'webm':
+      return 'video/webm'
+    case 'mov':
+      return 'video/quicktime'
+    case 'mp3':
+      return 'audio/mpeg'
+    case 'm4a':
+      return 'audio/mp4'
+    case 'wav':
+      return 'audio/wav'
+    case 'flac':
+      return 'audio/flac'
+    case 'aac':
+      return 'audio/aac'
+    case 'ogg':
+      return 'audio/ogg'
+    case 'avi':
+      return 'video/x-msvideo'
+    case 'mkv':
+      return 'video/x-matroska'
+    default:
+      return file.type || 'video/mp4'
+  }
+}
+
+/**
+ * Uploads a file directly to Gemini Files API from the browser.
+ * This bypasses Vercel Serverless 4.5MB request body limits completely (supporting files up to 2GB).
+ */
 async function directUploadToGemini(
   file: File,
   apiKey: string,
   host: string,
   onProgress?: (percent: number) => void
 ): Promise<{ uri: string; name: string; mimeType: string }> {
+  const mimeType = inferMimeType(file)
   const boundary = '----GeminiBoundary' + Math.random().toString(16).slice(2)
   const metadata = JSON.stringify({
     file: {
-      mimeType: file.type || 'application/octet-stream',
+      mimeType,
       displayName: file.name
     }
   })
 
-  const preamble = `--${boundary}\r\nContent-Type: application/json; charset=utf-8\r\n\r\n${metadata}\r\n--${boundary}\r\nContent-Type: ${file.type || 'application/octet-stream'}\r\n\r\n`
+  const preamble = `--${boundary}\r\nContent-Type: application/json; charset=utf-8\r\n\r\n${metadata}\r\n--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n`
   const epilogue = `\r\n--${boundary}--`
 
   const bodyBlob = new Blob([preamble, file, epilogue], {
