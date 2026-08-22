@@ -401,9 +401,20 @@ async function getMediaInputFromRequest(req: Request): Promise<MediaInput> {
     const body = await req.json()
     // Direct Gemini File URI support (for files uploaded directly from browser to Gemini)
     if (typeof body?.fileUri === 'string' && body.fileUri.trim()) {
+      let mimeType = body.mimeType || 'video/mp4'
+      if (!mimeType || mimeType === 'application/octet-stream') {
+        const ext = body.displayName?.split('.').pop()?.toLowerCase()
+        if (ext === 'mp4' || ext === 'm4v') mimeType = 'video/mp4'
+        else if (ext === 'mp3') mimeType = 'audio/mpeg'
+        else if (ext === 'm4a') mimeType = 'audio/mp4'
+        else if (ext === 'wav') mimeType = 'audio/wav'
+        else if (ext === 'webm') mimeType = 'video/webm'
+        else if (ext === 'mov') mimeType = 'video/quicktime'
+        else mimeType = 'video/mp4'
+      }
       return {
         fileUri: body.fileUri.trim(),
-        mimeType: body.mimeType || 'video/mp4',
+        mimeType,
         displayName: body.displayName || 'uploaded-media',
         sourceName: body.displayName || 'uploaded-media',
         keyIndex: typeof body?.keyIndex === 'number' ? body.keyIndex : undefined
@@ -507,7 +518,7 @@ async function withGeminiRetry<T>(operation: () => Promise<T>, label: string) {
 async function waitForUploadedFile(apiKey: string, fileName: string) {
   let mediaFile = await getGeminiFile(apiKey, fileName)
 
-  for (let attempt = 0; attempt < 30; attempt += 1) {
+  for (let attempt = 0; attempt < 35; attempt += 1) {
     if (mediaFile.state === GEMINI_FILE_STATE_ACTIVE) {
       return mediaFile
     }
@@ -517,7 +528,8 @@ async function waitForUploadedFile(apiKey: string, fileName: string) {
       throw new Error(remoteError)
     }
 
-    await sleep(3000)
+    const waitTime = attempt < 4 ? 800 : 1500
+    await sleep(waitTime)
     mediaFile = await getGeminiFile(apiKey, fileName)
   }
 
@@ -1041,6 +1053,7 @@ export async function POST(req: Request) {
             model: MODEL_NAME
           }).catch(() => {})
         } finally {
+          await sleep(50)
           controller.close()
         }
       }
