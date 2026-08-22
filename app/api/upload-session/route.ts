@@ -14,17 +14,19 @@ function getGeminiApiHost(): string {
 
 let keyIndex = 0
 
-function getNextGeminiKey(): string {
+function getNextGeminiKeyInfo(): { apiKey: string; keyIndex: number } {
   const multi = (process.env.GEMINI_API_KEYS || '')
     .split(',')
     .map((key) => key.trim().replace(/["'\r\n]/g, ''))
     .filter(Boolean)
   if (multi.length) {
-    const key = multi[keyIndex % multi.length]
+    const idx = keyIndex % multi.length
+    const key = multi[idx]
     keyIndex = (keyIndex + 1) % multi.length
-    return key
+    return { apiKey: key, keyIndex: idx }
   }
-  return (process.env.GEMINI_API_KEY || '').trim().replace(/["'\r\n]/g, '')
+  const single = (process.env.GEMINI_API_KEY || '').trim().replace(/["'\r\n]/g, '')
+  return { apiKey: single, keyIndex: 0 }
 }
 
 export async function POST() {
@@ -33,7 +35,7 @@ export async function POST() {
     return NextResponse.json({ error: 'Please sign in to transcribe files.' }, { status: 401 })
   }
 
-  const apiKey = getNextGeminiKey()
+  const { apiKey, keyIndex: assignedIndex } = getNextGeminiKeyInfo()
   if (!apiKey || apiKey === 'AIzaSyYourGoogleApiKeyHere') {
     return NextResponse.json({ error: 'Gemini API key is not configured.' }, { status: 500 })
   }
@@ -42,6 +44,7 @@ export async function POST() {
 
   return NextResponse.json({
     apiKey,
+    keyIndex: assignedIndex,
     host
   })
 }
