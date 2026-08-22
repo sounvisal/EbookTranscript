@@ -106,7 +106,7 @@ export async function transcribeWithProgress(
       const errData = await sessionRes.json().catch(() => null)
       throw new Error(errData?.error || 'Please sign in to transcribe files.')
     }
-    const { apiKey, host } = await sessionRes.json()
+    const { apiKey, keyIndex, host } = await sessionRes.json()
 
     // 2. Upload file directly to Gemini Files API (2GB limit)
     const uploadedFile = await directUploadToGemini(input.file, apiKey, host, (progress) => {
@@ -125,7 +125,8 @@ export async function transcribeWithProgress(
       body: JSON.stringify({
         fileUri: uploadedFile.uri,
         mimeType: uploadedFile.mimeType || input.file.type || 'video/mp4',
-        displayName: input.file.name
+        displayName: input.file.name,
+        keyIndex
       })
     }
   } else if (input.url) {
@@ -154,7 +155,7 @@ export async function transcribeWithProgress(
     if (res.status === 401) {
       throw new Error(errorMsg || 'Please sign in to transcribe files.')
     }
-    throw new Error(errorMsg || `Request failed (${res.status} ${res.statusText})`)
+    throw new Error(errorMsg || `Server transcription request failed (${res.status} ${res.statusText || 'Error'})`)
   }
 
   const reader = res.body.getReader()
@@ -162,6 +163,7 @@ export async function transcribeWithProgress(
   let buffer = ''
   let result: TranscribeResult | null = null
   let errorMessage = ''
+  let chunkCount = 0
 
   const handleLine = (line: string) => {
     const trimmed = line.trim()
@@ -174,6 +176,7 @@ export async function transcribeWithProgress(
       return
     }
 
+    chunkCount++
     if (event.type === 'result') {
       const { type: _type, ...rest } = event
       result = rest
@@ -196,8 +199,20 @@ export async function transcribeWithProgress(
     }
   }
 
-  if (errorMessage) throw new Error(errorMessage)
-  if (!result) throw new Error('Transcription failed')
+  if (buffer.trim()) {
+    handleLine(buffer)
+  }
+
+  if (errorMessage) {
+    throw new Error(errorMessage)
+  }
+
+  if (!result) {
+    if (chunkCount === 0) {
+      throw new Error('Transcription stream disconnected unexpectedly. Please check your network and try again.')
+    }
+    throw new Error('Transcription finished without generating transcript text. The media format may not be supported.')
+  }
 
   try {
     if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
