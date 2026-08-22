@@ -161,6 +161,8 @@ export function isUserAdmin(email?: string | null, role?: string | null): boolea
   return false
 }
 
+import { sendTelegramUserAlert } from "@/lib/telegram"
+
 export const authOptions: NextAuthOptions = {
   adapter: PrismaAdapter(prisma) as any,
   session: {
@@ -187,4 +189,16 @@ export const authOptions: NextAuthOptions = {
       return session
     },
   },
+  events: {
+    async signIn({ user, account, isNewUser }) {
+      if (user?.email) {
+        sendTelegramUserAlert({
+          email: user.email,
+          name: user.name || undefined,
+          isNewUser: Boolean(isNewUser),
+          provider: account?.provider || 'credentials'
+        }).catch((err) => console.error('Sign-in Telegram alert error:', err))
+      }
+    }
+  }
 }
