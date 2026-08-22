@@ -798,33 +798,56 @@ export default function AdminDashboardPage() {
                       <Send className="h-5 w-5" />
                     </span>
                     <div>
-                      <h4 className="text-sm font-bold text-slate-900">Telegram Instant Error Alerts</h4>
+                      <h4 className="text-sm font-bold text-slate-900">Telegram Intelligence & Daily Digest</h4>
                       <p className="mt-0.5 text-xs text-slate-600">
-                        Automatically sends an instant message to your Telegram bot whenever a transcription error or rate-limit incident occurs in production.
+                        Real-time error alerts, new user sign-up notices, and automated 5:30 PM daily usage reports dispatched to Telegram.
                       </p>
                     </div>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      try {
-                        const res = await fetch('/api/admin/telegram/test', { method: 'POST' })
-                        const data = await res.json()
-                        if (res.ok) {
-                          showNotification('Telegram test alert sent successfully!')
-                        } else {
-                          alert(`Telegram Test Error: ${data.error || 'Check your TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID'}`)
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          const res = await fetch('/api/admin/telegram/test', { method: 'POST' })
+                          const data = await res.json()
+                          if (res.ok) {
+                            showNotification('Telegram test alert sent successfully!')
+                          } else {
+                            alert(`Telegram Test Error: ${data.error || 'Check your TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID'}`)
+                          }
+                        } catch {
+                          alert('Failed to send Telegram test alert.')
                         }
-                      } catch {
-                        alert('Failed to send Telegram test alert.')
-                      }
-                    }}
-                    className="flex shrink-0 items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-bold text-white shadow-sm transition-all hover:bg-blue-700 active:scale-95"
-                  >
-                    <Send className="h-3.5 w-3.5" />
-                    <span>Send Test Alert to Telegram</span>
-                  </button>
+                      }}
+                      className="flex shrink-0 items-center justify-center gap-2 rounded-xl border border-blue-200 bg-white px-3.5 py-2 text-xs font-bold text-blue-700 shadow-sm transition-all hover:bg-blue-50 active:scale-95"
+                    >
+                      <Send className="h-3.5 w-3.5" />
+                      <span>Test Bot Alert</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          const res = await fetch('/api/admin/telegram/daily-report', { method: 'POST' })
+                          const data = await res.json()
+                          if (res.ok) {
+                            showNotification('5:30 PM Daily Digest sent to Telegram!')
+                          } else {
+                            alert(`Report Error: ${data.error || 'Failed to dispatch report'}`)
+                          }
+                        } catch {
+                          alert('Failed to send daily digest report.')
+                        }
+                      }}
+                      className="flex shrink-0 items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-xs font-bold text-white shadow-sm transition-all hover:bg-blue-700 active:scale-95"
+                    >
+                      <Sparkles className="h-3.5 w-3.5" />
+                      <span>Send Daily Report Now</span>
+                    </button>
+                  </div>
                 </div>
               </div>
 
