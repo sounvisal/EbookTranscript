@@ -143,6 +143,8 @@ export default function TranscriptPanel() {
             errorMessage="User reported inaccurate transcript or quality issue"
             filename={sourceName}
             inputType="file"
+            transcriptSnippet={text.slice(0, 300)}
+            detectedLanguage={transcript?.language}
             className="text-slate-600 border-slate-200 hover:bg-slate-100"
           />
           <button onClick={resetAll} className="flex items-center gap-2 rounded-lg px-3.5 py-1.5 text-xs sm:text-sm font-medium text-slate-500 transition-colors hover:bg-white hover:text-slate-900">
