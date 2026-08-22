@@ -57,8 +57,22 @@ export default function MediaUploadZone() {
       })
     } catch (error) {
       console.error(error)
-      setErrorMessage(error instanceof Error ? error.message : 'Transcription failed.')
+      const errorMsg = error instanceof Error ? error.message : 'Transcription failed.'
+      setErrorMessage(errorMsg)
       setStatus('error')
+
+      // Automatically dispatch error incident alert in background
+      fetch('/api/report-error', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          errorMessage: errorMsg,
+          filename: input.file?.name || input.url,
+          fileSizeBytes: input.file?.size,
+          inputType: input.file ? 'file' : 'url',
+          userComment: 'Automated failure detection alert'
+        })
+      }).catch(() => {})
     }
   }
 
