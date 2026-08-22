@@ -141,11 +141,25 @@ export default function BatchUploadZone() {
         const plainText = getPlainTranscriptText(transcript.text || '', transcript.segments)
         await saveToHistory({ ...job, transcript }, plainText)
       } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : 'Transcription failed'
         updateJob(job.id, {
           status: 'error',
           progress: 0,
-          error: error instanceof Error ? error.message : 'Transcription failed'
+          error: errorMsg
         })
+
+        // Automatically dispatch error incident alert in background
+        fetch('/api/report-error', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            errorMessage: errorMsg,
+            filename: job.file.name,
+            fileSizeBytes: job.file.size,
+            inputType: 'batch',
+            userComment: 'Automated batch failure detection alert'
+          })
+        }).catch(() => {})
       }
     },
     [updateJob]
