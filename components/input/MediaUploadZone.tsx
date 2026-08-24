@@ -2,7 +2,7 @@
 
 import { useCallback, useState } from 'react'
 import { useDropzone } from 'react-dropzone'
-import { FileAudio, AlertCircle, Link2, Sparkles, X, ArrowRight } from 'lucide-react'
+import { FileAudio, AlertCircle, Link2, Sparkles, X, ArrowRight, Music, Film, CheckCircle2 } from 'lucide-react'
 import { useTranscriptStore } from '@/store/transcriptStore'
 import { motion, AnimatePresence } from 'framer-motion'
 import { MAX_MEDIA_UPLOAD_BYTES, MAX_MEDIA_UPLOAD_MB } from '@/lib/uploadLimits'
@@ -77,55 +77,73 @@ export default function MediaUploadZone() {
   }
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-6">
       {status === 'error' && (
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-2xl border border-red-200/80 bg-red-50/90 p-4 text-sm text-red-700 backdrop-blur-md">
           <div className="flex items-start gap-3">
-            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-            <span>{errorMessage || 'Transcription failed. Try another file or direct media link.'}</span>
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
+            <span className="font-medium">{errorMessage || 'Transcription failed. Try another file or direct media link.'}</span>
           </div>
           <ReportErrorButton
             errorMessage={errorMessage || 'Transcription failed.'}
             filename={file?.name || sourceUrl || undefined}
             fileSizeBytes={file?.size}
             inputType={file ? 'file' : 'url'}
-            className="self-end sm:self-auto shrink-0"
+            className="self-end sm:self-auto shrink-0 rounded-full"
           />
         </div>
       )}
 
       <AnimatePresence mode="wait">
         {!file ? (
-          <motion.div key="dropzone" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex flex-col gap-5">
+          <motion.div key="dropzone" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex flex-col gap-6">
+            {/* Apple Drag & Drop Zone */}
             <div
               {...getRootProps()}
-              className={`flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed px-6 py-10 text-center transition-all sm:py-12 ${
-                isDragActive ? 'border-blue-500 bg-blue-50' : 'border-slate-300 bg-slate-50/70 hover:border-blue-400 hover:bg-blue-50/40'
+              className={`group relative flex cursor-pointer flex-col items-center justify-center rounded-3xl border-2 border-dashed p-8 text-center transition-all duration-300 sm:py-14 ${
+                isDragActive
+                  ? 'border-blue-500 bg-blue-50/60 scale-[1.01]'
+                  : 'border-slate-300/80 bg-gradient-to-b from-white/80 to-slate-50/50 hover:border-blue-500/70 hover:bg-blue-50/20 shadow-xs'
               }`}
             >
               <input {...getInputProps()} />
-              <span className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-blue-600 shadow-sm ring-1 ring-slate-200">
-                <FileAudio className="h-6 w-6" strokeWidth={1.75} />
-              </span>
-              <h2 className="text-lg font-semibold text-slate-900">
-                {isDragActive ? 'Drop your audio or video file here' : 'Upload audio or video'}
+              <div className="relative mb-4">
+                <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-b from-blue-50 to-blue-100/80 text-blue-600 shadow-xs ring-1 ring-blue-500/20 transition-transform duration-300 group-hover:scale-110">
+                  <FileAudio className="h-7 w-7" strokeWidth={1.75} />
+                </span>
+                <span className="absolute -bottom-1 -right-1 flex h-6 w-6 items-center justify-center rounded-full bg-white shadow-xs ring-1 ring-black/5 text-slate-500">
+                  <Music className="h-3 w-3" />
+                </span>
+              </div>
+              <h2 className="text-lg sm:text-xl font-bold tracking-tight text-slate-900">
+                {isDragActive ? 'Drop your audio or video file here' : 'Drop audio or video here'}
               </h2>
-              <p className="mt-1.5 text-sm text-slate-500">Drag and drop a file here, or click to browse</p>
-              <p className="mt-3 text-xs text-slate-400">
-                MP3, WAV, M4A, MP4, WEBM, MOV or FLAC · up to {MAX_MEDIA_UPLOAD_MB} MB
+              <p className="mt-1.5 text-xs sm:text-sm text-slate-500">
+                or <span className="font-semibold text-blue-600 underline-offset-2 group-hover:underline">browse files</span> from your computer
               </p>
+              <div className="mt-4 flex flex-wrap items-center justify-center gap-1.5 text-[11px] font-medium text-slate-400">
+                <span className="rounded-md bg-slate-100/90 px-2 py-0.5">MP3</span>
+                <span className="rounded-md bg-slate-100/90 px-2 py-0.5">WAV</span>
+                <span className="rounded-md bg-slate-100/90 px-2 py-0.5">M4A</span>
+                <span className="rounded-md bg-slate-100/90 px-2 py-0.5">MP4</span>
+                <span className="rounded-md bg-slate-100/90 px-2 py-0.5">WEBM</span>
+                <span className="rounded-md bg-slate-100/90 px-2 py-0.5">MOV</span>
+                <span className="text-slate-400">· up to {MAX_MEDIA_UPLOAD_MB} MB</span>
+              </div>
             </div>
 
-            <div className="flex items-center gap-4 text-xs font-medium uppercase tracking-wider text-slate-400">
-              <div className="h-px flex-1 bg-slate-200" />
-              or paste a media link
-              <div className="h-px flex-1 bg-slate-200" />
+            {/* Divider */}
+            <div className="flex items-center gap-4 text-xs font-semibold uppercase tracking-wider text-slate-400">
+              <div className="h-px flex-1 bg-slate-200/80" />
+              <span>or paste media link</span>
+              <div className="h-px flex-1 bg-slate-200/80" />
             </div>
 
-            <div className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 shadow-sm">
-              <label htmlFor="media-url" className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-700">
+            {/* Apple Card: Link Input */}
+            <div className="apple-glass-card rounded-2xl p-4 sm:p-5">
+              <label htmlFor="media-url" className="mb-2.5 flex items-center gap-2 text-xs sm:text-sm font-semibold text-slate-800">
                 <Link2 className="h-4 w-4 text-blue-600" />
-                Audio or video URL
+                <span>Web link or YouTube video URL</span>
               </label>
               <div className="flex flex-col gap-2.5 sm:flex-row">
                 <input
@@ -137,63 +155,74 @@ export default function MediaUploadZone() {
                     setErrorMessage(null)
                     if (status === 'error') setStatus('idle')
                   }}
-                  placeholder="https://example.com/media.mp4 or YouTube link"
-                  className="min-w-0 flex-1 rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                  placeholder="https://example.com/audio.mp3 or YouTube link"
+                  className="min-w-0 flex-1 rounded-xl border border-slate-200/80 bg-white/90 px-4 py-3 text-sm text-slate-900 outline-none transition-all placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-100/80"
                 />
                 <button
                   type="button"
                   onClick={() => submitRequest({ url: sourceUrl.trim() })}
                   disabled={!sourceUrl.trim()}
-                  className="flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
+                  className="apple-btn-primary flex items-center justify-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold text-white transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                 >
-                  <span>Transcribe link</span>
+                  <span>Transcribe Link</span>
                   <ArrowRight className="h-4 w-4" />
                 </button>
               </div>
-              <p className="mt-2 text-xs leading-5 text-slate-400">Direct audio/video links and YouTube videos are supported.</p>
+              <p className="mt-2 text-[11px] leading-relaxed text-slate-400">
+                Supports direct video/audio URLs, TikTok, Twitter/X, Instagram, and YouTube.
+              </p>
             </div>
           </motion.div>
         ) : (
-          <motion.div key="preview" initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="flex flex-col gap-4 rounded-2xl border border-blue-200 bg-gradient-to-b from-blue-50/70 to-white p-5 sm:p-6 shadow-sm">
-            <div className="flex items-center justify-between gap-4 border-b border-blue-100 pb-4">
-              <div className="flex min-w-0 items-center gap-3.5">
-                <span
-                  style={{ backgroundColor: '#2563eb', color: '#ffffff' }}
-                  className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl shadow-sm"
-                >
-                  <FileAudio className="h-6 w-6" style={{ color: '#ffffff' }} />
-                </span>
+          <motion.div
+            key="preview"
+            initial={{ opacity: 0, scale: 0.98 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.98 }}
+            className="flex flex-col gap-5 rounded-3xl border border-blue-200/80 bg-gradient-to-b from-blue-50/50 via-white to-white p-6 sm:p-7 shadow-sm"
+          >
+            <div className="flex items-center justify-between gap-4 border-b border-blue-100/80 pb-5">
+              <div className="flex min-w-0 items-center gap-4">
+                <div className="flex h-13 w-13 shrink-0 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-md shadow-blue-500/20">
+                  {file.type.startsWith('video/') ? (
+                    <Film className="h-6 w-6 text-white" />
+                  ) : (
+                    <FileAudio className="h-6 w-6 text-white" />
+                  )}
+                </div>
                 <div className="min-w-0">
-                  <p className="truncate text-base font-semibold text-slate-900" title={file.name}>{file.name}</p>
-                  <p className="mt-0.5 text-xs text-slate-500">
-                    {(file.size / 1024 / 1024).toFixed(2)} MB · Auto language detection ready
+                  <p className="truncate text-base font-bold text-slate-950" title={file.name}>
+                    {file.name}
                   </p>
+                  <div className="mt-1 flex items-center gap-2 text-xs font-medium text-slate-500">
+                    <span className="rounded-md bg-white px-2 py-0.5 ring-1 ring-slate-200/80 font-mono">
+                      {(file.size / 1024 / 1024).toFixed(2)} MB
+                    </span>
+                    <span className="flex items-center gap-1 text-emerald-600 font-semibold">
+                      <CheckCircle2 className="h-3.5 w-3.5" /> Ready for AI Analysis
+                    </span>
+                  </div>
                 </div>
               </div>
+
               <button
                 type="button"
                 onClick={() => setFile(null)}
-                className="flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:border-red-200 hover:bg-red-50 hover:text-red-600"
+                className="flex items-center gap-1.5 rounded-full border border-slate-200/80 bg-white/90 px-3.5 py-1.5 text-xs font-semibold text-slate-600 transition-all hover:bg-red-50 hover:border-red-200 hover:text-red-600 active:scale-95 cursor-pointer"
               >
                 <X className="h-3.5 w-3.5" />
-                Change file
+                <span>Change</span>
               </button>
             </div>
 
-            {/* High-visibility primary action button */}
+            {/* Apple Primary Action Button */}
             <button
               type="button"
               onClick={() => submitRequest({ file })}
-              style={{
-                backgroundColor: '#2563eb',
-                color: '#ffffff',
-                border: '1px solid #1d4ed8',
-                boxShadow: '0 10px 15px -3px rgba(37, 99, 235, 0.35)'
-              }}
-              className="flex w-full items-center justify-center gap-2.5 rounded-xl px-6 py-4 text-base font-bold transition-all hover:opacity-95 active:scale-[0.99] cursor-pointer"
+              className="apple-btn-primary flex w-full items-center justify-center gap-2.5 rounded-2xl py-4 text-base font-bold text-white transition-all cursor-pointer"
             >
-              <Sparkles className="h-5 w-5" style={{ color: '#ffffff' }} />
-              <span style={{ color: '#ffffff' }}>Start Transcription Now</span>
+              <Sparkles className="h-5 w-5 animate-pulse text-white" />
+              <span className="tracking-tight text-white">Start Transcription Now</span>
             </button>
           </motion.div>
         )}
