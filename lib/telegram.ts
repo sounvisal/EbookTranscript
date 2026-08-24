@@ -179,7 +179,10 @@ export async function sendTelegramUserAlert(params: TelegramUserAlertParams): Pr
 /**
  * Builds and dispatches the 5:30 PM Daily Usage & Performance Digest
  */
-export async function sendTelegramDailyReport(customRange?: { start: Date; end: Date }): Promise<{ success: boolean; error?: string; stats?: any }> {
+export async function sendTelegramDailyReport(
+  customRange?: { start: Date; end: Date },
+  force = false
+): Promise<{ success: boolean; error?: string; skipped?: boolean; stats?: any }> {
   const { token, chatId } = getBotCredentials()
   if (!token || !chatId) {
     return { success: false, error: 'Telegram credentials are not configured.' }
@@ -192,6 +195,30 @@ export async function sendTelegramDailyReport(customRange?: { start: Date; end: 
   const localNow = new Date(now.getTime() + localOffsetHours * 3600 * 1000)
   const localStart = new Date(Date.UTC(localNow.getUTCFullYear(), localNow.getUTCMonth(), localNow.getUTCDate(), 0, 0, 0))
   const startOfDayUtc = new Date(localStart.getTime() - localOffsetHours * 3600 * 1000)
+
+  const dateStrKey = `${localNow.getUTCFullYear()}-${String(localNow.getUTCMonth() + 1).padStart(2, '0')}-${String(localNow.getUTCDate()).padStart(2, '0')}`
+
+  // Automated deduplication guard: prevent sending multiple reports on the same day unless forced
+  if (!force && !customRange) {
+    try {
+      const alreadySent = await prisma.verificationToken.findFirst({
+        where: {
+          identifier: 'telegram_daily_report',
+          token: dateStrKey
+        }
+      })
+      if (alreadySent) {
+        console.log(`[Telegram] Daily report for ${dateStrKey} was already dispatched. Skipping duplicate.`)
+        return {
+          success: true,
+          skipped: true,
+          error: `Daily report for ${dateStrKey} already dispatched today.`
+        }
+      }
+    } catch (err) {
+      console.warn('[Telegram] Could not check daily report deduplication token:', err)
+    }
+  }
 
   const startTime = customRange?.start || startOfDayUtc
   const endTime = customRange?.end || now
@@ -350,6 +377,30 @@ export async function sendTelegramDailyReport(customRange?: { start: Date; end: 
     const data = await res.json()
     if (!res.ok || !data.ok) {
       return { success: false, error: data.description || 'Telegram API rejected message' }
+    }
+
+    // Record deduplication token for today
+    if (!customRange) {
+      try {
+        await prisma.verificationToken.upsert({
+          where: {
+            identifier_token: {
+              identifier: 'telegram_daily_report',
+              token: dateStrKey
+            }
+          },
+          create: {
+            identifier: 'telegram_daily_report',
+            token: dateStrKey,
+            expires: new Date(Date.now() + 48 * 3600 * 1000)
+          },
+          update: {
+            expires: new Date(Date.now() + 48 * 3600 * 1000)
+          }
+        })
+      } catch (err) {
+        console.warn('[Telegram] Could not save deduplication token in database:', err)
+      }
     }
 
     return {
