@@ -9,7 +9,7 @@ export async function POST() {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
   }
 
-  const result = await sendTelegramDailyReport()
+  const result = await sendTelegramDailyReport(undefined, true)
   if (!result.success) {
     return NextResponse.json({ error: result.error || 'Failed to dispatch daily report.' }, { status: 400 })
   }
