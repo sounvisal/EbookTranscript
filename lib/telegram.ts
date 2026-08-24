@@ -259,11 +259,15 @@ export async function sendTelegramDailyReport(customRange?: { start: Date; end: 
     const failedJobs = metrics.filter((m) => m.status === 'error').length + errors.filter(e => e.errorType !== 'USER_REPORTED_ISSUE').length
     const totalJobs = successfulJobs + failedJobs
 
-    const totalSeconds = transcripts.reduce((acc, t) => acc + (t.duration || 0), 0) ||
-      metrics.reduce((acc, m) => acc + (m.durationSeconds || 0), 0)
-
     const totalWords = transcripts.reduce((acc, t) => acc + (t.wordCount || 0), 0) ||
       metrics.reduce((acc, m) => acc + (m.wordCount || 0), 0)
+
+    let totalSeconds = transcripts.reduce((acc, t) => acc + (t.duration || 0), 0) ||
+      metrics.reduce((acc, m) => acc + (m.durationSeconds || 0), 0)
+
+    if (!totalSeconds && totalWords > 0) {
+      totalSeconds = Math.round(totalWords / 2.3)
+    }
 
     const totalTokens = metrics.reduce((acc, m) => acc + (m.totalTokens || 0), 0) ||
       Math.round(totalSeconds * 25 + totalWords * 1.3)
