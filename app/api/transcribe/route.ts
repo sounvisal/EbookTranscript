@@ -65,6 +65,7 @@ type MediaInput = {
   mimeType: string
   displayName: string
   sourceName: string
+  durationSeconds?: number
   keyIndex?: number
 }
 
@@ -412,11 +413,19 @@ async function getMediaInputFromRequest(req: Request): Promise<MediaInput> {
         else if (ext === 'mov') mimeType = 'video/quicktime'
         else mimeType = 'video/mp4'
       }
+      const durationSeconds =
+        typeof body.duration === 'number' && Number.isFinite(body.duration) && body.duration > 0
+          ? body.duration
+          : typeof body.durationSeconds === 'number' && Number.isFinite(body.durationSeconds) && body.durationSeconds > 0
+            ? body.durationSeconds
+            : 0
+
       return {
         fileUri: body.fileUri.trim(),
         mimeType,
         displayName: body.displayName || 'uploaded-media',
         sourceName: body.displayName || 'uploaded-media',
+        durationSeconds,
         keyIndex: typeof body?.keyIndex === 'number' ? body.keyIndex : undefined
       }
     }
@@ -801,11 +810,24 @@ async function transcribeWithKey(
         const parsedTranscript = parseGeminiTranscriptResponse(responseText)
         emit({ type: 'progress', progress: 100 })
 
+        // Extract maximum segment end timestamp as a rock-solid duration fallback
+        const maxSegmentEnd = parsedTranscript.segments?.reduce((max, s) => {
+          const end = typeof s.end === 'number' && Number.isFinite(s.end) ? s.end : (typeof s.start === 'number' && Number.isFinite(s.start) ? s.start : 0)
+          return Math.max(max, end)
+        }, 0) || 0
+
+        const wordCount = parsedTranscript.text ? parsedTranscript.text.split(/\s+/).filter(Boolean).length : 0
+        const estimatedFromWords = wordCount > 0 ? Math.max(1, Math.round(wordCount / 2.3)) : 0
+
+        const finalDuration = totalDuration > 0
+          ? totalDuration
+          : (maxSegmentEnd > 0 ? Math.round(maxSegmentEnd * 10) / 10 : estimatedFromWords)
+
         return {
           text: parsedTranscript.text,
           segments: parsedTranscript.segments,
           language: parsedTranscript.language,
-          duration: totalDuration,
+          duration: finalDuration,
           source: sourceName || modelName
         }
       } catch (error) {
@@ -876,7 +898,7 @@ async function runTranscriptionPipeline(
             fileUri: mediaInput.fileUri,
             mimeType: mediaInput.mimeType,
             displayName: mediaInput.displayName,
-            durationSeconds: 0
+            durationSeconds: mediaInput.durationSeconds || 0
           },
           mediaInput.sourceName,
           models,
@@ -1029,13 +1051,22 @@ export async function POST(req: Request) {
           const result = await runTranscriptionPipeline(req, keys, emit)
           emit({ type: 'result', ...result })
           
+          const wordCount = result.text ? result.text.split(/\s+/).filter(Boolean).length : 0
+          const maxSegEnd = result.segments?.reduce((max, s) => {
+            const end = typeof s.end === 'number' && Number.isFinite(s.end) ? s.end : (typeof s.start === 'number' && Number.isFinite(s.start) ? s.start : 0)
+            return Math.max(max, end)
+          }, 0) || 0
+          const durationSecs = result.duration && result.duration > 0
+            ? result.duration
+            : (maxSegEnd > 0 ? Math.round(maxSegEnd * 10) / 10 : Math.max(1, Math.round(wordCount / 2.3)))
+
           // Log privacy-safe metrics for admin dashboard (no transcript text saved)
           trackUsage({
             userId: session.user?.id || null,
             model: MODEL_NAME,
             inputType: 'file',
-            durationSeconds: result.duration,
-            wordCount: result.text ? result.text.split(/\s+/).filter(Boolean).length : 0,
+            durationSeconds: durationSecs,
+            wordCount,
             status: 'success'
           }).catch(() => {})
         } catch (error) {
@@ -1072,12 +1103,21 @@ export async function POST(req: Request) {
   // Non-streaming mode: keep the original single JSON response for compatibility.
   try {
     const result = await runTranscriptionPipeline(req, keys, () => {})
+    const wordCount = result.text ? result.text.split(/\s+/).filter(Boolean).length : 0
+    const maxSegEnd = result.segments?.reduce((max, s) => {
+      const end = typeof s.end === 'number' && Number.isFinite(s.end) ? s.end : (typeof s.start === 'number' && Number.isFinite(s.start) ? s.start : 0)
+      return Math.max(max, end)
+    }, 0) || 0
+    const durationSecs = result.duration && result.duration > 0
+      ? result.duration
+      : (maxSegEnd > 0 ? Math.round(maxSegEnd * 10) / 10 : Math.max(1, Math.round(wordCount / 2.3)))
+
     trackUsage({
       userId: session.user?.id || null,
       model: MODEL_NAME,
       inputType: 'file',
-      durationSeconds: result.duration,
-      wordCount: result.text ? result.text.split(/\s+/).filter(Boolean).length : 0,
+      durationSeconds: durationSecs,
+      wordCount,
       status: 'success'
     }).catch(() => {})
     return NextResponse.json(result, { status: 200 })
