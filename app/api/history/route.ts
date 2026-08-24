@@ -83,13 +83,16 @@ export async function POST(req: Request) {
 
     const cleanText = getPlainTranscriptText(text)
     const computedWordCount = wordCount || cleanText.split(/\s+/).filter(Boolean).length
+    const computedDuration = (typeof duration === 'number' && Number.isFinite(duration) && duration > 0)
+      ? duration
+      : Math.max(1, Math.round(computedWordCount / 2.3))
 
     const transcript = await prisma.transcript.create({
       data: {
         text: cleanText,
         source,
         filename,
-        duration,
+        duration: computedDuration,
         wordCount: computedWordCount,
         language,
         userId: session.user.id
