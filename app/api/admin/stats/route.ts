@@ -82,6 +82,10 @@ export async function GET(req: Request) {
     }
 
     for (const metric of allMetrics) {
+      const metricDuration = (typeof metric.durationSeconds === 'number' && metric.durationSeconds > 0)
+        ? metric.durationSeconds
+        : Math.max(1, Math.round((metric.wordCount || 0) / 2.3))
+
       totalTokensAllTime += metric.totalTokens
 
       // Model breakdown
@@ -91,14 +95,14 @@ export async function GET(req: Request) {
       }
       modelUsageMap[m].requests += 1
       modelUsageMap[m].tokens += metric.totalTokens
-      modelUsageMap[m].duration += metric.durationSeconds || 0
+      modelUsageMap[m].duration += metricDuration
 
-      // Daily breakdown
+      // Daily breakdown (converted from seconds to minutes)
       const dateKey = metric.createdAt.toISOString().split('T')[0]
       if (dailyTokenMap[dateKey]) {
         dailyTokenMap[dateKey].tokens += metric.totalTokens
         dailyTokenMap[dateKey].requests += 1
-        dailyTokenMap[dateKey].duration += metric.durationSeconds || 0
+        dailyTokenMap[dateKey].duration += metricDuration / 60
       }
     }
 
