@@ -1,0 +1,17 @@
+name: Daily 5:30 PM Telegram Digest Cron
+
+on:
+  schedule:
+    # 10:30 UTC = 17:30 (5:30 PM) Cambodia Time (UTC+7)
+    - cron: '30 10 * * *'
+  workflow_dispatch:
+
+jobs:
+  trigger-report:
+    name: Trigger 5:30 PM Daily Digest
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Daily Report Endpoint
+        run: |
+          echo "Triggering 5:30 PM Daily Report endpoint..."
+          curl -s -X GET "https://ebook-transcript.vercel.app/api/cron/daily-report" || true
