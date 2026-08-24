@@ -8,7 +8,7 @@ import {
   stripTimestampMarkers
 } from '@/lib/transcript'
 import { useTranscriptStore } from '@/store/transcriptStore'
-import { Check, Copy, Download, RefreshCw } from 'lucide-react'
+import { Check, Copy, Download, RefreshCw, Sparkles, FileText, CheckCircle2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import ReportErrorButton from '@/components/common/ReportErrorButton'
 
@@ -87,55 +87,101 @@ export default function TranscriptPanel() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-4xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl shadow-slate-200/40">
-      <div className="border-b border-slate-200 p-5 sm:flex sm:items-center sm:justify-between sm:p-6">
+    <div className="apple-glass mx-auto w-full max-w-4xl overflow-hidden rounded-3xl transition-all duration-300">
+      {/* Header Card */}
+      <div className="border-b border-slate-200/60 bg-gradient-to-b from-white/90 to-slate-50/50 p-6 sm:flex sm:items-center sm:justify-between sm:p-7">
         <div className="min-w-0">
-          <div className="flex items-center gap-2 text-sm font-semibold text-emerald-700">
-            <span className="h-2 w-2 rounded-full bg-emerald-500" />
-            Transcript ready
+          <div className="flex items-center gap-2 text-xs font-semibold text-emerald-600">
+            <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-ping" />
+            <span className="flex items-center gap-1">
+              <CheckCircle2 className="h-3.5 w-3.5" /> Transcription Finished
+            </span>
           </div>
-          <h2 className="mt-2 truncate text-xl font-semibold text-slate-950">{sourceName}</h2>
-          <p className="mt-1 text-xs text-slate-500">{wordCount.toLocaleString()} words · {text.length.toLocaleString()} characters</p>
+          <h2 className="mt-2 truncate text-xl sm:text-2xl font-bold tracking-tight text-slate-950" title={sourceName}>
+            {sourceName}
+          </h2>
+          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs font-medium text-slate-500">
+            <span className="rounded-md bg-white px-2 py-0.5 ring-1 ring-slate-200/70 font-mono">
+              {wordCount.toLocaleString()} words
+            </span>
+            <span>·</span>
+            <span>{text.length.toLocaleString()} characters</span>
+            {transcript?.language && transcript.language !== 'auto' && (
+              <>
+                <span>·</span>
+                <span className="rounded-full bg-blue-50 px-2.5 py-0.5 text-[11px] font-semibold text-blue-700">
+                  {transcript.language}
+                </span>
+              </>
+            )}
+          </div>
         </div>
-        <span className="mt-3 inline-flex rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600 sm:mt-0">
-          {saving ? 'Saving…' : saved ? 'Saved to history' : 'Ready'}
-        </span>
+
+        <div className="mt-4 sm:mt-0 flex items-center gap-2">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-white/90 px-3.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200/80 shadow-2xs">
+            <span className={`h-1.5 w-1.5 rounded-full ${saving ? 'bg-amber-500 animate-pulse' : saved ? 'bg-emerald-500' : 'bg-slate-400'}`} />
+            {saving ? 'Saving to cloud…' : saved ? 'Saved to history' : 'Ready'}
+          </span>
+        </div>
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-slate-50/70 p-3 sm:px-6">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex rounded-lg bg-slate-200/80 p-0.5 text-xs font-semibold">
+      {/* Floating Apple Action Toolbar */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/50 bg-slate-50/70 p-3.5 sm:px-7">
+        <div className="flex flex-wrap items-center gap-2.5">
+          {/* Segmented View Switcher */}
+          <div className="flex rounded-xl bg-slate-200/60 p-1 text-xs font-semibold ring-1 ring-black/5">
             <button
               onClick={() => setViewMode('paragraphs')}
-              className={`rounded-md px-3 py-1.5 transition-all ${
-                viewMode === 'paragraphs' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+              className={`rounded-lg px-3.5 py-1.5 transition-all duration-200 cursor-pointer ${
+                viewMode === 'paragraphs' ? 'bg-white text-slate-950 shadow-xs' : 'text-slate-600 hover:text-slate-950'
               }`}
             >
               Full Text
             </button>
             <button
               onClick={() => setViewMode('timestamps')}
-              className={`rounded-md px-3 py-1.5 transition-all ${
-                viewMode === 'timestamps' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+              className={`rounded-lg px-3.5 py-1.5 transition-all duration-200 cursor-pointer ${
+                viewMode === 'timestamps' ? 'bg-white text-slate-950 shadow-xs' : 'text-slate-600 hover:text-slate-950'
               }`}
             >
               Timestamps ({displaySegments.length})
             </button>
           </div>
 
-          <button onClick={handleCopy} className={`flex items-center gap-2 rounded-lg px-3.5 py-1.5 text-xs sm:text-sm font-semibold transition-colors ${copied ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-600 text-white hover:bg-blue-700'}`}>
+          {/* Primary Copy Pill */}
+          <button
+            onClick={handleCopy}
+            className={`flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs sm:text-sm font-semibold transition-all duration-200 cursor-pointer ${
+              copied
+                ? 'bg-emerald-600 text-white shadow-xs'
+                : 'apple-btn-primary text-white'
+            }`}
+          >
             {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-            {copied ? 'Copied' : 'Copy all'}
+            <span>{copied ? 'Copied to Clipboard' : 'Copy All'}</span>
           </button>
-          <button onClick={() => downloadTxt(text, sourceName)} className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50">
-            <Download className="h-3.5 w-3.5" /> TXT
-          </button>
-          <button onClick={() => downloadSrt(text, sourceName, displaySegments)} className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50">
-            <Download className="h-3.5 w-3.5" /> SRT
-          </button>
-          <button onClick={() => downloadVtt(text, sourceName, displaySegments)} className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50">
-            <Download className="h-3.5 w-3.5" /> VTT
-          </button>
+
+          {/* Export Action Pills */}
+          <div className="flex items-center rounded-xl bg-white/80 p-0.5 ring-1 ring-slate-200/70">
+            <button
+              onClick={() => downloadTxt(text, sourceName)}
+              className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+            >
+              <Download className="h-3 w-3 text-slate-400" /> TXT
+            </button>
+            <button
+              onClick={() => downloadSrt(text, sourceName, displaySegments)}
+              className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+            >
+              <Download className="h-3 w-3 text-slate-400" /> SRT
+            </button>
+            <button
+              onClick={() => downloadVtt(text, sourceName, displaySegments)}
+              className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+            >
+              <Download className="h-3 w-3 text-slate-400" /> VTT
+            </button>
+          </div>
         </div>
 
         <div className="ml-auto flex items-center gap-2">
@@ -145,31 +191,51 @@ export default function TranscriptPanel() {
             inputType="file"
             transcriptSnippet={text.slice(0, 300)}
             detectedLanguage={transcript?.language}
-            className="text-slate-600 border-slate-200 hover:bg-slate-100"
+            className="text-slate-600 border-slate-200/80 hover:bg-slate-100 rounded-xl"
           />
-          <button onClick={resetAll} className="flex items-center gap-2 rounded-lg px-3.5 py-1.5 text-xs sm:text-sm font-medium text-slate-500 transition-colors hover:bg-white hover:text-slate-900">
-            <RefreshCw className="h-4 w-4" /> New transcript
+          <button
+            onClick={resetAll}
+            className="flex items-center gap-1.5 rounded-xl border border-slate-200/80 bg-white/90 px-3.5 py-2 text-xs sm:text-sm font-medium text-slate-600 transition-all hover:bg-slate-50 hover:text-slate-950 active:scale-95 cursor-pointer"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            <span>New</span>
           </button>
         </div>
       </div>
 
-      <div className="p-4 sm:p-7">
-        <div className="max-h-[560px] overflow-y-auto pr-2 text-base leading-7 text-slate-800 outline-none" onCopy={handleTranscriptCopy}>
+      {/* Editorial Content Area */}
+      <div className="p-5 sm:p-8">
+        <div
+          className="max-h-[580px] overflow-y-auto pr-2 text-base leading-relaxed text-slate-800 outline-none"
+          onCopy={handleTranscriptCopy}
+        >
           {viewMode === 'paragraphs' ? (
-            <div className="space-y-4 font-normal text-slate-900 leading-relaxed">
+            <div className="space-y-5 font-normal text-slate-900 leading-8">
               {text.split(/\n{2,}/).map((paragraph, pIdx) => (
-                <p key={pIdx} className="leading-relaxed whitespace-pre-wrap">{paragraph}</p>
+                <p key={pIdx} className="leading-8 whitespace-pre-wrap selection:bg-blue-100">
+                  {paragraph}
+                </p>
               ))}
             </div>
           ) : (
-            displaySegments.map((segment, index) => (
-              <div key={`${segment.start}-${index}`} className="grid grid-cols-[3.5rem_minmax(0,1fr)] gap-3 rounded-lg px-1 py-2 transition-colors hover:bg-slate-50 sm:grid-cols-[4.5rem_minmax(0,1fr)] sm:gap-4">
-                <span aria-hidden="true" className="select-none pt-0.5 text-right text-xs font-medium leading-7 tabular-nums text-slate-400">
-                  {formatTimestamp(segment.start)}
-                </span>
-                <p className="whitespace-pre-wrap">{segment.text}</p>
-              </div>
-            ))
+            <div className="space-y-1.5">
+              {displaySegments.map((segment, index) => (
+                <div
+                  key={`${segment.start}-${index}`}
+                  className="group grid grid-cols-[4rem_minmax(0,1fr)] gap-3 rounded-xl p-2.5 transition-all duration-150 hover:bg-blue-50/40 sm:grid-cols-[5rem_minmax(0,1fr)] sm:gap-4"
+                >
+                  <span
+                    aria-hidden="true"
+                    className="select-none pt-0.5 text-right font-mono text-xs font-semibold tabular-nums text-slate-400 group-hover:text-blue-600 transition-colors"
+                  >
+                    {formatTimestamp(segment.start)}
+                  </span>
+                  <p className="whitespace-pre-wrap leading-relaxed text-slate-800 group-hover:text-slate-950">
+                    {segment.text}
+                  </p>
+                </div>
+              ))}
+            </div>
           )}
         </div>
       </div>
