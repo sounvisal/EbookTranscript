@@ -142,8 +142,11 @@ export async function transcribeWithProgress(
 
     // Step 0: Optimize media for upload (extract compact speech audio if video or large file)
     let fileToUpload = input.file
+    let mediaDuration = 0
     try {
-      fileToUpload = await prepareMediaForUpload(input.file)
+      const prepared = await prepareMediaForUpload(input.file)
+      fileToUpload = prepared.file
+      mediaDuration = prepared.duration
     } catch {
       fileToUpload = input.file
     }
@@ -161,7 +164,7 @@ export async function transcribeWithProgress(
       onEvent?.({ type: 'progress', progress })
     })
 
-    onEvent?.({ type: 'status', phase: 'processing' })
+    onEvent?.({ type: 'status', phase: 'processing', duration: mediaDuration })
 
     // 3. Send lightweight 200-byte JSON request to /api/transcribe
     requestInit = {
@@ -174,6 +177,7 @@ export async function transcribeWithProgress(
         fileUri: uploadedFile.uri,
         mimeType: uploadedFile.mimeType || fileToUpload.type || 'audio/wav',
         displayName: input.file.name,
+        duration: mediaDuration,
         keyIndex
       })
     }
