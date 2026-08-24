@@ -11,16 +11,50 @@
  * 3. Saves bandwidth and battery for users.
  */
 
-export async function prepareMediaForUpload(file: File): Promise<File> {
-  // If it's already an audio file under 4MB, no conversion needed
+export async function getMediaDuration(file: File): Promise<number> {
+  if (typeof window === 'undefined') return 0
+  return new Promise((resolve) => {
+    try {
+      const url = URL.createObjectURL(file)
+      const isVideo = file.type.startsWith('video/') || /\.(mp4|mov|webm|m4v|mkv|avi)$/i.test(file.name)
+      const element = isVideo
+        ? document.createElement('video')
+        : document.createElement('audio')
+      element.preload = 'metadata'
+      element.onloadedmetadata = () => {
+        const d = element.duration
+        URL.revokeObjectURL(url)
+        resolve(Number.isFinite(d) && d > 0 ? Math.round(d * 10) / 10 : 0)
+      }
+      element.onerror = () => {
+        URL.revokeObjectURL(url)
+        resolve(0)
+      }
+      element.src = url
+      setTimeout(() => {
+        URL.revokeObjectURL(url)
+        resolve(0)
+      }, 3000)
+    } catch {
+      resolve(0)
+    }
+  })
+}
+
+export async function prepareMediaForUpload(file: File): Promise<{ file: File; duration: number }> {
+  // If it's already an audio file under 4MB, probe duration and return
   if (file.type.startsWith('audio/') && file.size <= 4 * 1024 * 1024) {
-    return file
+    const duration = await getMediaDuration(file).catch(() => 0)
+    return { file, duration }
   }
 
   // Check if browser supports Web Audio API
-  if (typeof window === 'undefined') return file
+  if (typeof window === 'undefined') return { file, duration: 0 }
   const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
-  if (!AudioContextClass) return file
+  if (!AudioContextClass) {
+    const duration = await getMediaDuration(file).catch(() => 0)
+    return { file, duration }
+  }
 
   try {
     const arrayBuffer = await file.arrayBuffer()
@@ -28,15 +62,18 @@ export async function prepareMediaForUpload(file: File): Promise<File> {
     
     // Decode audio track from MP4, MOV, WebM, WAV, AAC, MP3
     const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer)
+    const duration = Number.isFinite(audioBuffer.duration) ? Math.round(audioBuffer.duration * 10) / 10 : 0
     audioCtx.close().catch(() => {})
 
     // Encode to compact mono 16kHz WAV
     const wavBlob = audioBufferToMonoWav(audioBuffer)
     const baseName = file.name.replace(/\.[^/.]+$/, '')
-    return new File([wavBlob], `${baseName}.wav`, { type: 'audio/wav' })
+    const wavFile = new File([wavBlob], `${baseName}.wav`, { type: 'audio/wav' })
+    return { file: wavFile, duration }
   } catch (err) {
     console.warn('Client audio extraction failed; falling back to original file:', err)
-    return file
+    const duration = await getMediaDuration(file).catch(() => 0)
+    return { file, duration }
   }
 }
 
