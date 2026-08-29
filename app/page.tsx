@@ -17,9 +17,9 @@ export default function Home() {
         <motion.div
           initial={{ opacity: 0, y: -8 }}
           animate={{ opacity: 1, y: 0 }}
-          className="mb-4 inline-flex items-center gap-2 rounded-full border border-blue-200/80 bg-white/80 px-3.5 py-1 text-xs font-semibold text-blue-700 shadow-xs backdrop-blur-md"
+          className="mb-4 inline-flex items-center gap-2 rounded-full border border-blue-200/80 bg-white/80 dark:border-blue-900/60 dark:bg-blue-950/40 px-3.5 py-1 text-xs font-semibold text-blue-700 dark:text-blue-300 shadow-xs backdrop-blur-md"
         >
-          <Sparkles className="h-3.5 w-3.5 text-blue-600 animate-pulse" />
+          <Sparkles className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400 animate-pulse" />
           <span>Next-Gen Audio & Video Intelligence</span>
         </motion.div>
 
@@ -27,7 +27,7 @@ export default function Home() {
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.05 }}
-          className="text-4xl font-bold tracking-tight text-slate-950 sm:text-5xl sm:leading-[1.15]"
+          className="text-4xl font-bold tracking-tight text-slate-950 dark:text-white sm:text-5xl sm:leading-[1.15]"
         >
           Turn speech into clear, verbatim text.
         </motion.h1>
@@ -36,7 +36,7 @@ export default function Home() {
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.1 }}
-          className="mt-4 text-base leading-relaxed text-slate-600 sm:text-lg"
+          className="mt-4 text-base leading-relaxed text-slate-600 dark:text-slate-400 sm:text-lg"
         >
           Upload audio, video, or paste a link. Powered by advanced multilingual AI with automatic language detection & timestamping.
         </motion.p>
@@ -46,15 +46,15 @@ export default function Home() {
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.15 }}
-          className="mt-6 flex flex-wrap items-center justify-center gap-2.5 sm:gap-4 text-xs font-medium text-slate-600"
+          className="mt-6 flex flex-wrap items-center justify-center gap-2.5 sm:gap-4 text-xs font-medium text-slate-600 dark:text-slate-300"
         >
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100/80 px-3 py-1 ring-1 ring-slate-200/60">
-            <Globe2 className="h-3.5 w-3.5 text-slate-500" /> Khmer & English & 50+ Languages
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100/80 dark:bg-slate-900/80 px-3 py-1 ring-1 ring-slate-200/60 dark:ring-slate-800">
+            <Globe2 className="h-3.5 w-3.5 text-slate-500 dark:text-slate-400" /> Khmer & English & 50+ Languages
           </span>
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100/80 px-3 py-1 ring-1 ring-slate-200/60">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100/80 dark:bg-slate-900/80 px-3 py-1 ring-1 ring-slate-200/60 dark:ring-slate-800">
             <Zap className="h-3.5 w-3.5 text-amber-500" /> Up to 2GB Direct Upload
           </span>
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100/80 px-3 py-1 ring-1 ring-slate-200/60">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100/80 dark:bg-slate-900/80 px-3 py-1 ring-1 ring-slate-200/60 dark:ring-slate-800">
             <ShieldCheck className="h-3.5 w-3.5 text-emerald-500" /> Private & Secure
           </span>
         </motion.div>

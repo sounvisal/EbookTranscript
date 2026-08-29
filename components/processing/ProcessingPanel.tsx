@@ -44,7 +44,7 @@ export default function ProcessingPanel() {
           </div>
         </div>
 
-        <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-950">
+        <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-950 dark:text-white">
           Transcribing your media
         </h2>
 
@@ -55,25 +55,25 @@ export default function ProcessingPanel() {
             initial={{ opacity: 0, y: 4 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -4 }}
-            className="text-sm font-semibold text-blue-600"
+            className="text-sm font-semibold text-blue-600 dark:text-blue-400"
           >
             {STATUS_STEPS[stepIndex].label}
           </motion.p>
-          <p className="mt-0.5 text-xs text-slate-400">
+          <p className="mt-0.5 text-xs text-slate-400 dark:text-slate-500">
             {STATUS_STEPS[stepIndex].detail}
           </p>
         </div>
 
         {/* Apple Shimmering Progress Bar */}
         <div className="mt-8">
-          <div className="flex items-center justify-between text-xs font-semibold text-slate-600">
+          <div className="flex items-center justify-between text-xs font-semibold text-slate-600 dark:text-slate-400">
             <span className="flex items-center gap-1.5">
-              <Cpu className="h-3.5 w-3.5 text-blue-500" /> Speech Engine Active
+              <Cpu className="h-3.5 w-3.5 text-blue-500 dark:text-blue-400" /> Speech Engine Active
             </span>
-            <span className="font-mono text-sm font-bold text-blue-600">{Math.floor(progress)}%</span>
+            <span className="font-mono text-sm font-bold text-blue-600 dark:text-blue-400">{Math.floor(progress)}%</span>
           </div>
 
-          <div className="relative mt-3 h-3 overflow-hidden rounded-full bg-slate-200/70 p-0.5 ring-1 ring-black/5">
+          <div className="relative mt-3 h-3 overflow-hidden rounded-full bg-slate-200/70 dark:bg-slate-800/80 p-0.5 ring-1 ring-black/5 dark:ring-white/5">
             <motion.div
               className="relative h-full rounded-full bg-gradient-to-r from-blue-500 via-indigo-500 to-blue-600 shadow-xs"
               animate={{ width: `${Math.max(5, progress)}%` }}
@@ -85,7 +85,7 @@ export default function ProcessingPanel() {
           </div>
         </div>
 
-        <p className="mt-7 text-xs leading-relaxed text-slate-400">
+        <p className="mt-7 text-xs leading-relaxed text-slate-400 dark:text-slate-500">
           Large files and videos process smoothly in real time. Please keep this tab open.
         </p>
       </div>

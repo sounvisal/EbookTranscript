@@ -78,6 +78,11 @@ export default function AudioPlayer({
     }
   }, [hasNativeAudio, onTimeUpdate])
 
+  const currentTimeRef = useRef(currentTime)
+  useEffect(() => {
+    currentTimeRef.current = currentTime
+  }, [currentTime])
+
   // 2. Synthetic Playback / Timer Synchronizer when no native audio file is attached (e.g. URL transcripts)
   useEffect(() => {
     if (hasNativeAudio) return
@@ -85,14 +90,13 @@ export default function AudioPlayer({
     if (isPlaying) {
       const intervalMs = 100
       timerRef.current = setInterval(() => {
-        onTimeUpdate((prev) => {
-          const next = prev + (intervalMs / 1000) * playbackSpeed
-          if (next >= audioDuration) {
-            setIsPlaying(false)
-            return audioDuration
-          }
-          return next
-        })
+        const next = currentTimeRef.current + (intervalMs / 1000) * playbackSpeed
+        if (next >= audioDuration) {
+          setIsPlaying(false)
+          onTimeUpdate(audioDuration)
+        } else {
+          onTimeUpdate(next)
+        }
       }, intervalMs)
     } else {
       if (timerRef.current) {

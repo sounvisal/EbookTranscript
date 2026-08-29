@@ -207,34 +207,34 @@ export default function BatchUploadZone() {
         {...getRootProps()}
         className={`group relative flex cursor-pointer flex-col items-center justify-center rounded-3xl border-2 border-dashed p-8 text-center transition-all duration-300 sm:py-12 ${
           isDragActive
-            ? 'border-purple-500 bg-purple-50/60 scale-[1.01]'
-            : 'border-slate-300/80 bg-gradient-to-b from-white/80 to-slate-50/50 hover:border-purple-500/70 hover:bg-purple-50/20 shadow-xs'
+            ? 'border-purple-500 bg-purple-50/60 dark:bg-purple-950/40 scale-[1.01]'
+            : 'border-slate-300/80 dark:border-slate-800 bg-gradient-to-b from-white/80 to-slate-50/50 dark:from-slate-900/60 dark:to-slate-950/40 hover:border-purple-500/70 hover:bg-purple-50/20 dark:hover:bg-purple-950/20 shadow-xs'
         } ${running ? 'pointer-events-none opacity-50' : ''}`}
       >
         <input {...getInputProps()} />
-        <span className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-b from-purple-50 to-purple-100/80 text-purple-600 shadow-xs ring-1 ring-purple-500/20 transition-transform duration-300 group-hover:scale-110">
+        <span className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-b from-purple-50 to-purple-100/80 dark:from-purple-950/80 dark:to-purple-900/40 text-purple-600 dark:text-purple-400 shadow-xs ring-1 ring-purple-500/20 transition-transform duration-300 group-hover:scale-110">
           <Layers className="h-7 w-7" strokeWidth={1.75} />
         </span>
-        <h2 className="text-lg sm:text-xl font-bold tracking-tight text-slate-900">
+        <h2 className="text-lg sm:text-xl font-bold tracking-tight text-slate-900 dark:text-white">
           {isDragActive ? 'Drop batch files here' : 'Queue up to 10 files'}
         </h2>
-        <p className="mt-1.5 text-xs sm:text-sm text-slate-500">
+        <p className="mt-1.5 text-xs sm:text-sm text-slate-500 dark:text-slate-400">
           Drag and drop multiple audio or video files to transcribe in parallel
         </p>
-        <p className="mt-3 text-[11px] font-medium text-slate-400">
+        <p className="mt-3 text-[11px] font-medium text-slate-400 dark:text-slate-500">
           Up to {MAX_MEDIA_UPLOAD_MB} MB per file · Rotated multi-key concurrent processing
         </p>
       </div>
 
       {jobs.length > 0 && (
-        <div className="flex items-center justify-between px-1 text-xs font-semibold text-slate-600">
+        <div className="flex items-center justify-between px-1 text-xs font-semibold text-slate-600 dark:text-slate-400">
           <span>
             {jobs.length} of {MAX_BATCH_FILES} files · {completedCount} completed
           </span>
           <button
             onClick={clearAll}
             disabled={running}
-            className="rounded-full px-3 py-1 text-xs font-medium text-slate-500 hover:bg-slate-200/60 hover:text-red-600 transition-colors disabled:opacity-40 cursor-pointer"
+            className="rounded-full px-3 py-1 text-xs font-medium text-slate-500 hover:bg-slate-200/60 dark:hover:bg-slate-800 hover:text-red-600 dark:hover:text-red-400 transition-colors disabled:opacity-40 cursor-pointer"
           >
             Clear all
           </button>
@@ -255,14 +255,14 @@ export default function BatchUploadZone() {
             >
               <div className="flex items-center justify-between gap-4">
                 <div className="flex min-w-0 items-center gap-3.5">
-                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-purple-50 text-purple-600 ring-1 ring-purple-500/10">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-purple-50 dark:bg-purple-950/60 text-purple-600 dark:text-purple-400 ring-1 ring-purple-500/10">
                     <FileAudio className="h-5 w-5" />
                   </span>
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-bold text-slate-900" title={job.file.name}>
+                    <p className="truncate text-sm font-bold text-slate-900 dark:text-white" title={job.file.name}>
                       {job.file.name}
                     </p>
-                    <p className="mt-0.5 font-mono text-[11px] text-slate-400">
+                    <p className="mt-0.5 font-mono text-[11px] text-slate-400 dark:text-slate-500">
                       {(job.file.size / 1024 / 1024).toFixed(2)} MB
                     </p>
                   </div>
@@ -273,7 +273,7 @@ export default function BatchUploadZone() {
                   {job.status === 'queued' && !running && (
                     <button
                       onClick={() => removeJob(job.id)}
-                      className="rounded-full p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600 transition-colors cursor-pointer"
+                      className="rounded-full p-1.5 text-slate-400 hover:bg-red-50 dark:hover:bg-red-950/50 hover:text-red-600 transition-colors cursor-pointer"
                       aria-label={`Remove ${job.file.name}`}
                     >
                       <X className="h-4 w-4" />
@@ -283,7 +283,7 @@ export default function BatchUploadZone() {
               </div>
 
               {job.status === 'processing' && (
-                <div className="mt-3 relative h-2 overflow-hidden rounded-full bg-slate-100 ring-1 ring-black/5">
+                <div className="mt-3 relative h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800 ring-1 ring-black/5 dark:ring-white/5">
                   <motion.div
                     className="h-full rounded-full bg-gradient-to-r from-purple-500 to-indigo-600"
                     animate={{ width: `${job.progress}%` }}
@@ -293,7 +293,7 @@ export default function BatchUploadZone() {
               )}
 
               {job.status === 'error' && (
-                <div className="mt-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 rounded-xl bg-red-50/90 p-3 text-xs text-red-700">
+                <div className="mt-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 rounded-xl bg-red-50/90 dark:bg-red-950/50 p-3 text-xs text-red-700 dark:text-red-400 border border-red-200/60 dark:border-red-900/50">
                   <div className="flex items-start gap-2">
                     <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-600" />
                     <span className="font-medium">{job.error}</span>
@@ -309,8 +309,8 @@ export default function BatchUploadZone() {
               )}
 
               {job.status === 'complete' && job.transcript && (
-                <div className="mt-3 flex flex-col gap-3 border-t border-slate-100/80 pt-3">
-                  <div className="max-h-36 overflow-y-auto whitespace-pre-wrap rounded-xl bg-slate-50/80 p-3 text-xs leading-relaxed text-slate-700 font-normal">
+                <div className="mt-3 flex flex-col gap-3 border-t border-slate-100/80 dark:border-slate-800 pt-3">
+                  <div className="max-h-36 overflow-y-auto whitespace-pre-wrap rounded-xl bg-slate-50/80 dark:bg-slate-900/80 p-3 text-xs leading-relaxed text-slate-700 dark:text-slate-300 font-normal">
                     {getPlainTranscriptText(job.transcript.text || '', job.transcript.segments)}
                   </div>
                   <div className="flex items-center gap-2">
@@ -319,7 +319,7 @@ export default function BatchUploadZone() {
                       className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-all cursor-pointer ${
                         copiedId === job.id
                           ? 'bg-emerald-600 text-white'
-                          : 'bg-blue-50 text-blue-700 hover:bg-blue-100'
+                          : 'bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/60'
                       }`}
                     >
                       {copiedId === job.id ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
@@ -327,7 +327,7 @@ export default function BatchUploadZone() {
                     </button>
                     <button
                       onClick={() => handleDownload(job)}
-                      className="flex items-center gap-1.5 rounded-lg border border-slate-200/80 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer"
+                      className="flex items-center gap-1.5 rounded-lg border border-slate-200/80 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors cursor-pointer"
                     >
                       <Download className="h-3.5 w-3.5 text-slate-400" />
                       <span>TXT</span>
@@ -368,10 +368,10 @@ export default function BatchUploadZone() {
 
 function StatusBadge({ status }: { status: BatchJobStatus }) {
   const config: Record<BatchJobStatus, { label: string; className: string }> = {
-    queued: { label: 'Queued', className: 'bg-slate-100 text-slate-600' },
-    processing: { label: 'Processing', className: 'bg-blue-50 text-blue-700 ring-1 ring-blue-500/20' },
-    complete: { label: 'Complete', className: 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-500/20' },
-    error: { label: 'Failed', className: 'bg-red-50 text-red-700 ring-1 ring-red-500/20' }
+    queued: { label: 'Queued', className: 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400' },
+    processing: { label: 'Processing', className: 'bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 ring-1 ring-blue-500/20' },
+    complete: { label: 'Complete', className: 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 ring-1 ring-emerald-500/20' },
+    error: { label: 'Failed', className: 'bg-red-50 dark:bg-red-950/60 text-red-700 dark:text-red-400 ring-1 ring-red-500/20' }
   }
   const { label, className } = config[status]
   return <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${className}`}>{label}</span>
