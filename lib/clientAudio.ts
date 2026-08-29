@@ -79,19 +79,61 @@ export async function prepareMediaForUpload(file: File): Promise<{ file: File; d
 
 /**
  * Encodes an AudioBuffer into a mono 16-bit 16kHz WAV Blob
+ * with Voice Activity Detection (VAD) silence trimming.
  */
-function audioBufferToMonoWav(buffer: AudioBuffer): Blob {
+function audioBufferToMonoWav(buffer: AudioBuffer, trimSilence = true): Blob {
   const numChannels = buffer.numberOfChannels
-  const length = buffer.length
+  const totalLength = buffer.length
   
   // Downmix multi-channel to mono
-  const monoSamples = new Float32Array(length)
+  const monoSamples = new Float32Array(totalLength)
   for (let c = 0; c < numChannels; c++) {
     const channelData = buffer.getChannelData(c)
-    for (let i = 0; i < length; i++) {
+    for (let i = 0; i < totalLength; i++) {
       monoSamples[i] += channelData[i] / numChannels
     }
   }
+
+  // Voice Activity Detection & Silence Trimming (detect energy above -48dB)
+  let startIndex = 0
+  let endIndex = totalLength
+  
+  if (trimSilence && totalLength > buffer.sampleRate * 2) {
+    const windowSize = Math.floor(buffer.sampleRate * 0.05) // 50ms window
+    const silenceThreshold = 0.004 // RMS ~ -48dB
+    const padding = Math.floor(buffer.sampleRate * 0.15) // 150ms padding
+
+    // Find leading speech start
+    for (let i = 0; i < totalLength - windowSize; i += windowSize) {
+      let sumSquares = 0
+      for (let j = 0; j < windowSize; j++) {
+        const val = monoSamples[i + j]
+        sumSquares += val * val
+      }
+      const rms = Math.sqrt(sumSquares / windowSize)
+      if (rms > silenceThreshold) {
+        startIndex = Math.max(0, i - padding)
+        break
+      }
+    }
+
+    // Find trailing speech end
+    for (let i = totalLength - windowSize; i > startIndex + windowSize; i -= windowSize) {
+      let sumSquares = 0
+      for (let j = 0; j < windowSize; j++) {
+        const val = monoSamples[i + j]
+        sumSquares += val * val
+      }
+      const rms = Math.sqrt(sumSquares / windowSize)
+      if (rms > silenceThreshold) {
+        endIndex = Math.min(totalLength, i + windowSize + padding)
+        break
+      }
+    }
+  }
+
+  const length = endIndex - startIndex
+  const trimmedSamples = monoSamples.subarray(startIndex, endIndex)
 
   // 16-bit PCM WAV (44 header bytes + 2 bytes per sample)
   const wavBuffer = new ArrayBuffer(44 + length * 2)
@@ -119,7 +161,7 @@ function audioBufferToMonoWav(buffer: AudioBuffer): Blob {
   // Write 16-bit PCM samples with clipping clamp
   let offset = 44
   for (let i = 0; i < length; i++) {
-    const s = Math.max(-1, Math.min(1, monoSamples[i]))
+    const s = Math.max(-1, Math.min(1, trimmedSamples[i]))
     view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true)
     offset += 2
   }
