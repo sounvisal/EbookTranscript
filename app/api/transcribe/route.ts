@@ -548,12 +548,12 @@ async function waitForUploadedFile(apiKey: string, fileName: string) {
 const TRANSCRIPTION_PROMPT = [
   'You are a high-accuracy multilingual audio transcription system specialized in automatic language detection, particularly Khmer (ភាសាខ្មែរ), English, and bilingual speech.',
   'Listen carefully to the entire media from the very beginning (0:00) to the absolute end.',
-  '1. AUTOMATIC LANGUAGE DETECTION: Automatically detect the spoken language. If the audio is in Khmer, set language to "Khmer". If in English, set language to "English". If the speaker mixes Khmer and English (bilingual code-switching), set language to "Khmer / English". For any other language (Chinese, Thai, Vietnamese, Japanese, French, etc.), automatically detect and set it accordingly.',
-  '2. VERBATIM SPEECH ACCURACY: Transcribe every spoken word accurately in the native script. For Khmer speech, output clean Khmer script (អក្សរខ្មែរ) with proper spacing and spelling. For English speech, output English. For mixed speech, write Khmer words in Khmer and English terms/loanwords in English.',
-  '3. COMPLETE TRANSCRIPTION: Transcribe the entire duration verbatim from start to finish. Do not summarize, shorten, cut off, or omit words even with fast speech, slang, background music, or sound effects.',
+  '1. AUTOMATIC LANGUAGE DETECTION: Automatically detect the spoken language. If the audio is in Khmer, set language to "Khmer". If in English, set language to "English". If bilingual mixed speech, set language to "Khmer / English".',
+  '2. VERBATIM SPEECH ACCURACY: Transcribe every spoken word accurately in the native script. For Khmer speech, output clean Khmer script (អក្សរខ្មែរ) with proper spacing and spelling. For English speech, output English.',
+  '3. COMPLETE TRANSCRIPTION: Transcribe the entire duration verbatim from start to finish. Break into consecutive timestamped segments.',
   'Format strictly as JSON:',
-  '{"language":"Khmer","text":"Full continuous transcript of all spoken words from start to finish","segments":[{"start":0.0,"end":4.2,"text":"spoken phrase"}]}',
-  'If there is absolutely no spoken audio at all, return {"language":"auto","text":"","segments":[]}.'
+  '{"language":"Khmer","segments":[{"start":0.0,"end":4.5,"text":"phrase"}]}',
+  'If there is absolutely no spoken audio at all, return {"language":"auto","segments":[]}.'
 ].join(' ')
 
 type TranscriptResultPayload = {
