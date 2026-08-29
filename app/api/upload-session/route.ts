@@ -29,10 +29,18 @@ function getNextGeminiKeyInfo(): { apiKey: string; keyIndex: number } {
   return { apiKey: single, keyIndex: 0 }
 }
 
+import { checkUserQuota } from '@/lib/quota'
+
 export async function POST() {
   const session = await getServerSession(authOptions)
-  if (!session) {
+  if (!session?.user?.id) {
     return NextResponse.json({ error: 'Please sign in to transcribe files.' }, { status: 401 })
+  }
+
+  // Verify daily usage quota
+  const quota = await checkUserQuota(session.user.id, session.user.email, session.user.role)
+  if (!quota.allowed) {
+    return NextResponse.json({ error: quota.error || 'Daily usage quota reached.' }, { status: 429 })
   }
 
   const { apiKey, keyIndex: assignedIndex } = getNextGeminiKeyInfo()
@@ -45,6 +53,11 @@ export async function POST() {
   return NextResponse.json({
     apiKey,
     keyIndex: assignedIndex,
-    host
+    host,
+    quota: {
+      usedMinutes: quota.usedMinutes,
+      limitMinutes: quota.limitMinutes,
+      remainingMinutes: quota.remainingMinutes
+    }
   })
 }
