@@ -37,7 +37,23 @@ export async function GET(req: Request) {
     }
 
     const requestedPage = Math.max(1, Number.parseInt(searchParams.get('page') || '1', 10) || 1)
-    const where = { userId: session.user.id }
+    const searchQuery = searchParams.get('q')?.trim() || ''
+    const languageFilter = searchParams.get('lang')?.trim() || ''
+
+    const where: any = { userId: session.user.id }
+
+    if (searchQuery) {
+      where.OR = [
+        { text: { contains: searchQuery, mode: 'insensitive' } },
+        { filename: { contains: searchQuery, mode: 'insensitive' } },
+        { source: { contains: searchQuery, mode: 'insensitive' } }
+      ]
+    }
+
+    if (languageFilter && languageFilter !== 'all') {
+      where.language = { equals: languageFilter, mode: 'insensitive' }
+    }
+
     const total = await prisma.transcript.count({ where })
     const totalPages = Math.max(1, Math.ceil(total / HISTORY_PAGE_SIZE))
     const page = Math.min(requestedPage, totalPages)
@@ -58,8 +74,15 @@ export async function GET(req: Request) {
       }
     })
 
+    // Fetch distinct languages used by this user for the filter dropdown
+    const distinctLanguages = await prisma.transcript.findMany({
+      where: { userId: session.user.id, language: { not: null } },
+      distinct: ['language'],
+      select: { language: true }
+    }).then(list => list.map(l => l.language).filter(Boolean))
+
     return NextResponse.json(
-      { items, page, pageSize: HISTORY_PAGE_SIZE, total, totalPages },
+      { items, page, pageSize: HISTORY_PAGE_SIZE, total, totalPages, languages: distinctLanguages },
       { status: 200, headers: { 'Cache-Control': 'no-store' } }
     )
   } catch (error) {
