@@ -160,17 +160,16 @@ export default function TranscriptPanel() {
       </div>
 
       {/* Embedded Synchronized Audio Player */}
-      {audioUrl && (
-        <div className="border-b border-slate-200/60 dark:border-slate-800 p-4 sm:px-7 bg-slate-50/40 dark:bg-slate-900/40">
-          <AudioPlayer
-            src={audioUrl}
-            duration={transcript?.duration || 0}
-            currentTime={currentTime}
-            onSeek={setCurrentTime}
-            onTimeUpdate={setCurrentTime}
-          />
-        </div>
-      )}
+      <div className="border-b border-slate-200/60 dark:border-slate-800 p-4 sm:px-7 bg-slate-50/40 dark:bg-slate-900/40">
+        <AudioPlayer
+          src={audioUrl}
+          text={text}
+          duration={transcript?.duration || 0}
+          currentTime={currentTime}
+          onSeek={setCurrentTime}
+          onTimeUpdate={setCurrentTime}
+        />
+      </div>
 
       {/* Floating Apple Action Toolbar */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/50 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/70 p-3.5 sm:px-7">

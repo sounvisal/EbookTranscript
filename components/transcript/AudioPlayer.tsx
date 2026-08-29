@@ -8,12 +8,15 @@ import {
   RotateCw,
   Volume2,
   VolumeX,
-  Gauge
+  Gauge,
+  Headphones,
+  Sparkles
 } from 'lucide-react'
 import { formatTimestamp } from '@/lib/transcript'
 
 type AudioPlayerProps = {
-  src: string
+  src?: string | null
+  text?: string
   duration?: number
   currentTime: number
   onSeek: (time: number) => void
@@ -24,20 +27,31 @@ const PLAYBACK_SPEEDS = [0.75, 1.0, 1.25, 1.5, 2.0]
 
 export default function AudioPlayer({
   src,
+  text,
   duration = 0,
   currentTime,
   onSeek,
   onTimeUpdate
 }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null)
+  const timerRef = useRef<NodeJS.Timeout | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0)
   const [isMuted, setIsMuted] = useState(false)
-  const [audioDuration, setAudioDuration] = useState(duration)
+  const [audioDuration, setAudioDuration] = useState(duration || 60)
+
+  const hasNativeAudio = Boolean(src)
 
   useEffect(() => {
+    if (duration > 0) {
+      setAudioDuration(duration)
+    }
+  }, [duration])
+
+  // 1. Native Audio Event Handlers
+  useEffect(() => {
     const audio = audioRef.current
-    if (!audio) return
+    if (!audio || !hasNativeAudio) return
 
     const handleLoadedMetadata = () => {
       if (audio.duration && Number.isFinite(audio.duration)) {
@@ -62,43 +76,90 @@ export default function AudioPlayer({
       audio.removeEventListener('timeupdate', handleTimeUpdate)
       audio.removeEventListener('ended', handleEnded)
     }
-  }, [onTimeUpdate])
+  }, [hasNativeAudio, onTimeUpdate])
 
-  // Sync external seek (when user clicks a timestamp in the transcript)
+  // 2. Synthetic Playback / Timer Synchronizer when no native audio file is attached (e.g. URL transcripts)
   useEffect(() => {
-    const audio = audioRef.current
-    if (!audio) return
-    if (Math.abs(audio.currentTime - currentTime) > 0.3) {
-      audio.currentTime = currentTime
-    }
-  }, [currentTime])
-
-  const togglePlay = () => {
-    const audio = audioRef.current
-    if (!audio) return
+    if (hasNativeAudio) return
 
     if (isPlaying) {
-      audio.pause()
-      setIsPlaying(false)
+      const intervalMs = 100
+      timerRef.current = setInterval(() => {
+        onTimeUpdate((prev) => {
+          const next = prev + (intervalMs / 1000) * playbackSpeed
+          if (next >= audioDuration) {
+            setIsPlaying(false)
+            return audioDuration
+          }
+          return next
+        })
+      }, intervalMs)
     } else {
-      audio.play().catch(() => {})
-      setIsPlaying(true)
+      if (timerRef.current) {
+        clearInterval(timerRef.current)
+        timerRef.current = null
+      }
+    }
+
+    return () => {
+      if (timerRef.current) {
+        clearInterval(timerRef.current)
+        timerRef.current = null
+      }
+    }
+  }, [isPlaying, hasNativeAudio, playbackSpeed, audioDuration, onTimeUpdate])
+
+  // 3. Sync external seek (when user clicks a timestamp in the transcript)
+  useEffect(() => {
+    const audio = audioRef.current
+    if (audio && hasNativeAudio && Math.abs(audio.currentTime - currentTime) > 0.3) {
+      audio.currentTime = currentTime
+    }
+  }, [currentTime, hasNativeAudio])
+
+  const togglePlay = () => {
+    if (hasNativeAudio && audioRef.current) {
+      if (isPlaying) {
+        audioRef.current.pause()
+        setIsPlaying(false)
+      } else {
+        audioRef.current.play().catch(() => {})
+        setIsPlaying(true)
+      }
+    } else {
+      // Synthetic speech / timer toggle
+      if (isPlaying) {
+        if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+          window.speechSynthesis.cancel()
+        }
+        setIsPlaying(false)
+      } else {
+        if (typeof window !== 'undefined' && 'speechSynthesis' in window && text) {
+          try {
+            window.speechSynthesis.cancel()
+            const utterance = new SpeechSynthesisUtterance(text.slice(0, 1000))
+            utterance.rate = playbackSpeed
+            utterance.onend = () => setIsPlaying(false)
+            window.speechSynthesis.speak(utterance)
+          } catch {}
+        }
+        setIsPlaying(true)
+      }
     }
   }
 
   const handleSkip = (seconds: number) => {
-    const audio = audioRef.current
-    if (!audio) return
-    const newTime = Math.max(0, Math.min(audioDuration, audio.currentTime + seconds))
-    audio.currentTime = newTime
+    const newTime = Math.max(0, Math.min(audioDuration, currentTime + seconds))
+    if (hasNativeAudio && audioRef.current) {
+      audioRef.current.currentTime = newTime
+    }
     onSeek(newTime)
   }
 
   const handleScrubberChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newTime = Number.parseFloat(e.target.value)
-    const audio = audioRef.current
-    if (audio) {
-      audio.currentTime = newTime
+    if (hasNativeAudio && audioRef.current) {
+      audioRef.current.currentTime = newTime
     }
     onSeek(newTime)
   }
@@ -107,29 +168,40 @@ export default function AudioPlayer({
     const currentIndex = PLAYBACK_SPEEDS.indexOf(playbackSpeed)
     const nextSpeed = PLAYBACK_SPEEDS[(currentIndex + 1) % PLAYBACK_SPEEDS.length]
     setPlaybackSpeed(nextSpeed)
-    if (audioRef.current) {
+    if (hasNativeAudio && audioRef.current) {
       audioRef.current.playbackRate = nextSpeed
     }
   }
 
   const toggleMute = () => {
-    if (audioRef.current) {
+    if (hasNativeAudio && audioRef.current) {
       audioRef.current.muted = !isMuted
       setIsMuted(!isMuted)
     }
   }
 
-  const displayTotal = audioDuration > 0 ? audioDuration : duration
+  const displayTotal = audioDuration > 0 ? audioDuration : duration || 60
   const progressPercent = displayTotal > 0 ? (currentTime / displayTotal) * 100 : 0
 
   return (
-    <div className="apple-glass-card rounded-2xl p-4 sm:p-5 transition-all">
-      <audio ref={audioRef} src={src} preload="metadata" />
+    <div className="apple-glass-card rounded-2xl p-4 sm:p-5 transition-all shadow-xs">
+      {hasNativeAudio && src && <audio ref={audioRef} src={src} preload="metadata" />}
 
-      <div className="flex flex-col gap-3 sm:gap-3.5">
+      <div className="flex flex-col gap-3">
+        {/* Header Indicator */}
+        <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+          <div className="flex items-center gap-1.5 font-medium">
+            <Headphones className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" />
+            <span>{hasNativeAudio ? 'Interactive Audio Player' : 'Synchronized Playback Simulator'}</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="text-[11px] font-medium text-slate-400">Click any timestamp below to jump</span>
+          </div>
+        </div>
+
         {/* Scrubber and Times */}
         <div className="flex items-center gap-3">
-          <span className="w-12 text-right font-mono text-xs font-semibold text-slate-600 dark:text-slate-400">
+          <span className="w-12 text-right font-mono text-xs font-semibold text-slate-700 dark:text-slate-300">
             {formatTimestamp(currentTime)}
           </span>
 
@@ -154,12 +226,12 @@ export default function AudioPlayer({
         </div>
 
         {/* Controls Toolbar */}
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between pt-1">
           <div className="flex items-center gap-2">
             {/* Skip Back 5s */}
             <button
               onClick={() => handleSkip(-5)}
-              className="rounded-full p-2 text-slate-600 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white transition-colors"
+              className="rounded-full p-2 text-slate-600 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white transition-colors cursor-pointer"
               title="Skip back 5 seconds"
             >
               <RotateCcw className="h-4 w-4" />
@@ -177,11 +249,22 @@ export default function AudioPlayer({
             {/* Skip Forward 5s */}
             <button
               onClick={() => handleSkip(5)}
-              className="rounded-full p-2 text-slate-600 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white transition-colors"
+              className="rounded-full p-2 text-slate-600 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white transition-colors cursor-pointer"
               title="Skip forward 5 seconds"
             >
               <RotateCw className="h-4 w-4" />
             </button>
+
+            {/* Soundwave animation when playing */}
+            {isPlaying && (
+              <div className="hidden sm:flex items-center gap-0.5 ml-2">
+                <span className="h-3 w-1 rounded-full bg-blue-500 animate-bounce" style={{ animationDelay: '0ms' }} />
+                <span className="h-5 w-1 rounded-full bg-blue-600 animate-bounce" style={{ animationDelay: '150ms' }} />
+                <span className="h-4 w-1 rounded-full bg-blue-400 animate-bounce" style={{ animationDelay: '300ms' }} />
+                <span className="h-6 w-1 rounded-full bg-blue-500 animate-bounce" style={{ animationDelay: '100ms' }} />
+                <span className="h-3 w-1 rounded-full bg-blue-600 animate-bounce" style={{ animationDelay: '250ms' }} />
+              </div>
+            )}
           </div>
 
           <div className="flex items-center gap-2">
@@ -195,14 +278,16 @@ export default function AudioPlayer({
               <span>{playbackSpeed}x</span>
             </button>
 
-            {/* Mute Toggle */}
-            <button
-              onClick={toggleMute}
-              className="rounded-full p-2 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800 transition-colors"
-              title={isMuted ? 'Unmute' : 'Mute'}
-            >
-              {isMuted ? <VolumeX className="h-4 w-4 text-red-500" /> : <Volume2 className="h-4 w-4" />}
-            </button>
+            {/* Mute Toggle (Only if native audio exists) */}
+            {hasNativeAudio && (
+              <button
+                onClick={toggleMute}
+                className="rounded-full p-2 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                title={isMuted ? 'Unmute' : 'Mute'}
+              >
+                {isMuted ? <VolumeX className="h-4 w-4 text-red-500" /> : <Volume2 className="h-4 w-4" />}
+              </button>
+            )}
           </div>
         </div>
       </div>
