@@ -1025,10 +1025,18 @@ async function runTranscriptionPipeline(
   return result
 }
 
+import { checkUserQuota } from '@/lib/quota'
+
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions)
-  if (!session) {
+  if (!session?.user?.id) {
     return NextResponse.json({ error: 'Unauthorized access' }, { status: 401 })
+  }
+
+  // Quota enforcement
+  const quota = await checkUserQuota(session.user.id, session.user.email, session.user.role)
+  if (!quota.allowed) {
+    return NextResponse.json({ error: quota.error || 'Daily usage limit reached.' }, { status: 429 })
   }
 
   const keys = getGeminiApiKeys()
