@@ -42,13 +42,14 @@ export async function getMediaDuration(file: File): Promise<number> {
 }
 
 export async function prepareMediaForUpload(file: File): Promise<{ file: File; duration: number }> {
-  // If it's already an audio file under 4MB, probe duration and return
-  if (file.type.startsWith('audio/') && file.size <= 4 * 1024 * 1024) {
+  // If it's already a native audio file (MP3, M4A, WAV, AAC, FLAC, OGG), preserve its compressed format!
+  const isPureAudio = file.type.startsWith('audio/') || /\.(mp3|m4a|wav|aac|ogg|flac|wma)$/i.test(file.name)
+  if (isPureAudio) {
     const duration = await getMediaDuration(file).catch(() => 0)
     return { file, duration }
   }
 
-  // Check if browser supports Web Audio API
+  // Only perform video track stripping for video formats (MP4, MOV, WebM, MKV)
   if (typeof window === 'undefined') return { file, duration: 0 }
   const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
   if (!AudioContextClass) {
