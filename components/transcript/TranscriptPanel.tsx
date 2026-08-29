@@ -8,14 +8,15 @@ import {
   stripTimestampMarkers
 } from '@/lib/transcript'
 import { useTranscriptStore } from '@/store/transcriptStore'
-import { Check, Copy, Download, RefreshCw, Sparkles, FileText, CheckCircle2, PlayCircle } from 'lucide-react'
+import { Check, Copy, Download, RefreshCw, Sparkles, FileText, CheckCircle2, Headphones, Wand2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import ReportErrorButton from '@/components/common/ReportErrorButton'
 import AudioPlayer from '@/components/transcript/AudioPlayer'
 
 export default function TranscriptPanel() {
   const { transcript, file, audioBlob, resetAll } = useTranscriptStore()
-  const [viewMode, setViewMode] = useState<'paragraphs' | 'timestamps'>('paragraphs')
+  const [viewMode, setViewMode] = useState<'paragraphs' | 'timestamps'>('timestamps')
+  const [wordSyncEnabled, setWordSyncEnabled] = useState(true)
   const [copied, setCopied] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -24,7 +25,7 @@ export default function TranscriptPanel() {
   // Audio Playback & Synchronization State
   const [audioUrl, setAudioUrl] = useState<string | null>(null)
   const [currentTime, setCurrentTime] = useState(0)
-  const activeSegmentRef = useRef<HTMLDivElement | null>(null)
+  const activeWordRef = useRef<HTMLSpanElement | null>(null)
 
   const rawText = transcript?.text || 'Mock transcript content.'
   const text = useMemo(
@@ -62,6 +63,17 @@ export default function TranscriptPanel() {
       return currentTime >= seg.start && currentTime < end
     })
   }, [currentTime, displaySegments])
+
+  // Auto-scroll active word into view smoothly
+  useEffect(() => {
+    if (activeWordRef.current) {
+      activeWordRef.current.scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest',
+        inline: 'nearest'
+      })
+    }
+  }, [currentTime])
 
   useEffect(() => {
     const autoSave = async () => {
@@ -135,7 +147,7 @@ export default function TranscriptPanel() {
             {sourceName}
           </h2>
           <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs font-medium text-slate-500 dark:text-slate-400">
-            <span className="rounded-md bg-white dark:bg-slate-800 px-2 py-0.5 ring-1 ring-slate-200/70 dark:ring-slate-700 font-mono">
+            <span className="rounded-md bg-white dark:bg-slate-800 px-2 py-0.5 ring-1 ring-slate-200/70 dark:ring-slate-700 font-mono text-slate-700 dark:text-slate-300">
               {wordCount.toLocaleString()} words
             </span>
             <span>·</span>
@@ -190,9 +202,23 @@ export default function TranscriptPanel() {
                 viewMode === 'timestamps' ? 'bg-white dark:bg-slate-900 text-slate-950 dark:text-white shadow-xs' : 'text-slate-600 dark:text-slate-400 hover:text-slate-950 dark:hover:text-white'
               }`}
             >
-              Timestamps ({displaySegments.length})
+              Karaoke Sync ({displaySegments.length})
             </button>
           </div>
+
+          {/* Karaoke Word Marker Indicator */}
+          <button
+            onClick={() => setWordSyncEnabled(!wordSyncEnabled)}
+            className={`hidden sm:flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-semibold transition-all ${
+              wordSyncEnabled
+                ? 'border-blue-300 dark:border-blue-800 bg-blue-50/80 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 shadow-2xs'
+                : 'border-slate-200 dark:border-slate-800 bg-white/70 dark:bg-slate-900 text-slate-500'
+            }`}
+            title="Toggle word-by-word active tracking"
+          >
+            <Wand2 className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" />
+            <span>Word Tracking: {wordSyncEnabled ? 'ON' : 'OFF'}</span>
+          </button>
 
           {/* Primary Copy Pill */}
           <button
@@ -204,7 +230,7 @@ export default function TranscriptPanel() {
             }`}
           >
             {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-            <span>{copied ? 'Copied to Clipboard' : 'Copy All'}</span>
+            <span>{copied ? 'Copied' : 'Copy All'}</span>
           </button>
 
           {/* Export Action Pills */}
@@ -249,7 +275,7 @@ export default function TranscriptPanel() {
         </div>
       </div>
 
-      {/* Editorial Content Area with Live Segment Highlighting */}
+      {/* Editorial Content Area with Word-by-Word Karaoke Highlighting */}
       <div className="p-5 sm:p-8">
         <div
           className="max-h-[580px] overflow-y-auto pr-2 text-base leading-relaxed text-slate-800 dark:text-slate-200 outline-none"
@@ -264,25 +290,38 @@ export default function TranscriptPanel() {
               ))}
             </div>
           ) : (
-            <div className="space-y-2">
-              {displaySegments.map((segment, index) => {
-                const isActive = index === activeSegmentIndex
+            <div className="space-y-2.5">
+              {displaySegments.map((segment, segIdx) => {
+                const isSegmentActive = segIdx === activeSegmentIndex
+                const segStart = segment.start
+                const nextSeg = displaySegments[segIdx + 1]
+                const segEnd = typeof segment.end === 'number' && segment.end > segStart
+                  ? segment.end
+                  : (nextSeg ? nextSeg.start : segStart + 4)
+                const segDuration = Math.max(0.5, segEnd - segStart)
+
+                // Split segment into words while preserving spacing
+                const wordsList = segment.text.trim().split(/(\s+)/)
+                const realWords = wordsList.filter((w) => w.trim().length > 0)
+                const totalRealWords = Math.max(1, realWords.length)
+
+                let wordCounter = 0
 
                 return (
                   <div
-                    key={`${segment.start}-${index}`}
-                    ref={isActive ? activeSegmentRef : null}
+                    key={`${segment.start}-${segIdx}`}
                     onClick={() => handleSeekToSegment(segment.start)}
-                    className={`group grid grid-cols-[4rem_minmax(0,1fr)] sm:grid-cols-[5rem_minmax(0,1fr)] gap-3 sm:gap-4 rounded-xl p-3 cursor-pointer transition-all duration-200 ${
-                      isActive
-                        ? 'bg-blue-50/90 dark:bg-blue-950/60 border-l-4 border-blue-600 shadow-xs ring-1 ring-blue-500/10'
-                        : 'hover:bg-slate-100/60 dark:hover:bg-slate-800/50'
+                    className={`group grid grid-cols-[4rem_minmax(0,1fr)] sm:grid-cols-[5rem_minmax(0,1fr)] gap-3 sm:gap-4 rounded-2xl p-3.5 cursor-pointer transition-all duration-200 ${
+                      isSegmentActive
+                        ? 'bg-blue-50/90 dark:bg-blue-950/50 border-l-4 border-blue-600 shadow-xs ring-1 ring-blue-500/10'
+                        : 'hover:bg-slate-100/60 dark:hover:bg-slate-800/40'
                     }`}
                   >
-                    <div className="flex items-center gap-1 select-none pt-0.5">
+                    {/* Timestamp pill */}
+                    <div className="flex items-start gap-1 select-none pt-0.5">
                       <span
                         className={`font-mono text-xs font-bold tabular-nums transition-colors ${
-                          isActive
+                          isSegmentActive
                             ? 'text-blue-600 dark:text-blue-400 font-extrabold'
                             : 'text-slate-400 dark:text-slate-500 group-hover:text-blue-600 dark:group-hover:text-blue-400'
                         }`}
@@ -291,14 +330,44 @@ export default function TranscriptPanel() {
                       </span>
                     </div>
 
-                    <p
-                      className={`whitespace-pre-wrap leading-relaxed transition-colors ${
-                        isActive
-                          ? 'font-medium text-blue-950 dark:text-blue-100'
-                          : 'text-slate-800 dark:text-slate-200 group-hover:text-slate-950 dark:group-hover:text-white'
-                      }`}
-                    >
-                      {segment.text}
+                    {/* Word-by-word rendered paragraph */}
+                    <p className="whitespace-pre-wrap leading-relaxed text-slate-800 dark:text-slate-200 text-sm sm:text-base">
+                      {wordsList.map((token, tokenIdx) => {
+                        const isWhitespace = token.trim().length === 0
+                        if (isWhitespace) {
+                          return <span key={tokenIdx}>{token}</span>
+                        }
+
+                        const currentWordIndex = wordCounter
+                        wordCounter += 1
+
+                        const wStart = segStart + (currentWordIndex / totalRealWords) * segDuration
+                        const wEnd = segStart + ((currentWordIndex + 1) / totalRealWords) * segDuration
+
+                        const isThisWordActive = isSegmentActive && wordSyncEnabled && currentTime >= wStart && currentTime < wEnd
+                        const isPastWord = wordSyncEnabled && (currentTime >= wEnd)
+
+                        return (
+                          <span
+                            key={tokenIdx}
+                            ref={isThisWordActive ? activeWordRef : null}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setCurrentTime(wStart)
+                            }}
+                            className={`transition-all duration-150 inline-block rounded cursor-pointer ${
+                              isThisWordActive
+                                ? 'bg-blue-600 text-white font-bold px-1.5 py-0.5 shadow-sm scale-[1.06] ring-2 ring-blue-400/40'
+                                : isPastWord && isSegmentActive
+                                ? 'text-blue-900 dark:text-blue-300 font-medium hover:underline'
+                                : 'hover:bg-blue-100/60 dark:hover:bg-blue-900/40 hover:text-blue-600'
+                            }`}
+                            title={`Jump to ${formatTimestamp(wStart)}`}
+                          >
+                            {token}
+                          </span>
+                        )
+                      })}
                     </p>
                   </div>
                 )
