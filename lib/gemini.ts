@@ -279,7 +279,7 @@ export async function streamGeminiTranscript(
 
   const host = getGeminiApiHost()
   const cleanKey = (apiKey || '').trim().replace(/["'\r\n]/g, '')
-  const url = `https://${host}/${GEMINI_API_VERSION}/models/${input.modelName}:streamGenerateContent?alt=sse`
+  const url = `https://${host}/${GEMINI_API_VERSION}/models/${input.modelName}:generateContent`
 
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), GENERATION_TIMEOUT_MS)
@@ -288,7 +288,6 @@ export async function streamGeminiTranscript(
     const res = await fetch(url, {
       method: 'POST',
       headers: {
-        Accept: 'text/event-stream',
         'Content-Type': 'application/json',
         'x-goog-api-client': GEMINI_API_CLIENT,
         'x-goog-api-key': cleanKey
@@ -297,8 +296,8 @@ export async function streamGeminiTranscript(
       signal: controller.signal
     })
 
+    const responseText = await res.text()
     if (!res.ok) {
-      const responseText = await res.text()
       const errorMessage = parseGeminiErrorMessage(responseText)
       throw new Error(
         errorMessage
@@ -307,56 +306,22 @@ export async function streamGeminiTranscript(
       )
     }
 
-    if (!res.body) {
-      throw new Error('Gemini returned an empty response body.')
+    const parsed = JSON.parse(responseText) as GeminiGenerateContentResponse
+    const text = parsed.candidates
+      ?.flatMap((candidate) => candidate.content?.parts || [])
+      .map((part) => part.text || '')
+      .join('')
+      .trim()
+
+    if (text) {
+      input.onText?.(text)
+      return text
     }
 
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder()
-    let sseBuffer = ''
-    let accumulatedText = ''
-    let blockReason = ''
-
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      sseBuffer += decoder.decode(value, { stream: true })
-
-      let newlineIndex: number
-      while ((newlineIndex = sseBuffer.indexOf('\n')) !== -1) {
-        const line = sseBuffer.slice(0, newlineIndex).trim()
-        sseBuffer = sseBuffer.slice(newlineIndex + 1)
-
-        if (!line.startsWith('data:')) continue
-        const payload = line.slice('data:'.length).trim()
-        if (!payload || payload === '[DONE]') continue
-
-        try {
-          const parsed = JSON.parse(payload) as GeminiGenerateContentResponse
-          const text = parsed.candidates
-            ?.flatMap((candidate) => candidate.content?.parts || [])
-            .map((part) => part.text || '')
-            .join('')
-
-          if (text) {
-            accumulatedText += text
-            input.onText?.(accumulatedText)
-          }
-
-          if (parsed.promptFeedback?.blockReason) {
-            blockReason = parsed.promptFeedback.blockReason
-          }
-        } catch {
-          // Ignore partial or keep-alive lines
-        }
-      }
+    if (parsed.promptFeedback?.blockReason) {
+      throw new Error(`Gemini blocked the transcription request: ${parsed.promptFeedback.blockReason}.`)
     }
 
-    const finalText = accumulatedText.trim()
-    if (finalText) return finalText
-    if (blockReason) {
-      throw new Error(`Gemini blocked the transcription request: ${blockReason}.`)
-    }
     throw new Error('Gemini returned no transcript text.')
   } finally {
     clearTimeout(timeoutId)
