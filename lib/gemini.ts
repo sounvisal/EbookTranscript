@@ -273,27 +273,7 @@ export async function streamGeminiTranscript(
     generationConfig: {
       maxOutputTokens: 65536,
       temperature: 0.1,
-      responseMimeType: 'application/json',
-      responseSchema: {
-        type: 'OBJECT',
-        properties: {
-          language: { type: 'STRING' },
-          text: { type: 'STRING' },
-          segments: {
-            type: 'ARRAY',
-            items: {
-              type: 'OBJECT',
-              properties: {
-                start: { type: 'NUMBER' },
-                end: { type: 'NUMBER' },
-                text: { type: 'STRING' }
-              },
-              required: ['start', 'end', 'text']
-            }
-          }
-        },
-        required: ['segments']
-      }
+      responseMimeType: 'application/json'
     }
   })
 
