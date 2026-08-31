@@ -31,7 +31,7 @@ function getNextGeminiKeyInfo(): { apiKey: string; keyIndex: number } {
 
 import { checkUserQuota } from '@/lib/quota'
 
-export async function POST() {
+export async function POST(req: Request) {
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) {
     return NextResponse.json({ error: 'Please sign in to transcribe files.' }, { status: 401 })
@@ -49,11 +49,43 @@ export async function POST() {
   }
 
   const host = getGeminiApiHost()
+  const body = await req.json().catch(() => ({}))
+  const { fileName, mimeType, fileSize } = body
+
+  let uploadUrl = ''
+  if (fileName && mimeType && typeof fileSize === 'number' && fileSize > 0) {
+    try {
+      const startRes = await fetch(`https://${host}/upload/v1beta/files`, {
+        method: 'POST',
+        headers: {
+          'x-goog-api-key': apiKey,
+          'X-Goog-Upload-Protocol': 'resumable',
+          'X-Goog-Upload-Command': 'start',
+          'X-Goog-Upload-Header-Content-Length': String(fileSize),
+          'X-Goog-Upload-Header-Content-Type': mimeType,
+          'Content-Type': 'application/json; charset=utf-8'
+        },
+        body: JSON.stringify({
+          file: {
+            displayName: fileName,
+            mimeType: mimeType
+          }
+        })
+      })
+
+      if (startRes.ok) {
+        uploadUrl = startRes.headers.get('x-goog-upload-url') || ''
+      }
+    } catch (err) {
+      console.warn('Failed to start Google resumable upload session on server:', err)
+    }
+  }
 
   return NextResponse.json({
     apiKey,
     keyIndex: assignedIndex,
     host,
+    uploadUrl,
     quota: {
       usedMinutes: quota.usedMinutes,
       limitMinutes: quota.limitMinutes,

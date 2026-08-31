@@ -128,8 +128,92 @@ async function directUploadToGemini(
 }
 
 /**
+ * Uploads a file in 3.5MB slices through our server upload proxy (/api/upload-proxy).
+ * This completely prevents:
+ * 1. HTTP 413 Payload Too Large (each slice is < 4.5MB Vercel limit).
+ * 2. Geo-blocking / "User location is not supported" (proxied from backend).
+ */
+async function uploadViaServerProxy(
+  file: File,
+  onProgress?: (percent: number) => void
+): Promise<{ uri: string; name: string; mimeType: string; keyIndex: number }> {
+  const mimeType = inferMimeType(file)
+  const fileSize = file.size
+
+  // 1. Initialize Resumable Upload Session on our server
+  const sessionRes = await fetch('/api/upload-session', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      fileName: file.name,
+      mimeType,
+      fileSize
+    })
+  })
+
+  if (!sessionRes.ok) {
+    const errData = await sessionRes.json().catch(() => null)
+    throw new Error(errData?.error || 'Failed to initialize upload session. Please check your login status.')
+  }
+
+  const { uploadUrl, keyIndex, host, apiKey } = await sessionRes.json()
+
+  // If server could not initialize resumable URL, fallback to direct upload if possible
+  if (!uploadUrl) {
+    const directRes = await directUploadToGemini(file, apiKey, host, onProgress)
+    return { ...directRes, keyIndex }
+  }
+
+  // 2. Upload file in 3.5MB slices
+  const CHUNK_SIZE = 3.5 * 1024 * 1024 // 3.5 MB
+  let offset = 0
+  let finalFileResult: { uri: string; name: string; mimeType: string } | null = null
+
+  while (offset < fileSize) {
+    const chunkEnd = Math.min(offset + CHUNK_SIZE, fileSize)
+    const chunkBlob = file.slice(offset, chunkEnd)
+    const isFinal = chunkEnd >= fileSize
+
+    const uploadRes = await fetch('/api/upload-proxy', {
+      method: 'POST',
+      headers: {
+        'x-upload-url': uploadUrl,
+        'x-upload-offset': String(offset),
+        'x-upload-command': isFinal ? 'upload, finalize' : 'upload'
+      },
+      body: chunkBlob
+    })
+
+    if (!uploadRes.ok) {
+      const errJson = await uploadRes.json().catch(() => null)
+      throw new Error(errJson?.error || `Upload slice failed (${uploadRes.status})`)
+    }
+
+    const data = await uploadRes.json().catch(() => ({}))
+    if (isFinal && data.file) {
+      finalFileResult = data.file
+    }
+
+    offset = chunkEnd
+    const progressPercent = Math.min(99, Math.round((offset / fileSize) * 100))
+    onProgress?.(progressPercent)
+  }
+
+  if (!finalFileResult?.uri) {
+    throw new Error('Upload completed but failed to register media file.')
+  }
+
+  return {
+    uri: finalFileResult.uri,
+    name: finalFileResult.name,
+    mimeType: finalFileResult.mimeType || mimeType,
+    keyIndex
+  }
+}
+
+/**
  * Calls /api/transcribe in streaming mode and forwards real progress events.
- * For local files, uses Direct-to-Gemini upload to prevent Vercel 413 Payload Too Large errors.
+ * For local files, uses Resumable Server Proxy upload to support files up to 2GB without 413 errors.
  */
 export async function transcribeWithProgress(
   input: { file?: File; url?: string },
@@ -140,7 +224,7 @@ export async function transcribeWithProgress(
   if (input.file) {
     onEvent?.({ type: 'status', phase: 'uploading' })
 
-    // Step 0: Optimize media for upload (extract compact speech audio if video or large file)
+    // Step 0: Optimize media for upload (extract compact speech audio if pure audio or supported)
     let fileToUpload = input.file
     let mediaDuration = 0
     try {
@@ -151,48 +235,27 @@ export async function transcribeWithProgress(
       fileToUpload = input.file
     }
 
-    // 1. Attempt direct upload to Gemini Files API (2GB limit)
-    let uploadedFile: { uri: string; name: string; mimeType: string } | null = null
-    try {
-      const sessionRes = await fetch('/api/upload-session', { method: 'POST' })
-      if (sessionRes.ok) {
-        const { apiKey, keyIndex, host } = await sessionRes.json()
-        uploadedFile = await directUploadToGemini(fileToUpload, apiKey, host, (progress) => {
-          onEvent?.({ type: 'progress', progress })
-        })
+    // 1. Upload via resilient chunked server proxy (never 413, never location-blocked)
+    const uploaded = await uploadViaServerProxy(fileToUpload, (progress) => {
+      onEvent?.({ type: 'progress', progress })
+    })
 
-        onEvent?.({ type: 'status', phase: 'processing', duration: mediaDuration })
+    onEvent?.({ type: 'status', phase: 'processing', duration: mediaDuration })
 
-        requestInit = {
-          method: 'POST',
-          headers: {
-            'x-stream': '1',
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            fileUri: uploadedFile.uri,
-            mimeType: uploadedFile.mimeType || fileToUpload.type || 'audio/wav',
-            displayName: input.file.name,
-            duration: mediaDuration,
-            keyIndex
-          })
-        }
-      }
-    } catch (directErr) {
-      console.warn('Direct client upload to Gemini failed (falling back to server upload proxy):', directErr)
-      uploadedFile = null
-    }
-
-    // 2. Resilient Server Fallback: If client direct upload failed (e.g. client location unsupported), upload via server proxy
-    if (!uploadedFile) {
-      onEvent?.({ type: 'status', phase: 'uploading' })
-      const formData = new FormData()
-      formData.append('file', fileToUpload)
-      requestInit = {
-        method: 'POST',
-        headers: { 'x-stream': '1' },
-        body: formData
-      }
+    // 2. Send lightweight 200-byte JSON request to /api/transcribe
+    requestInit = {
+      method: 'POST',
+      headers: {
+        'x-stream': '1',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        fileUri: uploaded.uri,
+        mimeType: uploaded.mimeType || fileToUpload.type || 'audio/wav',
+        displayName: input.file.name,
+        duration: mediaDuration,
+        keyIndex: uploaded.keyIndex
+      })
     }
   } else if (input.url) {
     requestInit = {
