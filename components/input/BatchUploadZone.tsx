@@ -2,7 +2,7 @@
 
 import { useCallback, useRef, useState } from 'react'
 import { useDropzone } from 'react-dropzone'
-import { FileAudio, AlertCircle, Check, Copy, Download, Loader2, X, PlayCircle, Layers, Sparkles } from 'lucide-react'
+import { FileAudio, AlertCircle, Check, Copy, Download, Loader2, X, PlayCircle, Layers, Sparkles, RefreshCw } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { MAX_MEDIA_UPLOAD_BYTES, MAX_MEDIA_UPLOAD_MB } from '@/lib/uploadLimits'
 import { getPlainTranscriptText } from '@/lib/transcript'
@@ -293,18 +293,21 @@ export default function BatchUploadZone() {
               )}
 
               {job.status === 'error' && (
-                <div className="mt-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 rounded-xl bg-red-50/90 dark:bg-red-950/50 p-3 text-xs text-red-700 dark:text-red-400 border border-red-200/60 dark:border-red-900/50">
-                  <div className="flex items-start gap-2">
-                    <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-600" />
-                    <span className="font-medium">{job.error}</span>
+                <div className="mt-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 rounded-xl bg-amber-50/90 dark:bg-amber-950/40 p-3 text-xs text-amber-900 dark:text-amber-200 border border-amber-200/60 dark:border-amber-900/50">
+                  <div className="flex items-center gap-2">
+                    <AlertCircle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                    <span className="font-medium text-slate-900 dark:text-white">Unable to transcribe media</span>
                   </div>
-                  <ReportErrorButton
-                    errorMessage={job.error || 'Batch transcription failed.'}
-                    filename={job.file.name}
-                    fileSizeBytes={job.file.size}
-                    inputType="batch"
-                    className="self-end sm:self-auto shrink-0 rounded-full"
-                  />
+                  <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+                    <button
+                      onClick={() => runJob(job)}
+                      disabled={running}
+                      className="flex items-center gap-1 rounded-lg bg-amber-600 dark:bg-amber-500 px-2.5 py-1 text-xs font-bold text-white shadow-xs transition-all hover:bg-amber-700 active:scale-95 disabled:opacity-50 cursor-pointer"
+                    >
+                      <RefreshCw className="h-3 w-3" />
+                      <span>Retry</span>
+                    </button>
+                  </div>
                 </div>
               )}
 

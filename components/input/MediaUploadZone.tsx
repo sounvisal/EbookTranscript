@@ -2,7 +2,7 @@
 
 import { useCallback, useState } from 'react'
 import { useDropzone } from 'react-dropzone'
-import { FileAudio, AlertCircle, Link2, Sparkles, X, ArrowRight, Music, Film, CheckCircle2 } from 'lucide-react'
+import { FileAudio, AlertCircle, Link2, Sparkles, X, ArrowRight, Music, Film, CheckCircle2, RefreshCw } from 'lucide-react'
 import { useTranscriptStore } from '@/store/transcriptStore'
 import { motion, AnimatePresence } from 'framer-motion'
 import { MAX_MEDIA_UPLOAD_BYTES, MAX_MEDIA_UPLOAD_MB } from '@/lib/uploadLimits'
@@ -79,18 +79,42 @@ export default function MediaUploadZone() {
   return (
     <div className="flex flex-col gap-6">
       {status === 'error' && (
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-2xl border border-red-200/80 bg-red-50/90 p-4 text-sm text-red-700 backdrop-blur-md">
-          <div className="flex items-start gap-3">
-            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
-            <span className="font-medium">{errorMessage || 'Transcription failed. Try another file or direct media link.'}</span>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3.5 rounded-2xl border border-amber-200/80 dark:border-amber-900/60 bg-amber-50/90 dark:bg-amber-950/40 p-4 text-sm text-amber-900 dark:text-amber-200 backdrop-blur-md">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-100 dark:bg-amber-900/60 text-amber-700 dark:text-amber-300">
+              <AlertCircle className="h-5 w-5" />
+            </div>
+            <div>
+              <p className="font-semibold text-slate-900 dark:text-white">Unable to process media</p>
+              <p className="text-xs text-slate-600 dark:text-slate-400">Please try again or try another audio/video file.</p>
+            </div>
           </div>
-          <ReportErrorButton
-            errorMessage={errorMessage || 'Transcription failed.'}
-            filename={file?.name || sourceUrl || undefined}
-            fileSizeBytes={file?.size}
-            inputType={file ? 'file' : 'url'}
-            className="self-end sm:self-auto shrink-0 rounded-full"
-          />
+          <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                setStatus('idle')
+                if (file) submitRequest({ file })
+                else if (sourceUrl.trim()) submitRequest({ url: sourceUrl.trim() })
+              }}
+              className="flex items-center gap-1.5 rounded-xl bg-amber-600 dark:bg-amber-500 px-3.5 py-2 text-xs font-bold text-white shadow-xs transition-all hover:bg-amber-700 active:scale-95 cursor-pointer"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              <span>Try Again</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setFile(null)
+                setSourceUrl('')
+                setStatus('idle')
+                setErrorMessage(null)
+              }}
+              className="rounded-xl border border-slate-200/80 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors cursor-pointer"
+            >
+              Reset
+            </button>
+          </div>
         </div>
       )}
 

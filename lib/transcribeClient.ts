@@ -151,35 +151,48 @@ export async function transcribeWithProgress(
       fileToUpload = input.file
     }
 
-    // 1. Get direct upload authorization
-    const sessionRes = await fetch('/api/upload-session', { method: 'POST' })
-    if (!sessionRes.ok) {
-      const errData = await sessionRes.json().catch(() => null)
-      throw new Error(errData?.error || 'Please sign in to transcribe files.')
+    // 1. Attempt direct upload to Gemini Files API (2GB limit)
+    let uploadedFile: { uri: string; name: string; mimeType: string } | null = null
+    try {
+      const sessionRes = await fetch('/api/upload-session', { method: 'POST' })
+      if (sessionRes.ok) {
+        const { apiKey, keyIndex, host } = await sessionRes.json()
+        uploadedFile = await directUploadToGemini(fileToUpload, apiKey, host, (progress) => {
+          onEvent?.({ type: 'progress', progress })
+        })
+
+        onEvent?.({ type: 'status', phase: 'processing', duration: mediaDuration })
+
+        requestInit = {
+          method: 'POST',
+          headers: {
+            'x-stream': '1',
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            fileUri: uploadedFile.uri,
+            mimeType: uploadedFile.mimeType || fileToUpload.type || 'audio/wav',
+            displayName: input.file.name,
+            duration: mediaDuration,
+            keyIndex
+          })
+        }
+      }
+    } catch (directErr) {
+      console.warn('Direct client upload to Gemini failed (falling back to server upload proxy):', directErr)
+      uploadedFile = null
     }
-    const { apiKey, keyIndex, host } = await sessionRes.json()
 
-    // 2. Upload file directly to Gemini Files API (2GB limit)
-    const uploadedFile = await directUploadToGemini(fileToUpload, apiKey, host, (progress) => {
-      onEvent?.({ type: 'progress', progress })
-    })
-
-    onEvent?.({ type: 'status', phase: 'processing', duration: mediaDuration })
-
-    // 3. Send lightweight 200-byte JSON request to /api/transcribe
-    requestInit = {
-      method: 'POST',
-      headers: {
-        'x-stream': '1',
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        fileUri: uploadedFile.uri,
-        mimeType: uploadedFile.mimeType || fileToUpload.type || 'audio/wav',
-        displayName: input.file.name,
-        duration: mediaDuration,
-        keyIndex
-      })
+    // 2. Resilient Server Fallback: If client direct upload failed (e.g. client location unsupported), upload via server proxy
+    if (!uploadedFile) {
+      onEvent?.({ type: 'status', phase: 'uploading' })
+      const formData = new FormData()
+      formData.append('file', fileToUpload)
+      requestInit = {
+        method: 'POST',
+        headers: { 'x-stream': '1' },
+        body: formData
+      }
     }
   } else if (input.url) {
     requestInit = {
