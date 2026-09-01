@@ -82,7 +82,9 @@ async function directUploadToGemini(
     type: `multipart/related; boundary=${boundary}`
   })
 
-  const uploadUrl = `https://${host}/upload/v1beta/files`
+  // Route through /gemini-proxy so requests originate from Vercel's US/EU edge (bypassing client geo-restrictions)
+  const isBrowser = typeof window !== 'undefined'
+  const uploadUrl = isBrowser ? '/gemini-proxy/upload/v1beta/files' : `https://${host}/upload/v1beta/files`
 
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
@@ -120,7 +122,7 @@ async function directUploadToGemini(
     }
 
     xhr.onerror = () => {
-      reject(new Error('Network error during file upload to Gemini.'))
+      reject(new Error('Network error during file upload.'))
     }
 
     xhr.send(bodyBlob)
@@ -235,14 +237,41 @@ export async function transcribeWithProgress(
       fileToUpload = input.file
     }
 
-    // 1. Upload via resilient chunked server proxy (never 413, never location-blocked)
-    const uploaded = await uploadViaServerProxy(fileToUpload, (progress) => {
-      onEvent?.({ type: 'progress', progress })
+    // 1. Get direct upload authorization & rotated key
+    const sessionRes = await fetch('/api/upload-session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fileName: fileToUpload.name,
+        mimeType: inferMimeType(fileToUpload),
+        fileSize: fileToUpload.size
+      })
     })
+
+    if (!sessionRes.ok) {
+      const errData = await sessionRes.json().catch(() => null)
+      throw new Error(errData?.error || 'Please sign in to transcribe files.')
+    }
+
+    const { apiKey, keyIndex, host } = await sessionRes.json()
+
+    // 2. Upload file through /gemini-proxy (proxied through Vercel US/EU Edge, 0 geo-blocks, 0 413s, 2GB limit)
+    let uploadedFile: { uri: string; name: string; mimeType: string } | null = null
+    try {
+      uploadedFile = await directUploadToGemini(fileToUpload, apiKey, host, (progress) => {
+        onEvent?.({ type: 'progress', progress })
+      })
+    } catch (uploadErr) {
+      console.warn('Edge proxy upload failed, attempting fallback server proxy:', uploadErr)
+      const proxyResult = await uploadViaServerProxy(fileToUpload, (progress) => {
+        onEvent?.({ type: 'progress', progress })
+      })
+      uploadedFile = { uri: proxyResult.uri, name: proxyResult.name, mimeType: proxyResult.mimeType }
+    }
 
     onEvent?.({ type: 'status', phase: 'processing', duration: mediaDuration })
 
-    // 2. Send lightweight 200-byte JSON request to /api/transcribe
+    // 3. Send lightweight 200-byte JSON request to /api/transcribe
     requestInit = {
       method: 'POST',
       headers: {
@@ -250,11 +279,11 @@ export async function transcribeWithProgress(
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        fileUri: uploaded.uri,
-        mimeType: uploaded.mimeType || fileToUpload.type || 'audio/wav',
+        fileUri: uploadedFile.uri,
+        mimeType: uploadedFile.mimeType || fileToUpload.type || 'audio/wav',
         displayName: input.file.name,
         duration: mediaDuration,
-        keyIndex: uploaded.keyIndex
+        keyIndex
       })
     }
   } else if (input.url) {

@@ -11,6 +11,14 @@ const nextConfig = {
   experimental: {
     serverComponentsExternalPackages: ['ffmpeg-static', '@distube/ytdl-core'],
     optimizePackageImports: ['lucide-react', 'framer-motion']
+  },
+  async rewrites() {
+    return [
+      {
+        source: '/gemini-proxy/:path*',
+        destination: 'https://generativelanguage.googleapis.com/:path*'
+      }
+    ]
   }
 }
 
