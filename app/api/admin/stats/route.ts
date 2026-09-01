@@ -32,13 +32,15 @@ export async function GET(req: Request) {
     const totalDurationSeconds = transcriptsAggregate._sum.duration || 0
     const totalWords = transcriptsAggregate._sum.wordCount || 0
 
-    // 3. Usage & Token metrics
+    // 3. Detailed Aggregations (Languages, Formats, Input Modes, Hourly Activity)
     const [
       allMetrics,
       todayMetrics,
       recentErrors,
       errorCountTotal,
-      errorCountToday
+      errorCountToday,
+      recentTranscriptsList,
+      languageGroups
     ] = await Promise.all([
       prisma.usageMetric.findMany({
         where: { createdAt: { gte: thirtyDaysAgo } },
@@ -57,16 +59,33 @@ export async function GET(req: Request) {
         }
       }),
       prisma.errorLog.count(),
-      prisma.errorLog.count({ where: { createdAt: { gte: startOfToday } } })
+      prisma.errorLog.count({ where: { createdAt: { gte: startOfToday } } }),
+      prisma.transcript.findMany({
+        take: 15,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          user: {
+            select: { email: true, name: true }
+          }
+        }
+      }),
+      prisma.transcript.groupBy({
+        by: ['language'],
+        _count: { id: true },
+        orderBy: { _count: { id: 'desc' } }
+      })
     ])
 
-    // Calculate token aggregations
+    // Calculate token aggregations & distributions
     let totalTokensAllTime = 0
     let tokensToday = 0
     let inputTokensToday = 0
     let outputTokensToday = 0
     const modelUsageMap: Record<string, { requests: number; tokens: number; duration: number }> = {}
     const dailyTokenMap: Record<string, { date: string; tokens: number; requests: number; duration: number; errors: number }> = {}
+    const inputTypeMap: Record<string, number> = {}
+    const formatMap: Record<string, number> = {}
+    const hourlyMap: number[] = new Array(24).fill(0)
 
     // Group 30-day metrics by day
     for (let i = 29; i >= 0; i--) {
@@ -88,8 +107,20 @@ export async function GET(req: Request) {
 
       totalTokensAllTime += metric.totalTokens
 
+      // Hourly distribution
+      const hour = new Date(metric.createdAt).getHours()
+      hourlyMap[hour] = (hourlyMap[hour] || 0) + 1
+
+      // Input type distribution
+      const inputType = metric.inputType || 'file'
+      inputTypeMap[inputType] = (inputTypeMap[inputType] || 0) + 1
+
+      // File format distribution
+      const format = metric.fileFormat || 'audio'
+      formatMap[format] = (formatMap[format] || 0) + 1
+
       // Model breakdown
-      const m = metric.model || 'gemini-2.5-flash-lite'
+      const m = metric.model || 'gemini-2.5-flash'
       if (!modelUsageMap[m]) {
         modelUsageMap[m] = { requests: 0, tokens: 0, duration: 0 }
       }
@@ -121,6 +152,43 @@ export async function GET(req: Request) {
     // Format daily data array for charts/tables
     const dailyStats = Object.values(dailyTokenMap).sort((a, b) => b.date.localeCompare(a.date))
 
+    // Language breakdown formatting
+    const totalWithLang = languageGroups.reduce((sum, g) => sum + g._count.id, 0)
+    const languages = languageGroups.map((g) => ({
+      language: g.language || 'Auto / Multilingual',
+      count: g._count.id,
+      percentage: totalWithLang > 0 ? ((g._count.id / totalWithLang) * 100).toFixed(1) : '0'
+    }))
+
+    // Input mode breakdown formatting
+    const totalInputs = Object.values(inputTypeMap).reduce((a, b) => a + b, 0)
+    const inputModes = Object.entries(inputTypeMap).map(([mode, count]) => ({
+      mode,
+      count,
+      percentage: totalInputs > 0 ? ((count / totalInputs) * 100).toFixed(1) : '0'
+    }))
+
+    // Format breakdown
+    const totalFormats = Object.values(formatMap).reduce((a, b) => a + b, 0)
+    const formats = Object.entries(formatMap).map(([format, count]) => ({
+      format,
+      count,
+      percentage: totalFormats > 0 ? ((count / totalFormats) * 100).toFixed(1) : '0'
+    }))
+
+    // API Key Fleet discovery
+    const configuredKeys = (process.env.GEMINI_API_KEYS || process.env.GEMINI_API_KEY || '')
+      .split(',')
+      .map((k) => k.trim().replace(/["'\r\n]/g, ''))
+      .filter(Boolean)
+
+    const keyFleet = configuredKeys.map((key, idx) => ({
+      index: idx,
+      masked: `${key.slice(0, 6)}...${key.slice(-4)}`,
+      status: 'active' as const,
+      modelPriority: 'gemini-2.5-flash / gemini-3.6-flash'
+    }))
+
     return NextResponse.json({
       overview: {
         totalUsers,
@@ -137,7 +205,6 @@ export async function GET(req: Request) {
         inputTokensToday,
         outputTokensToday,
         totalTokensThirtyDays: totalTokensAllTime,
-        // Approximate cost estimate based on Gemini Flash-Lite ($0.075 per 1M input, $0.30 per 1M output)
         estimatedCostTodayUSD: ((inputTokensToday * 0.000000075) + (outputTokensToday * 0.00000030)).toFixed(4)
       },
       models: Object.entries(modelUsageMap).map(([model, data]) => ({
@@ -147,6 +214,24 @@ export async function GET(req: Request) {
         durationMinutes: Math.round(data.duration / 60)
       })),
       dailyStats,
+      languages,
+      inputModes,
+      formats,
+      hourlyActivity: hourlyMap,
+      keyFleet,
+      telegram: {
+        configured: !!process.env.TELEGRAM_BOT_TOKEN && !!process.env.TELEGRAM_CHAT_ID,
+        chatId: process.env.TELEGRAM_CHAT_ID ? `${process.env.TELEGRAM_CHAT_ID.slice(0, 4)}***` : null
+      },
+      recentTranscripts: recentTranscriptsList.map((t) => ({
+        id: t.id,
+        filename: t.filename || t.source || 'Media Upload',
+        duration: t.duration || 0,
+        wordCount: t.wordCount || 0,
+        language: t.language || 'Khmer',
+        createdAt: t.createdAt.toISOString(),
+        userEmail: t.user?.email || 'Guest / System'
+      })),
       errors: {
         totalErrors: errorCountTotal,
         errorsToday: errorCountToday,
@@ -157,8 +242,9 @@ export async function GET(req: Request) {
           errorType: err.errorType || 'ERROR',
           model: err.model || 'Unknown',
           fileFormat: err.fileFormat || 'N/A',
-          userEmail: err.user?.email ? `${err.user.email.slice(0, 3)}***@${err.user.email.split('@')[1] || ''}` : 'Anonymous',
-          createdAt: err.createdAt
+          metadata: err.metadata ? (() => { try { return JSON.parse(err.metadata) } catch { return err.metadata } })() : null,
+          userEmail: err.user?.email || 'Anonymous',
+          createdAt: err.createdAt.toISOString()
         }))
       }
     })
