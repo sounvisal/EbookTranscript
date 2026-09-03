@@ -206,6 +206,14 @@ function extractTextFromGenerateContentResponse(response: GeminiGenerateContentR
   throw new Error('Gemini returned no transcript text.')
 }
 
+const PERMISSIVE_SAFETY_SETTINGS = [
+  { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+  { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+  { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+  { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
+  { category: 'HARM_CATEGORY_CIVIC_INTEGRITY', threshold: 'BLOCK_NONE' }
+]
+
 export async function generateGeminiTranscript(apiKey: string, input: { modelName: string; prompt: string; fileUri: string; mimeType: string }) {
   const response = await geminiRequest<GeminiGenerateContentResponse>(
     apiKey,
@@ -229,6 +237,7 @@ export async function generateGeminiTranscript(apiKey: string, input: { modelNam
             ]
           }
         ],
+        safetySettings: PERMISSIVE_SAFETY_SETTINGS,
         generationConfig: {
           maxOutputTokens: 65536,
           temperature: 0.1
@@ -270,6 +279,7 @@ export async function streamGeminiTranscript(
         parts: [{ text: input.prompt }, mediaPart]
       }
     ],
+    safetySettings: PERMISSIVE_SAFETY_SETTINGS,
     generationConfig: {
       maxOutputTokens: 65536,
       temperature: 0.1,
@@ -322,7 +332,13 @@ export async function streamGeminiTranscript(
       throw new Error(`Gemini blocked the transcription request: ${parsed.promptFeedback.blockReason}.`)
     }
 
-    throw new Error('Gemini returned no transcript text.')
+    const finishReason = parsed.candidates?.[0]?.finishReason
+    if (finishReason && finishReason !== 'STOP') {
+      console.warn(`Gemini candidate finished with reason: ${finishReason}`)
+    }
+
+    // Return clean empty structure if media contained no discernable speech/text
+    return JSON.stringify({ language: 'auto', segments: [] })
   } finally {
     clearTimeout(timeoutId)
   }

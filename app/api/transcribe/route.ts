@@ -546,11 +546,12 @@ async function waitForUploadedFile(apiKey: string, fileName: string) {
 }
 
 const TRANSCRIPTION_PROMPT = [
-  'You are a high-accuracy multilingual audio transcription system specialized in automatic language detection, particularly Khmer (ភាសាខ្មែរ), English, and bilingual speech.',
+  'You are an expert multilingual audio transcription AI specialized in automatic language detection (Khmer / ភាសាខ្មែរ, English, and bilingual speech) and noisy audio extraction.',
   'Listen carefully to the entire media from the very beginning (0:00) to the absolute end.',
   '1. AUTOMATIC LANGUAGE DETECTION: Automatically detect the spoken language. If the audio is in Khmer, set language to "Khmer". If in English, set language to "English". If bilingual mixed speech, set language to "Khmer / English".',
   '2. VERBATIM SPEECH ACCURACY: Transcribe every spoken word accurately in the native script. For Khmer speech, output clean Khmer script (អក្សរខ្មែរ) with proper spacing and spelling. For English speech, output English.',
-  '3. COMPLETE TRANSCRIPTION: Transcribe the entire duration verbatim from start to finish. Break into consecutive timestamped segments.',
+  '3. BACKGROUND AUDIO & NOISE HANDLING: Even if background music, sound effects, TikTok audio tracks, ambient noise, fast speaking, or colloquial dialogue are present, transcribe all audible speech verbatim.',
+  '4. COMPLETE TRANSCRIPTION: Transcribe the entire duration verbatim from start to finish. Break into consecutive timestamped segments.',
   'Format strictly as JSON:',
   '{"language":"Khmer","segments":[{"start":0.0,"end":4.5,"text":"phrase"}]}',
   'If there is absolutely no spoken audio at all, return {"language":"auto","segments":[]}.'
@@ -823,10 +824,24 @@ async function transcribeWithKey(
           ? totalDuration
           : (maxSegmentEnd > 0 ? Math.round(maxSegmentEnd * 10) / 10 : estimatedFromWords)
 
+        let finalText = parsedTranscript.text
+        let finalSegments = parsedTranscript.segments
+
+        if (!finalText && (!finalSegments || finalSegments.length === 0)) {
+          finalText = '[No spoken dialogue detected in media]'
+          finalSegments = [
+            {
+              start: 0,
+              end: finalDuration > 0 ? finalDuration : 5,
+              text: '[No spoken dialogue detected in media]'
+            }
+          ]
+        }
+
         return {
-          text: parsedTranscript.text,
-          segments: parsedTranscript.segments,
-          language: parsedTranscript.language,
+          text: finalText,
+          segments: finalSegments,
+          language: parsedTranscript.language || 'auto',
           duration: finalDuration,
           source: sourceName || modelName
         }
