@@ -3,6 +3,7 @@ import { Inter } from 'next/font/google'
 import './globals.css'
 import NavBar from '@/components/layout/NavBar'
 import { Providers } from '@/components/providers/SessionProvider'
+import { Analytics } from '@vercel/analytics/next'
 
 const inter = Inter({
   subsets: ['latin'],
@@ -27,6 +28,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <NavBar />
           <main>{children}</main>
         </Providers>
+        <Analytics />
       </body>
     </html>
   )
