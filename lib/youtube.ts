@@ -2,7 +2,7 @@ import youtubedl from 'youtube-dl-exec'
 import ffmpegPath from 'ffmpeg-static'
 import ytdl from '@distube/ytdl-core'
 import fs from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { existsSync, chmodSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { Readable } from 'node:stream'
@@ -25,6 +25,39 @@ function sanitizeBaseTitle(title: string, fallback = 'youtube-media'): string {
   return sanitized || fallback
 }
 
+/**
+ * Resolves the yt-dlp binary across local, bundled, and serverless environments.
+ */
+function getBinaryPath(): string {
+  const binaryName = process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp'
+  const cwd = process.cwd()
+
+  const candidatePaths = [
+    process.env.YOUTUBE_DL_PATH,
+    path.join(cwd, 'node_modules', 'youtube-dl-exec', 'bin', binaryName),
+    path.join(cwd, '.next', 'server', 'node_modules', 'youtube-dl-exec', 'bin', binaryName),
+    path.join(cwd, 'bin', binaryName),
+    path.resolve(__dirname, '..', 'bin', binaryName),
+    path.resolve(__dirname, '..', '..', 'bin', binaryName),
+    path.resolve(__dirname, '..', 'node_modules', 'youtube-dl-exec', 'bin', binaryName)
+  ].filter(Boolean) as string[]
+
+  for (const candidate of candidatePaths) {
+    if (existsSync(candidate)) {
+      if (process.platform !== 'win32') {
+        try {
+          chmodSync(candidate, 0o755)
+        } catch {
+          // Ignore chmod error if already executable or read-only
+        }
+      }
+      return candidate
+    }
+  }
+
+  return binaryName
+}
+
 async function readStreamWithinLimit(stream: Readable, maxBytes: number): Promise<Buffer> {
   const chunks: Buffer[] = []
   let totalBytes = 0
@@ -40,6 +73,49 @@ async function readStreamWithinLimit(stream: Readable, maxBytes: number): Promis
   }
 
   return Buffer.concat(chunks)
+}
+
+async function fetchBufferWithinLimit(url: string, maxBytes: number): Promise<{ buffer: Buffer; contentType: string }> {
+  const response = await fetch(url, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36'
+    }
+  })
+
+  if (!response.ok) {
+    throw new Error(`Stream download failed with status ${response.status}.`)
+  }
+
+  const contentType = response.headers.get('content-type') || 'video/mp4'
+
+  if (!response.body) {
+    const arrayBuffer = await response.arrayBuffer()
+    const buffer = Buffer.from(arrayBuffer)
+    if (buffer.length > maxBytes) {
+      throw new Error(`Remote media exceeds the ${Math.round(maxBytes / 1024 / 1024)}MB limit.`)
+    }
+    return { buffer, contentType }
+  }
+
+  const reader = response.body.getReader()
+  const chunks: Buffer[] = []
+  let totalBytes = 0
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    if (!value) continue
+
+    totalBytes += value.byteLength
+    if (totalBytes > maxBytes) {
+      await reader.cancel()
+      throw new Error(`Remote media exceeds the ${Math.round(maxBytes / 1024 / 1024)}MB limit.`)
+    }
+
+    chunks.push(Buffer.from(value))
+  }
+
+  return { buffer: Buffer.concat(chunks), contentType }
 }
 
 /**
@@ -82,27 +158,23 @@ async function extractWithYtdlCore(urlValue: string, maxBytes: number): Promise<
 }
 
 /**
- * Primary extractor using yt-dlp via youtube-dl-exec
+ * Primary extractor using yt-dlp via youtube-dl-exec.
+ * First tries direct HTTP stream URL download into memory (super fast & no ffmpeg needed),
+ * then falls back to full binary download if direct streaming is restricted.
  */
 async function extractWithYtDlp(urlValue: string, maxBytes: number): Promise<ExtractedYouTubeMedia> {
-  const tempDir = os.tmpdir()
-  const uniqueId = `yt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-  const outputTemplate = path.join(tempDir, `${uniqueId}.%(ext)s`)
-  const expectedAudioFile = path.join(tempDir, `${uniqueId}.m4a`)
+  const binPath = getBinaryPath()
+  const ytDl = youtubedl.create(binPath)
 
   // Priority order of YouTube player clients known to bypass bot challenges
   const CLIENTS = ['android', 'ios', 'mweb', 'tv']
   let lastError: Error | null = null
-  let downloadedSuccess = false
-  let videoTitle = 'youtube-media'
-  let videoDuration: number | undefined
 
   for (const client of CLIENTS) {
     try {
-      console.log(`[YouTube Extractor] Attempting extraction with client: ${client}`)
+      console.log(`[YouTube Extractor] Requesting metadata using ${client} client (binary: ${binPath})...`)
 
-      // 1. Fetch metadata first to validate duration and live status
-      const metadata: any = await (youtubedl as any)(urlValue, {
+      const metadata: any = await (ytDl as any)(urlValue, {
         dumpSingleJson: true,
         noCheckCertificates: true,
         noWarnings: true,
@@ -113,63 +185,89 @@ async function extractWithYtDlp(urlValue: string, maxBytes: number): Promise<Ext
         throw new Error('Live streams cannot be transcribed until the broadcast concludes.')
       }
 
-      videoTitle = sanitizeBaseTitle(metadata?.title || 'youtube-media')
-      videoDuration = metadata?.duration || undefined
+      const videoTitle = sanitizeBaseTitle(metadata?.title || 'youtube-media')
+      const videoDuration: number | undefined = metadata?.duration || undefined
 
-      // 2. Download and extract audio to high efficiency AAC (.m4a)
-      await (youtubedl as any)(urlValue, {
-        extractAudio: true,
-        audioFormat: 'm4a',
-        audioQuality: 5,
-        output: outputTemplate,
-        ffmpegLocation: ffmpegPath || undefined,
-        noCheckCertificates: true,
-        noWarnings: true,
-        extractorArgs: `youtube:player_client=${client}`
-      })
+      // Strategy A: Find direct HTTP stream with audio (Format 18, m4a, opus, etc.)
+      const formats: any[] = Array.isArray(metadata?.formats) ? metadata.formats : []
+      const audioOnlyFormat = formats.find(
+        (f) => f.acodec && f.acodec !== 'none' && f.vcodec === 'none' && f.url && f.protocol?.startsWith('http')
+      )
+      const combinedFormat = formats.find(
+        (f) => f.acodec && f.acodec !== 'none' && f.url && f.protocol?.startsWith('http')
+      )
+      const directFormat = audioOnlyFormat || combinedFormat
 
-      if (existsSync(expectedAudioFile)) {
-        downloadedSuccess = true
-        break
+      if (directFormat?.url) {
+        console.log(`[YouTube Extractor] Found direct stream format ${directFormat.format_id} (${directFormat.ext}). Fetching in-memory...`)
+        const { buffer, contentType } = await fetchBufferWithinLimit(directFormat.url, maxBytes)
+
+        const isAudioOnly = !directFormat.vcodec || directFormat.vcodec === 'none'
+        const mimeType = isAudioOnly ? 'audio/mp4' : (contentType.includes('video') ? 'video/mp4' : 'audio/mp4')
+        const ext = isAudioOnly ? 'm4a' : 'mp4'
+
+        return {
+          buffer,
+          mimeType,
+          displayName: `${videoTitle}.${ext}`,
+          sourceName: videoTitle,
+          durationSeconds: videoDuration
+        }
+      }
+
+      // Strategy B: Fall back to local file download via yt-dlp
+      console.log(`[YouTube Extractor] Direct URL unavailable for ${client}. Falling back to file download...`)
+      const tempDir = os.tmpdir()
+      const uniqueId = `yt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+      const outputTemplate = path.join(tempDir, `${uniqueId}.%(ext)s`)
+      const expectedAudioFile = path.join(tempDir, `${uniqueId}.m4a`)
+
+      try {
+        await (ytDl as any)(urlValue, {
+          extractAudio: true,
+          audioFormat: 'm4a',
+          audioQuality: 5,
+          output: outputTemplate,
+          ffmpegLocation: ffmpegPath || undefined,
+          noCheckCertificates: true,
+          noWarnings: true,
+          extractorArgs: `youtube:player_client=${client}`
+        })
+
+        if (existsSync(expectedAudioFile)) {
+          const stats = await fs.stat(expectedAudioFile)
+          if (stats.size > maxBytes) {
+            throw new Error(`Remote media exceeds the ${Math.round(maxBytes / 1024 / 1024)}MB limit.`)
+          }
+
+          const buffer = await fs.readFile(expectedAudioFile)
+          return {
+            buffer,
+            mimeType: 'audio/mp4',
+            displayName: `${videoTitle}.m4a`,
+            sourceName: videoTitle,
+            durationSeconds: videoDuration
+          }
+        }
+      } finally {
+        if (existsSync(expectedAudioFile)) {
+          await fs.unlink(expectedAudioFile).catch(() => {})
+        }
       }
     } catch (err) {
       const errorMsg = err instanceof Error ? (err as any).stderr || err.message : String(err)
-      console.warn(`[YouTube Extractor] Client ${client} failed:`, errorMsg.split('\n')[0])
+      console.warn(`[YouTube Extractor] Client ${client} attempt failed:`, errorMsg.split('\n')[0])
       lastError = err instanceof Error ? err : new Error(errorMsg)
     }
   }
 
-  if (!downloadedSuccess || !existsSync(expectedAudioFile)) {
-    throw lastError || new Error('YouTube audio download failed across all player clients.')
-  }
-
-  try {
-    const stats = await fs.stat(expectedAudioFile)
-    if (stats.size > maxBytes) {
-      throw new Error(`Remote media exceeds the ${Math.round(maxBytes / 1024 / 1024)}MB limit.`)
-    }
-
-    const buffer = await fs.readFile(expectedAudioFile)
-    const displayName = `${videoTitle}.m4a`
-
-    return {
-      buffer,
-      mimeType: 'audio/mp4',
-      displayName,
-      sourceName: videoTitle,
-      durationSeconds: videoDuration
-    }
-  } finally {
-    // Ensure temporary audio file is always deleted
-    if (existsSync(expectedAudioFile)) {
-      await fs.unlink(expectedAudioFile).catch(() => {})
-    }
-  }
+  throw lastError || new Error('YouTube extraction failed across all player clients.')
 }
 
 /**
  * Main entrypoint for extracting media from a YouTube link.
- * Tries yt-dlp first with client rotation, then falls back to ytdl-core.
+ * Tries yt-dlp first with client rotation & direct stream fetching,
+ * then falls back to ytdl-core.
  */
 export async function extractYouTubeMedia(
   urlValue: string,
@@ -178,7 +276,7 @@ export async function extractYouTubeMedia(
   try {
     return await extractWithYtDlp(urlValue, maxBytes)
   } catch (ytDlpError) {
-    console.warn('[YouTube Extractor] yt-dlp extraction failed, trying fallback extractor...', ytDlpError)
+    console.warn('[YouTube Extractor] Primary yt-dlp extraction failed, trying fallback extractor...', ytDlpError)
 
     try {
       return await extractWithYtdlCore(urlValue, maxBytes)

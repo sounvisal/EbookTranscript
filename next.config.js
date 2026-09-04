@@ -9,7 +9,10 @@ if (!process.env.NEXTAUTH_URL || process.env.NEXTAUTH_URL.trim() === '') {
 const nextConfig = {
   swcMinify: true,
   experimental: {
-    serverComponentsExternalPackages: ['ffmpeg-static', '@distube/ytdl-core'],
+    outputFileTracingIncludes: {
+      '/api/**/*': ['./node_modules/youtube-dl-exec/bin/**/*', './node_modules/ffmpeg-static/**/*']
+    },
+    serverComponentsExternalPackages: ['ffmpeg-static', '@distube/ytdl-core', 'youtube-dl-exec'],
     optimizePackageImports: ['lucide-react', 'framer-motion']
   },
   async rewrites() {
