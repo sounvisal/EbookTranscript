@@ -5,11 +5,12 @@ import { useDropzone } from 'react-dropzone'
 import { FileAudio, AlertCircle, Check, Copy, Download, Loader2, X, PlayCircle, Layers, Sparkles, RefreshCw } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { MAX_MEDIA_UPLOAD_BYTES, MAX_MEDIA_UPLOAD_MB } from '@/lib/uploadLimits'
-import { getPlainTranscriptText } from '@/lib/transcript'
+import { getPlainTranscriptText, type TranscriptSegment } from '@/lib/transcript'
 import { downloadTxt } from '@/lib/download'
-import type { TranscriptSegment } from '@/lib/transcript'
 import { transcribeWithProgress } from '@/lib/transcribeClient'
 import ReportErrorButton from '@/components/common/ReportErrorButton'
+import AdvancedOptionsDrawer from './AdvancedOptionsDrawer'
+import { useTranscriptStore } from '@/store/transcriptStore'
 
 // Max files a user can queue at once
 const MAX_BATCH_FILES = 10
@@ -119,11 +120,16 @@ export default function BatchUploadZone() {
       updateJob(job.id, { status: 'processing', progress: 0, error: undefined })
 
       try {
-        const data = await transcribeWithProgress({ file: job.file }, (event) => {
-          if (event.type === 'progress') {
-            updateJob(job.id, { progress: event.progress })
-          }
-        })
+        const advancedOptions = useTranscriptStore.getState().advancedOptions
+        const data = await transcribeWithProgress(
+          { file: job.file },
+          (event) => {
+            if (event.type === 'progress') {
+              updateJob(job.id, { progress: event.progress })
+            }
+          },
+          advancedOptions
+        )
 
         const transcript: BatchTranscript = {
           text: data.text,
@@ -335,6 +341,28 @@ export default function BatchUploadZone() {
                       <Download className="h-3.5 w-3.5 text-slate-400" />
                       <span>TXT</span>
                     </button>
+                    <button
+                      onClick={() => {
+                        const setTranscriptWithAudio = useTranscriptStore.getState().setTranscriptWithAudio
+                        const url = URL.createObjectURL(job.file)
+                        setTranscriptWithAudio(
+                          {
+                            text: job.transcript!.text,
+                            segments: job.transcript!.segments,
+                            language: job.transcript!.language,
+                            duration: job.transcript!.duration,
+                            source: job.file.name,
+                            kind: 'transcript'
+                          },
+                          url
+                        )
+                      }}
+                      className="flex items-center gap-1.5 rounded-lg border border-purple-200 dark:border-purple-800/80 bg-purple-50 dark:bg-purple-950/50 px-3 py-1.5 text-xs font-semibold text-purple-700 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-900/60 transition-colors cursor-pointer"
+                      title="Open in synchronized audio player & review panel"
+                    >
+                      <PlayCircle className="h-3.5 w-3.5 text-purple-600 dark:text-purple-400" />
+                      <span>Review in Player</span>
+                    </button>
                   </div>
                 </div>
               )}
@@ -342,6 +370,9 @@ export default function BatchUploadZone() {
           ))}
         </AnimatePresence>
       </div>
+
+      {/* Advanced Options Drawer */}
+      <AdvancedOptionsDrawer />
 
       {jobs.length > 0 && (
         <button
