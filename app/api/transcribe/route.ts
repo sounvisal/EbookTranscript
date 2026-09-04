@@ -1,8 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createHash } from 'node:crypto'
 import { isIP } from 'node:net'
-import { Readable } from 'node:stream'
-import ytdl from '@distube/ytdl-core'
+import { extractYouTubeMedia } from '@/lib/youtube'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { extractSpeechAudio, splitAudioIntoChunks } from '@/lib/audio'
@@ -144,18 +143,6 @@ function getHtmlPageErrorMessage(hostname: string) {
   return 'The link must point directly to an audio or video file, not a web page.'
 }
 
-function inferMimeTypeFromYouTubeFormat(format: { mimeType?: string; container?: string }) {
-  const normalizedMimeType = normalizeMimeType(format.mimeType)
-  if (isSupportedMimeType(normalizedMimeType)) {
-    return normalizedMimeType
-  }
-
-  if (format.container) {
-    return inferMimeTypeFromName(`media.${format.container}`)
-  }
-
-  return ''
-}
 
 function isBlockedHostname(hostname: string) {
   const normalizedHost = hostname.trim().toLowerCase()
@@ -266,68 +253,15 @@ async function readResponseWithinLimit(response: Response, maxBytes: number) {
   return Buffer.concat(chunks)
 }
 
-async function readNodeStreamWithinLimit(stream: Readable, maxBytes: number) {
-  const chunks: Buffer[] = []
-  let totalBytes = 0
-
-  try {
-    for await (const chunk of stream) {
-      const bufferChunk = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-      totalBytes += bufferChunk.byteLength
-
-      if (totalBytes > maxBytes) {
-        stream.destroy()
-        throw new Error(`Remote media exceeds the ${Math.round(maxBytes / 1024 / 1024)}MB limit.`)
-      }
-
-      chunks.push(bufferChunk)
-    }
-  } catch (error) {
-    stream.destroy()
-    throw error
-  }
-
-  return Buffer.concat(chunks)
-}
-
 async function getMediaInputFromYouTubeUrl(urlValue: string): Promise<MediaInput> {
-  let info: Awaited<ReturnType<typeof ytdl.getInfo>>
-
-  try {
-    info = await ytdl.getInfo(urlValue)
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown YouTube extraction error.'
-    console.warn('YouTube metadata lookup failed:', message)
-    throw new Error('Unable to extract media from this YouTube link right now. Try another public video, upload the file directly, or paste a direct audio/video URL.')
-  }
-
-  let audioFormat: ReturnType<typeof ytdl.chooseFormat> | undefined
-
-  try {
-    audioFormat = ytdl.chooseFormat(info.formats, { filter: 'audioonly', quality: 'highestaudio' })
-  } catch {
-    audioFormat = info.formats.find((format) => format.audioCodec && !format.videoCodec)
-  }
-
-  if (!audioFormat) {
-    throw new Error('Unable to find a downloadable audio stream for this YouTube link.')
-  }
-
-  const mimeType = inferMimeTypeFromYouTubeFormat(audioFormat) || 'audio/mpeg'
-  const container = audioFormat.container || mimeType.split('/')[1] || 'mp3'
-  const sourceBaseName = sanitizeFileName(info.videoDetails.title || 'youtube-media', 'youtube-media')
-  const displayName = `${sourceBaseName}.${container}`
-  const stream = ytdl.downloadFromInfo(info, {
-    filter: 'audioonly',
-    quality: audioFormat.itag
-  })
-  const buffer = await readNodeStreamWithinLimit(stream, MAX_REMOTE_FILE_BYTES)
+  const extracted = await extractYouTubeMedia(urlValue, MAX_REMOTE_FILE_BYTES)
 
   return {
-    buffer,
-    mimeType,
-    displayName,
-    sourceName: sourceBaseName
+    buffer: extracted.buffer,
+    mimeType: extracted.mimeType,
+    displayName: extracted.displayName,
+    sourceName: extracted.sourceName,
+    durationSeconds: extracted.durationSeconds
   }
 }
 
