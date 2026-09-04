@@ -12,7 +12,7 @@ export default function NavBar() {
   const pathname = usePathname()
 
   const linkClass = (href: string) =>
-    `relative rounded-full px-3.5 sm:px-4 py-1.5 text-xs sm:text-sm font-medium transition-all duration-200 ${
+    `relative rounded-full px-3 sm:px-4 py-1.5 text-xs sm:text-sm font-medium transition-all duration-200 ${
       pathname === href
         ? 'bg-slate-900 text-white dark:bg-blue-600 shadow-xs'
         : 'text-slate-600 hover:text-slate-950 dark:text-slate-300 dark:hover:text-white hover:bg-slate-100/70 dark:hover:bg-slate-800/70'
@@ -39,6 +39,7 @@ export default function NavBar() {
           <div className="flex items-center rounded-full bg-slate-100/80 dark:bg-slate-900/80 p-1 ring-1 ring-slate-200/50 dark:ring-slate-800/50">
             <Link href="/" className={linkClass('/')}>Transcribe</Link>
             <Link href="/history" className={linkClass('/history')}>History</Link>
+            <Link href="/formats" className={linkClass('/formats')}>Formats</Link>
             {session?.user?.role === 'admin' && (
               <Link href="/admin" className={linkClass('/admin')}>
                 <span className="flex items-center gap-1">
