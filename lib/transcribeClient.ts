@@ -213,13 +213,16 @@ async function uploadViaServerProxy(
   }
 }
 
+import type { AdvancedOptions } from '@/store/transcriptStore'
+
 /**
  * Calls /api/transcribe in streaming mode and forwards real progress events.
  * For local files, uses Resumable Server Proxy upload to support files up to 2GB without 413 errors.
  */
 export async function transcribeWithProgress(
   input: { file?: File; url?: string },
-  onEvent?: (event: TranscribeProgressEvent) => void
+  onEvent?: (event: TranscribeProgressEvent) => void,
+  options?: AdvancedOptions
 ): Promise<TranscribeResult> {
   let requestInit: RequestInit = { method: 'POST' }
 
@@ -283,14 +286,15 @@ export async function transcribeWithProgress(
         mimeType: uploadedFile.mimeType || fileToUpload.type || 'audio/wav',
         displayName: input.file.name,
         duration: mediaDuration,
-        keyIndex
+        keyIndex,
+        options
       })
     }
   } else if (input.url) {
     requestInit = {
       method: 'POST',
       headers: { 'x-stream': '1', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: input.url })
+      body: JSON.stringify({ url: input.url, options })
     }
   } else {
     throw new Error('Choose a file or paste a media link first.')
