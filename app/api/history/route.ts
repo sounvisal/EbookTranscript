@@ -29,7 +29,8 @@ export async function GET(req: Request) {
 
       return NextResponse.json({
         ...transcript,
-        text: cleanText
+        text: cleanText,
+        rawText: transcript.text
       }, {
         status: 200,
         headers: { 'Cache-Control': 'no-store' }
