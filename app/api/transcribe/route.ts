@@ -58,6 +58,12 @@ const SOCIAL_MEDIA_HOSTS = [
   'youtu.be'
 ]
 
+export type TranscribeOptions = {
+  customVocabulary?: string[]
+  speakerDiarization?: boolean
+  languagePreference?: 'auto' | 'khmer' | 'english' | 'bilingual'
+}
+
 type MediaInput = {
   buffer?: Buffer
   fileUri?: string
@@ -66,6 +72,7 @@ type MediaInput = {
   sourceName: string
   durationSeconds?: number
   keyIndex?: number
+  options?: TranscribeOptions
 }
 
 type GeminiTranscriptPayload = {
@@ -360,7 +367,8 @@ async function getMediaInputFromRequest(req: Request): Promise<MediaInput> {
         displayName: body.displayName || 'uploaded-media',
         sourceName: body.displayName || 'uploaded-media',
         durationSeconds,
-        keyIndex: typeof body?.keyIndex === 'number' ? body.keyIndex : undefined
+        keyIndex: typeof body?.keyIndex === 'number' ? body.keyIndex : undefined,
+        options: body?.options
       }
     }
     const urlValue = typeof body?.url === 'string' ? body.url.trim() : ''
@@ -369,12 +377,20 @@ async function getMediaInputFromRequest(req: Request): Promise<MediaInput> {
       throw new Error('No media provided.')
     }
 
-    return getMediaInputFromUrl(urlValue)
+    const media = await getMediaInputFromUrl(urlValue)
+    return { ...media, options: body?.options }
   }
 
   const formData = await req.formData()
   const file = formData.get('file') as File | null
   const urlValue = typeof formData.get('url') === 'string' ? String(formData.get('url')).trim() : ''
+  let options: TranscribeOptions | undefined
+  const optionsRaw = formData.get('options')
+  if (typeof optionsRaw === 'string' && optionsRaw.trim()) {
+    try {
+      options = JSON.parse(optionsRaw)
+    } catch {}
+  }
 
   if (file && file.size > 0) {
     const fileName = 'name' in file && typeof file.name === 'string' ? file.name : 'uploaded-media'
@@ -392,12 +408,14 @@ async function getMediaInputFromRequest(req: Request): Promise<MediaInput> {
       buffer: Buffer.from(await file.arrayBuffer()),
       mimeType,
       displayName: fileName,
-      sourceName: fileName
+      sourceName: fileName,
+      options
     }
   }
 
   if (urlValue) {
-    return getMediaInputFromUrl(urlValue)
+    const media = await getMediaInputFromUrl(urlValue)
+    return { ...media, options }
   }
 
   throw new Error('No file or media URL provided.')
@@ -479,7 +497,7 @@ async function waitForUploadedFile(apiKey: string, fileName: string) {
   throw new Error('Timed out while preparing media for transcription.')
 }
 
-const TRANSCRIPTION_PROMPT = [
+const BASE_TRANSCRIPTION_PROMPT = [
   'You are an expert multilingual audio transcription AI specialized in automatic language detection (Khmer / ភាសាខ្មែរ, English, and bilingual speech) and noisy audio extraction.',
   'Listen carefully to the entire media from the very beginning (0:00) to the absolute end.',
   '1. AUTOMATIC LANGUAGE DETECTION: Automatically detect the spoken language. If the audio is in Khmer, set language to "Khmer". If in English, set language to "English". If bilingual mixed speech, set language to "Khmer / English".',
@@ -490,6 +508,54 @@ const TRANSCRIPTION_PROMPT = [
   '{"language":"Khmer","segments":[{"start":0.0,"end":4.5,"text":"phrase"}]}',
   'If there is absolutely no spoken audio at all, return {"language":"auto","segments":[]}.'
 ].join(' ')
+
+function buildTranscriptionPrompt(options?: TranscribeOptions): string {
+  if (!options) return BASE_TRANSCRIPTION_PROMPT
+
+  const customVocab = options.customVocabulary?.map((v) => v.trim()).filter(Boolean) || []
+  const diarization = Boolean(options.speakerDiarization)
+  const langPref = options.languagePreference || 'auto'
+
+  let langInstruction = '1. AUTOMATIC LANGUAGE DETECTION: Automatically detect the spoken language. If the audio is in Khmer, set language to "Khmer". If in English, set language to "English". If bilingual mixed speech, set language to "Khmer / English".'
+  if (langPref === 'khmer') {
+    langInstruction = '1. LANGUAGE REQUIREMENT: The spoken audio is in Khmer (ភាសាខ្មែរ). Transcribe strictly in clean Khmer script (អក្សរខ្មែរ) with proper spacing and spelling. Set language to "Khmer".'
+  } else if (langPref === 'english') {
+    langInstruction = '1. LANGUAGE REQUIREMENT: The spoken audio is in English. Transcribe strictly in English with proper punctuation, grammar, and capitalization. Set language to "English".'
+  } else if (langPref === 'bilingual') {
+    langInstruction = '1. LANGUAGE REQUIREMENT: The spoken audio contains bilingual Khmer and English mixed speech (code-switching). Transcribe Khmer portions in Khmer script (អក្សរខ្មែរ) and English speech/loanwords in English script. Set language to "Khmer / English".'
+  }
+
+  const promptParts = [
+    'You are an expert multilingual audio transcription AI specialized in automatic language detection (Khmer / ភាសាខ្មែរ, English, and bilingual speech) and noisy audio extraction.',
+    'Listen carefully to the entire media from the very beginning (0:00) to the absolute end.',
+    langInstruction,
+    '2. VERBATIM SPEECH ACCURACY: Transcribe every spoken word accurately in the native script. For Khmer speech, output clean Khmer script (អក្សរខ្មែរ) with proper spacing and spelling. For English speech, output English.',
+    '3. BACKGROUND AUDIO & NOISE HANDLING: Even if background music, sound effects, TikTok audio tracks, ambient noise, fast speaking, or colloquial dialogue are present, transcribe all audible speech verbatim.',
+    '4. COMPLETE TRANSCRIPTION: Transcribe the entire duration verbatim from start to finish. Break into consecutive timestamped segments.'
+  ]
+
+  if (diarization) {
+    promptParts.push(
+      '5. SPEAKER DIARIZATION: Identify and differentiate distinct speakers across the audio. Prefix each speaker turn or dialogue with speaker labels (e.g., "Speaker 1: ...", "Speaker 2: ..."). Maintain consistent speaker tags across consecutive segments.'
+    )
+  }
+
+  if (customVocab.length > 0) {
+    promptParts.push(
+      `6. DOMAIN VOCABULARY & KEYWORD HINTS: Pay special attention to the following specific proper nouns, technical terms, and keywords: ${customVocab.map((v) => `"${v}"`).join(', ')}. Whenever words sounding like or referring to these terms are spoken, transcribe them with these exact spellings.`
+    )
+  }
+
+  promptParts.push(
+    'Format strictly as JSON:',
+    '{"language":"Khmer","segments":[{"start":0.0,"end":4.5,"text":"phrase"}]}',
+    'If there is absolutely no spoken audio at all, return {"language":"auto","segments":[]}.'
+  )
+
+  return promptParts.join(' ')
+}
+
+const TRANSCRIPTION_PROMPT = BASE_TRANSCRIPTION_PROMPT
 
 type TranscriptResultPayload = {
   text: string
@@ -665,7 +731,8 @@ async function transcribeWithKey(
   audioInput: { buffer?: Buffer; fileUri?: string; mimeType: string; displayName: string; durationSeconds?: number },
   sourceName: string,
   models: string[],
-  emit: (event: ProgressEvent) => void
+  emit: (event: ProgressEvent) => void,
+  promptText: string = TRANSCRIPTION_PROMPT
 ): Promise<TranscriptResultPayload> {
   let uploadedFileName = ''
 
@@ -726,7 +793,7 @@ async function transcribeWithKey(
           () =>
             streamGeminiTranscript(apiKey, {
               modelName,
-              prompt: TRANSCRIPTION_PROMPT,
+              prompt: promptText,
               mimeType: mediaMimeType,
               ...(fileUri ? { fileUri } : { inlineData: audioInput.buffer }),
               onText: (accumulated) => {
@@ -823,6 +890,7 @@ async function runTranscriptionPipeline(
   emit({ type: 'status', phase: 'uploading' })
   const mediaInput = await getMediaInputFromRequest(req)
   const models = getGeminiModels()
+  const promptText = buildTranscriptionPrompt(mediaInput.options)
 
   // Fast direct path for files uploaded directly from browser to Gemini Files API
   if (mediaInput.fileUri) {
@@ -851,7 +919,8 @@ async function runTranscriptionPipeline(
           },
           mediaInput.sourceName,
           models,
-          emit
+          emit,
+          promptText
         )
       } catch (err) {
         lastError = err
@@ -871,8 +940,16 @@ async function runTranscriptionPipeline(
     displayName: mediaInput.displayName
   })
 
-  // Cache: identical audio returns instantly and uses no API quota.
-  const audioHash = hashAudio(audioInput.buffer)
+  // Cache: identical audio and options returns instantly and uses no API quota.
+  const hasCustomOptions = Boolean(
+    mediaInput.options?.customVocabulary?.length ||
+    mediaInput.options?.speakerDiarization ||
+    (mediaInput.options?.languagePreference && mediaInput.options.languagePreference !== 'auto')
+  )
+  const audioHash = hasCustomOptions
+    ? hashAudio(Buffer.concat([audioInput.buffer, Buffer.from(JSON.stringify(mediaInput.options))]))
+    : hashAudio(audioInput.buffer)
+
   const cached = await readTranscriptCache(audioHash)
   if (cached) {
     emit({ type: 'progress', progress: 100 })
@@ -892,7 +969,7 @@ async function runTranscriptionPipeline(
     let lastError: unknown
     for (let index = 0; index < keys.length; index += 1) {
       try {
-        return await transcribeWithKey(keys[index], audio, mediaInput.sourceName, models, onEvent)
+        return await transcribeWithKey(keys[index], audio, mediaInput.sourceName, models, onEvent, promptText)
       } catch (error) {
         lastError = error
         // A key throws only after ALL its models were exhausted (rate-limited or
