@@ -7,11 +7,22 @@ import { useTranscriptStore } from '@/store/transcriptStore'
 import { motion, AnimatePresence } from 'framer-motion'
 import { MAX_MEDIA_UPLOAD_BYTES, MAX_MEDIA_UPLOAD_MB } from '@/lib/uploadLimits'
 import { transcribeWithProgress } from '@/lib/transcribeClient'
+import AdvancedOptionsDrawer from './AdvancedOptionsDrawer'
 
 import ReportErrorButton from '@/components/common/ReportErrorButton'
 
 export default function MediaUploadZone() {
-  const { file, setFile, status, setStatus, setProgress, setTranscript, errorMessage, setErrorMessage } = useTranscriptStore()
+  const {
+    file,
+    setFile,
+    status,
+    setStatus,
+    setProgress,
+    setTranscript,
+    errorMessage,
+    setErrorMessage,
+    advancedOptions
+  } = useTranscriptStore()
   const [sourceUrl, setSourceUrl] = useState('')
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
@@ -38,14 +49,18 @@ export default function MediaUploadZone() {
 
     try {
       // Real progress streamed from the direct-to-Gemini transcribe client.
-      const data = await transcribeWithProgress(input, (event) => {
-        if (event.type === 'status' && event.phase === 'processing') {
-          setStatus('processing')
-        }
-        if (event.type === 'progress') {
-          setProgress(event.progress)
-        }
-      })
+      const data = await transcribeWithProgress(
+        input,
+        (event) => {
+          if (event.type === 'status' && event.phase === 'processing') {
+            setStatus('processing')
+          }
+          if (event.type === 'progress') {
+            setProgress(event.progress)
+          }
+        },
+        advancedOptions
+      )
 
       setTranscript({
         text: data.text,
@@ -196,6 +211,9 @@ export default function MediaUploadZone() {
                 Supports direct video/audio URLs, TikTok, Twitter/X, Instagram, and YouTube.
               </p>
             </div>
+
+            {/* Advanced Options Drawer (Custom Vocabulary, Speaker Diarization, Language) */}
+            <AdvancedOptionsDrawer />
           </motion.div>
         ) : (
           <motion.div
@@ -238,6 +256,9 @@ export default function MediaUploadZone() {
                 <span>Change</span>
               </button>
             </div>
+
+            {/* Advanced Options Drawer in File Preview */}
+            <AdvancedOptionsDrawer />
 
             {/* Apple Primary Action Button */}
             <button
