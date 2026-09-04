@@ -1,6 +1,7 @@
 'use client'
 
 import { Fragment, useCallback, useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import {
   Check,
   ChevronDown,
@@ -12,6 +13,7 @@ import {
   FileAudio,
   FileText,
   Filter,
+  Headphones,
   Link2,
   Loader2,
   Search,
@@ -22,12 +24,14 @@ import {
 import { downloadTxt } from '@/lib/download'
 import { getPlainTranscriptText } from '@/lib/transcript'
 import { useSession, signIn } from 'next-auth/react'
+import { useTranscriptStore } from '@/store/transcriptStore'
 
 const PAGE_SIZE = 15
 
 type TranscriptRecord = {
   id: string
   text?: string
+  rawText?: string
   source: string
   filename: string | null
   duration: number | null
@@ -58,9 +62,11 @@ function getSourceName(item: TranscriptRecord) {
 }
 
 export default function HistoryPage() {
+  const router = useRouter()
   const { status } = useSession()
   const [history, setHistory] = useState<TranscriptRecord[]>([])
   const [details, setDetails] = useState<Record<string, string>>({})
+  const [rawDetails, setRawDetails] = useState<Record<string, string>>({})
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
   const [totalPages, setTotalPages] = useState(1)
@@ -123,8 +129,10 @@ export default function HistoryPage() {
     }
   }, [status, page])
 
-  const loadTranscriptText = async (id: string) => {
-    if (details[id] !== undefined) return details[id]
+  const loadTranscriptRecord = async (id: string) => {
+    if (details[id] !== undefined) {
+      return { text: details[id], rawText: rawDetails[id] || details[id] }
+    }
 
     setLoadingDetailId(id)
     try {
@@ -133,8 +141,10 @@ export default function HistoryPage() {
 
       const item: TranscriptRecord = await response.json()
       const text = getPlainTranscriptText(item.text || '')
+      const rawText = item.rawText || item.text || ''
       setDetails((current) => ({ ...current, [id]: text }))
-      return text
+      setRawDetails((current) => ({ ...current, [id]: rawText }))
+      return { text, rawText }
     } catch (detailError) {
       console.error('Failed to load transcript', detailError)
       setError(detailError instanceof Error ? detailError.message : 'Unable to load this transcript.')
@@ -142,6 +152,26 @@ export default function HistoryPage() {
     } finally {
       setLoadingDetailId(null)
     }
+  }
+
+  const loadTranscriptText = async (id: string) => {
+    const record = await loadTranscriptRecord(id)
+    return record ? record.text : null
+  }
+
+  const handleReviewInPlayer = async (item: TranscriptRecord, event: React.MouseEvent) => {
+    event.stopPropagation()
+    const record = await loadTranscriptRecord(item.id)
+    if (!record) return
+
+    useTranscriptStore.getState().setTranscriptWithAudio({
+      text: record.rawText || record.text,
+      source: getSourceName(item),
+      duration: item.duration || 0,
+      language: item.language || 'auto'
+    }, null)
+
+    router.push('/#workspace')
   }
 
   const togglePreview = async (item: TranscriptRecord) => {
@@ -400,6 +430,13 @@ export default function HistoryPage() {
                         <td className="px-6 py-4">
                           <div className="flex items-center justify-end gap-1">
                             <button
+                              onClick={(event) => handleReviewInPlayer(item, event)}
+                              className="rounded-full p-2 text-slate-400 hover:bg-purple-50 hover:text-purple-600 dark:hover:bg-purple-950/50 dark:hover:text-purple-400 transition-colors cursor-pointer"
+                              title="Review in Audio Player & Karaoke Sync"
+                            >
+                              <Headphones className="h-4 w-4" />
+                            </button>
+                            <button
                               onClick={(event) => handleDownload(item, event)}
                               className="rounded-full p-2 text-slate-400 hover:bg-blue-50 hover:text-blue-600 dark:hover:bg-blue-950/50 dark:hover:text-blue-400 transition-colors cursor-pointer"
                               title="Download TXT"
@@ -436,8 +473,15 @@ export default function HistoryPage() {
                                 </span>
                                 <div className="flex items-center gap-2">
                                   <button
+                                    onClick={(event) => handleReviewInPlayer(item, event)}
+                                    className="flex items-center gap-1.5 rounded-full bg-gradient-to-r from-blue-600 to-indigo-600 px-3 py-1 text-xs font-semibold text-white shadow-xs hover:from-blue-700 hover:to-indigo-700 transition-all active:scale-95 cursor-pointer"
+                                    title="Open in player with sync highlighter"
+                                  >
+                                    <Headphones className="h-3.5 w-3.5" /> Review in Player
+                                  </button>
+                                  <button
                                     onClick={(event) => handleCopy(item.id, event)}
-                                    className="flex items-center gap-1 rounded-full border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+                                    className="flex items-center gap-1 rounded-full border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors cursor-pointer"
                                   >
                                     {copiedDetailId === item.id ? (
                                       <>
