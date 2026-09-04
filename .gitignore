@@ -39,3 +39,6 @@ prisma/dev.db-journal
 
 # turbopack
 .turbo
+
+# temp
+/.temp/
