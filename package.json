@@ -11,7 +11,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate && node scripts/prepare-ytdlp.js"
   },
   "keywords": [],
   "author": "",
@@ -22,6 +22,7 @@
     "@distube/ytdl-core": "^4.16.12",
     "@google/generative-ai": "^0.24.1",
     "@prisma/client": "^6.19.2",
+    "@vercel/analytics": "^2.0.1",
     "clsx": "^2.1.1",
     "debug": "^4.4.3",
     "dotenv": "^17.3.1",
