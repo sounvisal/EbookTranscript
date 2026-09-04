@@ -8,13 +8,75 @@ import {
   stripTimestampMarkers
 } from '@/lib/transcript'
 import { useTranscriptStore } from '@/store/transcriptStore'
-import { Check, Copy, Download, RefreshCw, Sparkles, FileText, CheckCircle2, Headphones, Wand2 } from 'lucide-react'
+import { Check, Copy, Download, RefreshCw, Sparkles, FileText, CheckCircle2, Headphones, Wand2, User, Users } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import ReportErrorButton from '@/components/common/ReportErrorButton'
 import AudioPlayer from '@/components/transcript/AudioPlayer'
 
+const SPEAKER_REGEX = /^(?:\[?(?:Speaker\s*[A-Za-z0-9]+|Person\s*[A-Za-z0-9]+|Host|Guest|Interviewer|Interviewee|អ្នកនិយាយ\s*[០-៩0-9]+)\]?)\s*[:：]\s*/i
+
+function extractSpeaker(rawText: string): { speaker: string | null; body: string } {
+  const match = rawText.match(SPEAKER_REGEX)
+  if (match) {
+    const rawSpeaker = match[0]
+      .replace(/[:：]\s*$/, '')
+      .replace(/^[\[\(]\s*|\s*[\]\)]$/g, '')
+      .trim()
+    return {
+      speaker: rawSpeaker,
+      body: rawText.slice(match[0].length).trim()
+    }
+  }
+  return {
+    speaker: null,
+    body: rawText
+  }
+}
+
+function getSpeakerStyle(speaker: string) {
+  const normalized = speaker.toLowerCase().trim()
+  if (normalized.includes('1') || normalized.includes('a') || normalized.includes('host') || normalized.includes('១')) {
+    return {
+      badge: 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border-indigo-200/80 dark:border-indigo-800 ring-indigo-500/10',
+      dot: 'bg-indigo-500',
+      accent: 'border-l-indigo-500',
+      bgActive: 'bg-indigo-50/90 dark:bg-indigo-950/50'
+    }
+  }
+  if (normalized.includes('2') || normalized.includes('b') || normalized.includes('guest') || normalized.includes('២')) {
+    return {
+      badge: 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-200/80 dark:border-emerald-800 ring-emerald-500/10',
+      dot: 'bg-emerald-500',
+      accent: 'border-l-emerald-500',
+      bgActive: 'bg-emerald-50/90 dark:bg-emerald-950/50'
+    }
+  }
+  if (normalized.includes('3') || normalized.includes('c') || normalized.includes('៣')) {
+    return {
+      badge: 'bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border-amber-200/80 dark:border-amber-800 ring-amber-500/10',
+      dot: 'bg-amber-500',
+      accent: 'border-l-amber-500',
+      bgActive: 'bg-amber-50/90 dark:bg-amber-950/50'
+    }
+  }
+  if (normalized.includes('4') || normalized.includes('d') || normalized.includes('៤')) {
+    return {
+      badge: 'bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border-rose-200/80 dark:border-rose-800 ring-rose-500/10',
+      dot: 'bg-rose-500',
+      accent: 'border-l-rose-500',
+      bgActive: 'bg-rose-50/90 dark:bg-rose-950/50'
+    }
+  }
+  return {
+    badge: 'bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border-purple-200/80 dark:border-purple-800 ring-purple-500/10',
+    dot: 'bg-purple-500',
+    accent: 'border-l-purple-500',
+    bgActive: 'bg-purple-50/90 dark:bg-purple-950/50'
+  }
+}
+
 export default function TranscriptPanel() {
-  const { transcript, file, audioBlob, resetAll } = useTranscriptStore()
+  const { transcript, file, audioBlob, customAudioUrl, resetAll } = useTranscriptStore()
   const [viewMode, setViewMode] = useState<'paragraphs' | 'timestamps'>('timestamps')
   const [wordSyncEnabled, setWordSyncEnabled] = useState(true)
   const [copied, setCopied] = useState(false)
@@ -39,20 +101,36 @@ export default function TranscriptPanel() {
   const sourceName = file ? file.name : (transcript?.source || 'Transcript')
   const wordCount = text.split(/\s+/).filter(Boolean).length
 
-  // Generate object URL for Audio Player
+  // Detect distinct speakers across all segments
+  const detectedSpeakers = useMemo(() => {
+    const speakers = new Set<string>()
+    displaySegments.forEach((seg) => {
+      const { speaker } = extractSpeaker(seg.text)
+      if (speaker) speakers.add(speaker)
+    })
+    return Array.from(speakers)
+  }, [displaySegments])
+
+  // Generate object URL for Audio Player or use customAudioUrl
   useEffect(() => {
-    let url: string | null = null
+    let createdUrl: string | null = null
     if (file) {
-      url = URL.createObjectURL(file)
-      setAudioUrl(url)
+      createdUrl = URL.createObjectURL(file)
+      setAudioUrl(createdUrl)
     } else if (audioBlob) {
-      url = URL.createObjectURL(audioBlob)
-      setAudioUrl(url)
+      createdUrl = URL.createObjectURL(audioBlob)
+      setAudioUrl(createdUrl)
+    } else if (customAudioUrl) {
+      setAudioUrl(customAudioUrl)
+    } else {
+      setAudioUrl(null)
     }
     return () => {
-      if (url) URL.revokeObjectURL(url)
+      if (createdUrl) {
+        URL.revokeObjectURL(createdUrl)
+      }
     }
-  }, [file, audioBlob])
+  }, [file, audioBlob, customAudioUrl])
 
   // Find active segment index
   const activeSegmentIndex = useMemo(() => {
@@ -157,6 +235,15 @@ export default function TranscriptPanel() {
                 <span>·</span>
                 <span className="rounded-full bg-blue-50 dark:bg-blue-950/60 px-2.5 py-0.5 text-[11px] font-semibold text-blue-700 dark:text-blue-300">
                   {transcript.language}
+                </span>
+              </>
+            )}
+            {detectedSpeakers.length > 0 && (
+              <>
+                <span>·</span>
+                <span className="rounded-full bg-purple-50 dark:bg-purple-950/60 px-2.5 py-0.5 text-[11px] font-semibold text-purple-700 dark:text-purple-300 ring-1 ring-purple-500/20 flex items-center gap-1">
+                  <Users className="h-3 w-3" />
+                  {detectedSpeakers.length} {detectedSpeakers.length === 1 ? 'Speaker' : 'Speakers'} Diarized
                 </span>
               </>
             )}
@@ -282,17 +369,36 @@ export default function TranscriptPanel() {
           onCopy={handleTranscriptCopy}
         >
           {viewMode === 'paragraphs' ? (
-            <div className="space-y-5 font-normal text-slate-900 dark:text-slate-100 leading-8">
-              {text.split(/\n{2,}/).map((paragraph, pIdx) => (
-                <p key={pIdx} className="leading-8 whitespace-pre-wrap selection:bg-blue-100 dark:selection:bg-blue-900">
-                  {paragraph}
-                </p>
-              ))}
+            <div className="space-y-6 font-normal text-slate-900 dark:text-slate-100 leading-8">
+              {text.split(/\n{2,}/).map((paragraph, pIdx) => {
+                const { speaker, body: paraBody } = extractSpeaker(paragraph)
+                const speakerStyle = speaker ? getSpeakerStyle(speaker) : null
+
+                return (
+                  <div key={pIdx} className="space-y-1.5">
+                    {speaker && (
+                      <div className="flex items-center gap-1.5">
+                        <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold tracking-wide shadow-2xs ${speakerStyle?.badge}`}>
+                          <span className={`h-1.5 w-1.5 rounded-full ${speakerStyle?.dot}`} />
+                          <User className="h-3 w-3" />
+                          <span>{speaker}</span>
+                        </span>
+                      </div>
+                    )}
+                    <p className="leading-8 whitespace-pre-wrap selection:bg-blue-100 dark:selection:bg-blue-900">
+                      {speaker ? paraBody : paragraph}
+                    </p>
+                  </div>
+                )
+              })}
             </div>
           ) : (
             <div className="space-y-2.5">
               {displaySegments.map((segment, segIdx) => {
                 const isSegmentActive = segIdx === activeSegmentIndex
+                const { speaker, body: segmentBody } = extractSpeaker(segment.text)
+                const speakerStyle = speaker ? getSpeakerStyle(speaker) : null
+
                 const segStart = segment.start
                 const nextSeg = displaySegments[segIdx + 1]
                 const segEnd = typeof segment.end === 'number' && segment.end > segStart
@@ -300,8 +406,8 @@ export default function TranscriptPanel() {
                   : (nextSeg ? nextSeg.start : segStart + 4)
                 const segDuration = Math.max(0.5, segEnd - segStart)
 
-                // Split segment into words while preserving spacing
-                const wordsList = segment.text.trim().split(/(\s+)/)
+                // Split segment body into words while preserving spacing
+                const wordsList = segmentBody.trim().split(/(\s+)/)
                 const realWords = wordsList.filter((w) => w.trim().length > 0)
                 const totalRealWords = Math.max(1, realWords.length)
 
@@ -313,7 +419,7 @@ export default function TranscriptPanel() {
                     onClick={() => handleSeekToSegment(segment.start)}
                     className={`group grid grid-cols-[4rem_minmax(0,1fr)] sm:grid-cols-[5rem_minmax(0,1fr)] gap-3 sm:gap-4 rounded-2xl p-3.5 cursor-pointer transition-all duration-200 ${
                       isSegmentActive
-                        ? 'bg-blue-50/90 dark:bg-blue-950/50 border-l-4 border-blue-600 shadow-xs ring-1 ring-blue-500/10'
+                        ? `${speakerStyle?.bgActive || 'bg-blue-50/90 dark:bg-blue-950/50'} border-l-4 ${speakerStyle?.accent || 'border-blue-600'} shadow-xs ring-1 ring-blue-500/10`
                         : 'hover:bg-slate-100/60 dark:hover:bg-slate-800/40'
                     }`}
                   >
@@ -330,45 +436,56 @@ export default function TranscriptPanel() {
                       </span>
                     </div>
 
-                    {/* Word-by-word rendered paragraph */}
-                    <p className="whitespace-pre-wrap leading-relaxed text-slate-800 dark:text-slate-200 text-sm sm:text-base">
-                      {wordsList.map((token, tokenIdx) => {
-                        const isWhitespace = token.trim().length === 0
-                        if (isWhitespace) {
-                          return <span key={tokenIdx}>{token}</span>
-                        }
-
-                        const currentWordIndex = wordCounter
-                        wordCounter += 1
-
-                        const wStart = segStart + (currentWordIndex / totalRealWords) * segDuration
-                        const wEnd = segStart + ((currentWordIndex + 1) / totalRealWords) * segDuration
-
-                        const isThisWordActive = isSegmentActive && wordSyncEnabled && currentTime >= wStart && currentTime < wEnd
-                        const isPastWord = wordSyncEnabled && (currentTime >= wEnd)
-
-                        return (
-                          <span
-                            key={tokenIdx}
-                            ref={isThisWordActive ? activeWordRef : null}
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              setCurrentTime(wStart)
-                            }}
-                            className={`transition-all duration-150 inline-block rounded cursor-pointer ${
-                              isThisWordActive
-                                ? 'bg-blue-600 text-white font-bold px-1.5 py-0.5 shadow-sm scale-[1.06] ring-2 ring-blue-400/40'
-                                : isPastWord && isSegmentActive
-                                ? 'text-blue-900 dark:text-blue-300 font-medium hover:underline'
-                                : 'hover:bg-blue-100/60 dark:hover:bg-blue-900/40 hover:text-blue-600'
-                            }`}
-                            title={`Jump to ${formatTimestamp(wStart)}`}
-                          >
-                            {token}
+                    {/* Word-by-word rendered paragraph with speaker badge */}
+                    <div className="min-w-0">
+                      {speaker && (
+                        <div className="mb-1.5 flex items-center gap-1.5">
+                          <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold tracking-wide shadow-2xs ${speakerStyle?.badge}`}>
+                            <span className={`h-1.5 w-1.5 rounded-full ${speakerStyle?.dot}`} />
+                            <User className="h-3 w-3" />
+                            <span>{speaker}</span>
                           </span>
-                        )
-                      })}
-                    </p>
+                        </div>
+                      )}
+                      <p className="whitespace-pre-wrap leading-relaxed text-slate-800 dark:text-slate-200 text-sm sm:text-base">
+                        {wordsList.map((token, tokenIdx) => {
+                          const isWhitespace = token.trim().length === 0
+                          if (isWhitespace) {
+                            return <span key={tokenIdx}>{token}</span>
+                          }
+
+                          const currentWordIndex = wordCounter
+                          wordCounter += 1
+
+                          const wStart = segStart + (currentWordIndex / totalRealWords) * segDuration
+                          const wEnd = segStart + ((currentWordIndex + 1) / totalRealWords) * segDuration
+
+                          const isThisWordActive = isSegmentActive && wordSyncEnabled && currentTime >= wStart && currentTime < wEnd
+                          const isPastWord = wordSyncEnabled && (currentTime >= wEnd)
+
+                          return (
+                            <span
+                              key={tokenIdx}
+                              ref={isThisWordActive ? activeWordRef : null}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setCurrentTime(wStart)
+                              }}
+                              className={`transition-all duration-150 inline-block rounded cursor-pointer ${
+                                isThisWordActive
+                                  ? 'bg-blue-600 text-white font-bold px-1.5 py-0.5 shadow-sm scale-[1.06] ring-2 ring-blue-400/40'
+                                  : isPastWord && isSegmentActive
+                                  ? 'text-blue-900 dark:text-blue-300 font-medium hover:underline'
+                                  : 'hover:bg-blue-100/60 dark:hover:bg-blue-900/40 hover:text-blue-600'
+                              }`}
+                              title={`Jump to ${formatTimestamp(wStart)}`}
+                            >
+                              {token}
+                            </span>
+                          )
+                        })}
+                      </p>
+                    </div>
                   </div>
                 )
               })}
