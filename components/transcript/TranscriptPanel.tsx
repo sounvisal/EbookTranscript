@@ -76,7 +76,7 @@ function getSpeakerStyle(speaker: string) {
 }
 
 export default function TranscriptPanel() {
-  const { transcript, file, audioBlob, customAudioUrl, resetAll } = useTranscriptStore()
+  const { transcript, file, audioBlob, audioUrl: storeAudioUrl, customAudioUrl, resetAll } = useTranscriptStore()
   const [viewMode, setViewMode] = useState<'paragraphs' | 'timestamps'>('timestamps')
   const [wordSyncEnabled, setWordSyncEnabled] = useState(true)
   const [copied, setCopied] = useState(false)
@@ -85,7 +85,6 @@ export default function TranscriptPanel() {
   const hasSaved = useRef(false)
 
   // Audio Playback & Synchronization State
-  const [audioUrl, setAudioUrl] = useState<string | null>(null)
   const [currentTime, setCurrentTime] = useState(0)
   const activeWordRef = useRef<HTMLSpanElement | null>(null)
 
@@ -111,26 +110,26 @@ export default function TranscriptPanel() {
     return Array.from(speakers)
   }, [displaySegments])
 
-  // Generate object URL for Audio Player or use customAudioUrl
-  useEffect(() => {
-    let createdUrl: string | null = null
+  // Resolve the active audio source directly from the uploaded file, audioBlob, or store
+  const audioUrl = useMemo(() => {
+    if (storeAudioUrl) return storeAudioUrl
+    if (customAudioUrl) return customAudioUrl
     if (file) {
-      createdUrl = URL.createObjectURL(file)
-      setAudioUrl(createdUrl)
-    } else if (audioBlob) {
-      createdUrl = URL.createObjectURL(audioBlob)
-      setAudioUrl(createdUrl)
-    } else if (customAudioUrl) {
-      setAudioUrl(customAudioUrl)
-    } else {
-      setAudioUrl(null)
-    }
-    return () => {
-      if (createdUrl) {
-        URL.revokeObjectURL(createdUrl)
+      try {
+        return URL.createObjectURL(file)
+      } catch {
+        return null
       }
     }
-  }, [file, audioBlob, customAudioUrl])
+    if (audioBlob) {
+      try {
+        return URL.createObjectURL(audioBlob)
+      } catch {
+        return null
+      }
+    }
+    return null
+  }, [storeAudioUrl, customAudioUrl, file, audioBlob])
 
   // Find active segment index
   const activeSegmentIndex = useMemo(() => {
