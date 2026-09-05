@@ -39,6 +39,7 @@ interface TranscriptState {
   interimText: string
   recordingDuration: number
   audioBlob: Blob | null
+  audioUrl: string | null
   customAudioUrl: string | null
 
   setFile: (file: File | null) => void
@@ -94,20 +95,34 @@ export const useTranscriptStore = create<TranscriptState>((set) => ({
   interimText: '',
   recordingDuration: 0,
   audioBlob: null,
+  audioUrl: null,
   customAudioUrl: null,
 
-  setFile: (file) => set({ file }),
+  setFile: (file) =>
+    set((state) => {
+      if (state.audioUrl && state.audioUrl.startsWith('blob:')) {
+        try { URL.revokeObjectURL(state.audioUrl) } catch {}
+      }
+      const newUrl = file ? URL.createObjectURL(file) : null
+      return { file, audioUrl: newUrl, audioBlob: null }
+    }),
   setStatus: (status) => set({ status }),
   setProgress: (progress) => set({ progress }),
   setTranscript: (transcript) => set({ transcript, status: 'complete', errorMessage: null }),
   setTranscriptWithAudio: (transcript, audioUrl = null) =>
-    set({
-      transcript,
-      status: 'complete',
-      errorMessage: null,
-      customAudioUrl: audioUrl,
-      file: null,
-      audioBlob: null
+    set((state) => {
+      if (state.audioUrl && state.audioUrl.startsWith('blob:') && state.audioUrl !== audioUrl) {
+        try { URL.revokeObjectURL(state.audioUrl) } catch {}
+      }
+      return {
+        transcript,
+        status: 'complete',
+        errorMessage: null,
+        customAudioUrl: audioUrl,
+        audioUrl: audioUrl,
+        file: null,
+        audioBlob: null
+      }
     }),
   setErrorMessage: (errorMessage) => set({ errorMessage }),
   setWorkflowMode: (workflowMode) => set({ workflowMode, errorMessage: null }),
@@ -157,19 +172,33 @@ export const useTranscriptStore = create<TranscriptState>((set) => ({
   stopRecording: () => set({ isRecording: false }),
   appendLiveText: (text) => set((state) => ({ liveText: state.liveText + text })),
   setInterimText: (text) => set({ interimText: text }),
-  setAudioBlob: (blob) => set({ audioBlob: blob }),
-  setCustomAudioUrl: (url) => set({ customAudioUrl: url }),
-  resetAll: () => set({
-    file: null,
-    status: 'idle',
-    progress: 0,
-    transcript: null,
-    errorMessage: null,
-    isListening: false,
-    isRecording: false,
-    liveText: '',
-    interimText: '',
-    audioBlob: null,
-    customAudioUrl: null
-  })
+  setAudioBlob: (blob) =>
+    set((state) => {
+      if (state.audioUrl && state.audioUrl.startsWith('blob:')) {
+        try { URL.revokeObjectURL(state.audioUrl) } catch {}
+      }
+      const newUrl = blob ? URL.createObjectURL(blob) : null
+      return { audioBlob: blob, audioUrl: newUrl }
+    }),
+  setCustomAudioUrl: (url) => set({ customAudioUrl: url, audioUrl: url }),
+  resetAll: () =>
+    set((state) => {
+      if (state.audioUrl && state.audioUrl.startsWith('blob:')) {
+        try { URL.revokeObjectURL(state.audioUrl) } catch {}
+      }
+      return {
+        file: null,
+        status: 'idle',
+        progress: 0,
+        transcript: null,
+        errorMessage: null,
+        isListening: false,
+        isRecording: false,
+        liveText: '',
+        interimText: '',
+        audioBlob: null,
+        audioUrl: null,
+        customAudioUrl: null
+      }
+    })
 }))
