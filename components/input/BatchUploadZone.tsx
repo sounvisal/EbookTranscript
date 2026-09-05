@@ -21,10 +21,12 @@ const MAX_CONCURRENT_JOBS = 3
 type BatchJobStatus = 'queued' | 'processing' | 'complete' | 'error'
 
 type BatchTranscript = {
+  id?: string
   text: string
   segments?: TranscriptSegment[]
   language?: string
   duration?: number
+  alreadySaved?: boolean
 }
 
 type BatchJob = {
@@ -97,7 +99,7 @@ export default function BatchUploadZone() {
     if (savedRef.current.has(job.id)) return
     savedRef.current.add(job.id)
     try {
-      await fetch('/api/history', {
+      const res = await fetch('/api/history', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -109,6 +111,13 @@ export default function BatchUploadZone() {
           language: job.transcript?.language || 'auto'
         })
       })
+      if (res.ok) {
+        const data = await res.json().catch(() => null)
+        if (data?.id && job.transcript) {
+          job.transcript.id = data.id
+          job.transcript.alreadySaved = true
+        }
+      }
     } catch (error) {
       console.error('Batch autosave failed:', error)
       savedRef.current.delete(job.id)
@@ -347,12 +356,14 @@ export default function BatchUploadZone() {
                         store.setFile(job.file)
                         store.setTranscriptWithAudio(
                           {
+                            id: job.transcript?.id,
                             text: job.transcript!.text,
                             segments: job.transcript!.segments,
                             language: job.transcript!.language,
                             duration: job.transcript!.duration,
                             source: job.file.name,
-                            kind: 'transcript'
+                            kind: 'transcript',
+                            alreadySaved: true
                           },
                           URL.createObjectURL(job.file)
                         )
