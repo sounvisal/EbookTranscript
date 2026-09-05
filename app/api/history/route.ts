@@ -111,11 +111,39 @@ export async function POST(req: Request) {
       ? duration
       : Math.max(1, Math.round(computedWordCount / 2.3))
 
+    // DEDUPLICATION: Check if identical transcript is already saved in history for this user
+    const effectiveFilename = filename || (source && source !== 'file' && source !== 'LIVE VOICE' && source !== 'voice_record' ? source : undefined)
+
+    const existing = await prisma.transcript.findFirst({
+      where: {
+        userId: session.user.id,
+        text: cleanText,
+        OR: [
+          ...(effectiveFilename ? [{ filename: effectiveFilename }, { source: effectiveFilename }] : []),
+          { source }
+        ]
+      },
+      select: {
+        id: true,
+        text: true,
+        source: true,
+        filename: true,
+        duration: true,
+        wordCount: true,
+        language: true,
+        createdAt: true
+      }
+    })
+
+    if (existing) {
+      return NextResponse.json(existing, { status: 200 })
+    }
+
     const transcript = await prisma.transcript.create({
       data: {
         text: cleanText,
         source,
-        filename,
+        filename: effectiveFilename || filename,
         duration: computedDuration,
         wordCount: computedWordCount,
         language,
@@ -156,6 +184,40 @@ export async function DELETE(req: Request) {
   } catch (error) {
     console.error('Error deleting transcript:', error)
     return NextResponse.json({ error: 'Failed to delete transcript' }, { status: 500 })
+  }
+}
+
+export async function PATCH(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+    if (!session?.user) {
+      return NextResponse.json({ error: 'Unauthorized access' }, { status: 401 })
+    }
+
+    const { id, text } = await req.json()
+    if (!id || typeof text !== 'string') {
+      return NextResponse.json({ error: 'ID and text are required' }, { status: 400 })
+    }
+
+    const cleanText = getPlainTranscriptText(text)
+    const wordCount = cleanText.split(/\s+/).filter(Boolean).length
+
+    const updated = await prisma.transcript.updateMany({
+      where: { id, userId: session.user.id },
+      data: {
+        text: cleanText,
+        wordCount
+      }
+    })
+
+    if (updated.count === 0) {
+      return NextResponse.json({ error: 'Transcript not found or unauthorized' }, { status: 404 })
+    }
+
+    return NextResponse.json({ success: true, text: cleanText, wordCount }, { status: 200 })
+  } catch (error) {
+    console.error('Error updating transcript:', error)
+    return NextResponse.json({ error: 'Failed to update transcript' }, { status: 500 })
   }
 }
 
