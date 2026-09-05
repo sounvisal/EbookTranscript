@@ -1,5 +1,6 @@
 import type { TranscriptSegment } from '@/lib/transcript'
 import { prepareMediaForUpload } from '@/lib/clientAudio'
+import { useTranscriptStore } from '@/store/transcriptStore'
 
 export type TranscribeProgressEvent =
   | { type: 'status'; phase: 'uploading' | 'processing'; duration?: number }
@@ -236,6 +237,9 @@ export async function transcribeWithProgress(
       const prepared = await prepareMediaForUpload(input.file)
       fileToUpload = prepared.file
       mediaDuration = prepared.duration
+      if (prepared.file && prepared.file !== input.file) {
+        useTranscriptStore.getState().setAudioBlob(prepared.file)
+      }
     } catch {
       fileToUpload = input.file
     }
