@@ -70,16 +70,28 @@ export default function AudioPlayer({
       setIsPlaying(false)
     }
 
+    const handlePlay = () => {
+      setIsPlaying(true)
+    }
+
+    const handlePause = () => {
+      setIsPlaying(false)
+    }
+
     audio.addEventListener('loadedmetadata', handleLoadedMetadata)
     audio.addEventListener('timeupdate', handleTimeUpdate)
     audio.addEventListener('ended', handleEnded)
+    audio.addEventListener('play', handlePlay)
+    audio.addEventListener('pause', handlePause)
 
     return () => {
       audio.removeEventListener('loadedmetadata', handleLoadedMetadata)
       audio.removeEventListener('timeupdate', handleTimeUpdate)
       audio.removeEventListener('ended', handleEnded)
+      audio.removeEventListener('play', handlePlay)
+      audio.removeEventListener('pause', handlePause)
     }
-  }, [hasNativeAudio, onTimeUpdate])
+  }, [hasNativeAudio, onTimeUpdate, src])
 
   const currentTimeRef = useRef(currentTime)
   useEffect(() => {
@@ -159,28 +171,14 @@ export default function AudioPlayer({
         audioRef.current.pause()
         setIsPlaying(false)
       } else {
-        audioRef.current.play().catch(() => {})
+        audioRef.current.play().catch((err) => {
+          console.warn('Native audio playback could not start:', err)
+        })
         setIsPlaying(true)
       }
     } else {
-      // Synthetic speech / timer toggle
-      if (isPlaying) {
-        if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-          window.speechSynthesis.cancel()
-        }
-        setIsPlaying(false)
-      } else {
-        if (typeof window !== 'undefined' && 'speechSynthesis' in window && text) {
-          try {
-            window.speechSynthesis.cancel()
-            const utterance = new SpeechSynthesisUtterance(text.slice(0, 1000))
-            utterance.rate = playbackSpeed
-            utterance.onend = () => setIsPlaying(false)
-            window.speechSynthesis.speak(utterance)
-          } catch {}
-        }
-        setIsPlaying(true)
-      }
+      // Toggle silent visual timeline scrubbing only — NEVER generate synthetic speech
+      setIsPlaying(!isPlaying)
     }
   }
 
@@ -247,7 +245,14 @@ export default function AudioPlayer({
 
   return (
     <div className="apple-glass-card rounded-2xl p-4 sm:p-5 transition-all shadow-xs border border-slate-200/80 dark:border-slate-800">
-      {hasNativeAudio && src && <audio ref={audioRef} src={src} preload="metadata" />}
+      {hasNativeAudio && src && (
+        <audio
+          ref={audioRef}
+          src={src}
+          preload="auto"
+          playsInline
+        />
+      )}
 
       <div className="flex flex-col gap-3.5">
         {/* Header Indicator */}
@@ -257,11 +262,15 @@ export default function AudioPlayer({
               <Headphones className="h-3.5 w-3.5" />
             </span>
             <span className="font-semibold text-slate-900 dark:text-white">
-              {hasNativeAudio ? 'Interactive Audio Player' : 'Playback Simulator'}
+              {hasNativeAudio ? 'Original Audio Playback' : 'Transcript Scrubber'}
             </span>
-            {hasNativeAudio && (
+            {hasNativeAudio ? (
               <span className="rounded-md bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 text-[10px] font-bold text-emerald-700 dark:text-emerald-300">
-                Audio Loaded
+                Uploaded Audio
+              </span>
+            ) : (
+              <span className="rounded-md bg-slate-100 dark:bg-slate-800 px-2 py-0.5 text-[10px] font-medium text-slate-500">
+                Text Only Review
               </span>
             )}
           </div>
