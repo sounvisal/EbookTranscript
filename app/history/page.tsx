@@ -165,10 +165,12 @@ export default function HistoryPage() {
     if (!record) return
 
     useTranscriptStore.getState().setTranscriptWithAudio({
+      id: item.id,
       text: record.rawText || record.text,
       source: getSourceName(item),
       duration: item.duration || 0,
-      language: item.language || 'auto'
+      language: item.language || 'auto',
+      alreadySaved: true
     }, null)
 
     router.push('/#workspace')
