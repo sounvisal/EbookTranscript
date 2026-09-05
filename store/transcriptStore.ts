@@ -2,12 +2,14 @@ import { create } from 'zustand'
 import type { TranscriptSegment } from '@/lib/transcript'
 
 type TranscriptResult = {
+  id?: string
   text: string
   segments?: TranscriptSegment[]
   language?: string
   duration?: number
   source?: string
   kind?: 'transcript' | 'meeting-report' | 'summary'
+  alreadySaved?: boolean
 }
 
 export type AdvancedOptions = {
@@ -47,6 +49,7 @@ interface TranscriptState {
   setProgress: (progress: number) => void
   setTranscript: (transcript: TranscriptResult | null) => void
   setTranscriptWithAudio: (transcript: TranscriptResult | null, audioUrl?: string | null) => void
+  updateTranscriptContent: (newText: string, newSegments?: TranscriptSegment[]) => void
   setErrorMessage: (message: string | null) => void
   setWorkflowMode: (mode: 'transcript' | 'meeting' | 'summary') => void
   setInputMode: (mode: 'upload' | 'voice' | 'batch') => void
@@ -115,13 +118,24 @@ export const useTranscriptStore = create<TranscriptState>((set) => ({
         try { URL.revokeObjectURL(state.audioUrl) } catch {}
       }
       return {
-        transcript,
+        transcript: transcript ? { ...transcript, alreadySaved: true } : null,
         status: 'complete',
         errorMessage: null,
         customAudioUrl: audioUrl,
         audioUrl: audioUrl,
         file: null,
         audioBlob: null
+      }
+    }),
+  updateTranscriptContent: (newText, newSegments) =>
+    set((state) => {
+      if (!state.transcript) return state
+      return {
+        transcript: {
+          ...state.transcript,
+          text: newText,
+          segments: newSegments ?? state.transcript.segments
+        }
       }
     }),
   setErrorMessage: (errorMessage) => set({ errorMessage }),
