@@ -343,9 +343,9 @@ export default function BatchUploadZone() {
                     </button>
                     <button
                       onClick={() => {
-                        const setTranscriptWithAudio = useTranscriptStore.getState().setTranscriptWithAudio
-                        const url = URL.createObjectURL(job.file)
-                        setTranscriptWithAudio(
+                        const store = useTranscriptStore.getState()
+                        store.setFile(job.file)
+                        store.setTranscriptWithAudio(
                           {
                             text: job.transcript!.text,
                             segments: job.transcript!.segments,
@@ -354,7 +354,7 @@ export default function BatchUploadZone() {
                             source: job.file.name,
                             kind: 'transcript'
                           },
-                          url
+                          URL.createObjectURL(job.file)
                         )
                       }}
                       className="flex items-center gap-1.5 rounded-lg border border-purple-200 dark:border-purple-800/80 bg-purple-50 dark:bg-purple-950/50 px-3 py-1.5 text-xs font-semibold text-purple-700 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-900/60 transition-colors cursor-pointer"
