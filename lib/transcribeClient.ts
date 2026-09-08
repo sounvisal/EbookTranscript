@@ -131,87 +131,91 @@ async function directUploadToGemini(
 }
 
 /**
- * Uploads a file in 3.5MB slices through our server upload proxy (/api/upload-proxy).
- * This completely prevents:
- * 1. HTTP 413 Payload Too Large (each slice is < 4.5MB Vercel limit).
- * 2. Geo-blocking / "User location is not supported" (proxied from backend).
+ * Directly streams a media file to Google's authorized Resumable Upload URL.
+ * Bypasses Vercel Serverless 4.5MB request body limit completely (supports files up to 2GB).
+ * Uses 'upload, finalize' in a single stream, avoiding Google's 8MB intermediate chunk granularity requirement.
  */
-async function uploadViaServerProxy(
+async function uploadToResumableUrl(
+  uploadUrl: string,
   file: File,
   onProgress?: (percent: number) => void
-): Promise<{ uri: string; name: string; mimeType: string; keyIndex: number }> {
-  const mimeType = inferMimeType(file)
-  const fileSize = file.size
+): Promise<{ uri: string; name: string; mimeType: string }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', uploadUrl, true)
+    xhr.setRequestHeader('Content-Length', String(file.size))
+    xhr.setRequestHeader('X-Goog-Upload-Offset', '0')
+    xhr.setRequestHeader('X-Goog-Upload-Command', 'upload, finalize')
 
-  // 1. Initialize Resumable Upload Session on our server
-  const sessionRes = await fetch('/api/upload-session', {
+    if (xhr.upload && onProgress) {
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable && e.total > 0) {
+          const percent = Math.min(99, Math.round((e.loaded / e.total) * 100))
+          onProgress(percent)
+        }
+      }
+    }
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const res = JSON.parse(xhr.responseText)
+          if (res.file?.uri) {
+            resolve(res.file)
+            return
+          }
+        } catch {}
+      }
+      try {
+        const res = JSON.parse(xhr.responseText)
+        reject(new Error(res.error?.message || `Upload failed with status ${xhr.status}`))
+      } catch {
+        reject(new Error(`Upload failed with status ${xhr.status}`))
+      }
+    }
+
+    xhr.onerror = () => {
+      reject(new Error('Network error uploading directly to Google storage.'))
+    }
+
+    xhr.send(file)
+  })
+}
+
+/**
+ * Server Upload Proxy fallback (/api/upload-proxy) for environments where direct
+ * browser connections to Google are blocked (e.g. strict corporate ad blockers).
+ * For files <= 4MB, proxies the entire file in one 'upload, finalize' call.
+ */
+async function uploadViaServerProxy(
+  uploadUrl: string,
+  file: File,
+  onProgress?: (percent: number) => void
+): Promise<{ uri: string; name: string; mimeType: string }> {
+  onProgress?.(15)
+
+  const uploadRes = await fetch('/api/upload-proxy', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      fileName: file.name,
-      mimeType,
-      fileSize
-    })
+    headers: {
+      'x-upload-url': uploadUrl,
+      'x-upload-offset': '0',
+      'x-upload-command': 'upload, finalize'
+    },
+    body: file
   })
 
-  if (!sessionRes.ok) {
-    const errData = await sessionRes.json().catch(() => null)
-    throw new Error(errData?.error || 'Failed to initialize upload session. Please check your login status.')
+  if (!uploadRes.ok) {
+    const errJson = await uploadRes.json().catch(() => null)
+    throw new Error(errJson?.error || `Proxy upload failed (${uploadRes.status})`)
   }
 
-  const { uploadUrl, keyIndex, host, apiKey } = await sessionRes.json()
-
-  // If server could not initialize resumable URL, fallback to direct upload if possible
-  if (!uploadUrl) {
-    const directRes = await directUploadToGemini(file, apiKey, host, onProgress)
-    return { ...directRes, keyIndex }
+  const data = await uploadRes.json().catch(() => ({}))
+  if (!data?.file?.uri) {
+    throw new Error('Upload proxy completed but failed to register media file.')
   }
 
-  // 2. Upload file in 3.5MB slices
-  const CHUNK_SIZE = 3.5 * 1024 * 1024 // 3.5 MB
-  let offset = 0
-  let finalFileResult: { uri: string; name: string; mimeType: string } | null = null
-
-  while (offset < fileSize) {
-    const chunkEnd = Math.min(offset + CHUNK_SIZE, fileSize)
-    const chunkBlob = file.slice(offset, chunkEnd)
-    const isFinal = chunkEnd >= fileSize
-
-    const uploadRes = await fetch('/api/upload-proxy', {
-      method: 'POST',
-      headers: {
-        'x-upload-url': uploadUrl,
-        'x-upload-offset': String(offset),
-        'x-upload-command': isFinal ? 'upload, finalize' : 'upload'
-      },
-      body: chunkBlob
-    })
-
-    if (!uploadRes.ok) {
-      const errJson = await uploadRes.json().catch(() => null)
-      throw new Error(errJson?.error || `Upload slice failed (${uploadRes.status})`)
-    }
-
-    const data = await uploadRes.json().catch(() => ({}))
-    if (isFinal && data.file) {
-      finalFileResult = data.file
-    }
-
-    offset = chunkEnd
-    const progressPercent = Math.min(99, Math.round((offset / fileSize) * 100))
-    onProgress?.(progressPercent)
-  }
-
-  if (!finalFileResult?.uri) {
-    throw new Error('Upload completed but failed to register media file.')
-  }
-
-  return {
-    uri: finalFileResult.uri,
-    name: finalFileResult.name,
-    mimeType: finalFileResult.mimeType || mimeType,
-    keyIndex
-  }
+  onProgress?.(99)
+  return data.file
 }
 
 import type { AdvancedOptions } from '@/store/transcriptStore'
@@ -244,7 +248,7 @@ export async function transcribeWithProgress(
       fileToUpload = input.file
     }
 
-    // 1. Get direct upload authorization & rotated key
+    // 1. Get direct upload authorization & rotated key from server
     const sessionRes = await fetch('/api/upload-session', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -260,20 +264,39 @@ export async function transcribeWithProgress(
       throw new Error(errData?.error || 'Please sign in to transcribe files.')
     }
 
-    const { apiKey, keyIndex, host } = await sessionRes.json()
+    const { apiKey, keyIndex, host, uploadUrl } = await sessionRes.json()
 
-    // 2. Upload file through /gemini-proxy (proxied through Vercel US/EU Edge, 0 geo-blocks, 0 413s, 2GB limit)
+    // 2. Upload file: prioritize direct resumable upload (supports up to 2GB, 0 Vercel limits, no 8MB chunk error)
     let uploadedFile: { uri: string; name: string; mimeType: string } | null = null
-    try {
+
+    if (uploadUrl) {
+      try {
+        uploadedFile = await uploadToResumableUrl(uploadUrl, fileToUpload, (progress) => {
+          onEvent?.({ type: 'progress', progress })
+        })
+      } catch (directErr) {
+        console.warn('Direct resumable upload failed, attempting fallback:', directErr)
+        // If file is within server limit (<= 4MB), try server proxy fallback
+        if (fileToUpload.size <= 4 * 1024 * 1024) {
+          uploadedFile = await uploadViaServerProxy(uploadUrl, fileToUpload, (progress) => {
+            onEvent?.({ type: 'progress', progress })
+          })
+        } else {
+          // If direct upload failed on a large file, try direct multipart
+          try {
+            uploadedFile = await directUploadToGemini(fileToUpload, apiKey, host, (progress) => {
+              onEvent?.({ type: 'progress', progress })
+            })
+          } catch {
+            throw directErr
+          }
+        }
+      }
+    } else {
+      // Fallback: direct multipart upload
       uploadedFile = await directUploadToGemini(fileToUpload, apiKey, host, (progress) => {
         onEvent?.({ type: 'progress', progress })
       })
-    } catch (uploadErr) {
-      console.warn('Edge proxy upload failed, attempting fallback server proxy:', uploadErr)
-      const proxyResult = await uploadViaServerProxy(fileToUpload, (progress) => {
-        onEvent?.({ type: 'progress', progress })
-      })
-      uploadedFile = { uri: proxyResult.uri, name: proxyResult.name, mimeType: proxyResult.mimeType }
     }
 
     onEvent?.({ type: 'status', phase: 'processing', duration: mediaDuration })
