@@ -143,7 +143,6 @@ async function uploadToResumableUrl(
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
     xhr.open('POST', uploadUrl, true)
-    xhr.setRequestHeader('Content-Length', String(file.size))
     xhr.setRequestHeader('X-Goog-Upload-Offset', '0')
     xhr.setRequestHeader('X-Goog-Upload-Command', 'upload, finalize')
 
@@ -175,7 +174,7 @@ async function uploadToResumableUrl(
     }
 
     xhr.onerror = () => {
-      reject(new Error('Network error uploading directly to Google storage.'))
+      reject(new Error(`Direct Google storage upload failed (status ${xhr.status || 0}). Check your internet connection or browser ad blocker.`))
     }
 
     xhr.send(file)
@@ -249,22 +248,32 @@ export async function transcribeWithProgress(
     }
 
     // 1. Get direct upload authorization & rotated key from server
-    const sessionRes = await fetch('/api/upload-session', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        fileName: fileToUpload.name,
-        mimeType: inferMimeType(fileToUpload),
-        fileSize: fileToUpload.size
+    const requestSession = async () => {
+      const sessionRes = await fetch('/api/upload-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fileName: fileToUpload.name,
+          mimeType: inferMimeType(fileToUpload),
+          fileSize: fileToUpload.size,
+          clientOrigin: typeof window !== 'undefined' ? window.location.origin : undefined
+        })
       })
-    })
 
-    if (!sessionRes.ok) {
-      const errData = await sessionRes.json().catch(() => null)
-      throw new Error(errData?.error || 'Please sign in to transcribe files.')
+      if (!sessionRes.ok) {
+        const errData = await sessionRes.json().catch(() => null)
+        throw new Error(errData?.error || 'Please sign in to transcribe files.')
+      }
+
+      return (await sessionRes.json()) as {
+        apiKey: string
+        keyIndex: number
+        host: string
+        uploadUrl?: string
+      }
     }
 
-    const { apiKey, keyIndex, host, uploadUrl } = await sessionRes.json()
+    let { apiKey, keyIndex, host, uploadUrl } = await requestSession()
 
     // 2. Upload file: prioritize direct resumable upload (supports up to 2GB, 0 Vercel limits, no 8MB chunk error)
     let uploadedFile: { uri: string; name: string; mimeType: string } | null = null
@@ -274,21 +283,36 @@ export async function transcribeWithProgress(
         uploadedFile = await uploadToResumableUrl(uploadUrl, fileToUpload, (progress) => {
           onEvent?.({ type: 'progress', progress })
         })
-      } catch (directErr) {
-        console.warn('Direct resumable upload failed, attempting fallback:', directErr)
-        // If file is within server limit (<= 4MB), try server proxy fallback
+      } catch (directErr: any) {
+        console.warn('Direct resumable upload attempt 1 failed:', directErr)
+        // If file is within Vercel body limit (<= 4MB), fallback to same-origin /gemini-proxy multipart upload
         if (fileToUpload.size <= 4 * 1024 * 1024) {
-          uploadedFile = await uploadViaServerProxy(uploadUrl, fileToUpload, (progress) => {
-            onEvent?.({ type: 'progress', progress })
-          })
-        } else {
-          // If direct upload failed on a large file, try direct multipart
           try {
             uploadedFile = await directUploadToGemini(fileToUpload, apiKey, host, (progress) => {
               onEvent?.({ type: 'progress', progress })
             })
           } catch {
             throw directErr
+          }
+        } else {
+          // For large files (> 4MB), request a fresh session (rotates key and avoids terminated uploadUrl)
+          try {
+            console.log('Retrying large file upload with fresh upload session...')
+            const retrySession = await requestSession()
+            apiKey = retrySession.apiKey
+            keyIndex = retrySession.keyIndex
+            host = retrySession.host
+            uploadUrl = retrySession.uploadUrl
+
+            if (uploadUrl) {
+              uploadedFile = await uploadToResumableUrl(uploadUrl, fileToUpload, (progress) => {
+                onEvent?.({ type: 'progress', progress })
+              })
+            } else {
+              throw directErr
+            }
+          } catch (retryErr) {
+            throw retryErr || directErr
           }
         }
       }
@@ -297,6 +321,10 @@ export async function transcribeWithProgress(
       uploadedFile = await directUploadToGemini(fileToUpload, apiKey, host, (progress) => {
         onEvent?.({ type: 'progress', progress })
       })
+    }
+
+    if (!uploadedFile?.uri) {
+      throw new Error('Upload completed but did not return a valid file URI.')
     }
 
     onEvent?.({ type: 'status', phase: 'processing', duration: mediaDuration })
