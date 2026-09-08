@@ -53,6 +53,25 @@ export async function POST(req: Request) {
   let assignedKey = keys[0]
   let assignedIndex = 0
 
+  let clientOrigin =
+    (typeof body?.clientOrigin === 'string' && body.clientOrigin ? body.clientOrigin.trim() : null) ||
+    req.headers.get('origin') ||
+    ''
+  if (!clientOrigin && req.headers.get('referer')) {
+    try {
+      clientOrigin = new URL(req.headers.get('referer')!).origin
+    } catch {}
+  }
+  if (!clientOrigin) {
+    if (process.env.VERCEL_URL) {
+      clientOrigin = `https://${process.env.VERCEL_URL}`
+    } else if (process.env.NEXTAUTH_URL) {
+      try {
+        clientOrigin = new URL(process.env.NEXTAUTH_URL).origin
+      } catch {}
+    }
+  }
+
   if (fileName && mimeType && typeof fileSize === 'number' && fileSize > 0) {
     // Try up to keys.length times to establish an authorized resumable session
     for (let attempt = 0; attempt < keys.length; attempt++) {
@@ -60,16 +79,21 @@ export async function POST(req: Request) {
       const candidateKey = keys[idx]
 
       try {
+        const startHeaders: Record<string, string> = {
+          'x-goog-api-key': candidateKey,
+          'X-Goog-Upload-Protocol': 'resumable',
+          'X-Goog-Upload-Command': 'start',
+          'X-Goog-Upload-Header-Content-Length': String(fileSize),
+          'X-Goog-Upload-Header-Content-Type': mimeType,
+          'Content-Type': 'application/json; charset=utf-8'
+        }
+        if (clientOrigin && clientOrigin !== '*') {
+          startHeaders['Origin'] = clientOrigin
+        }
+
         const startRes = await fetch(`https://${host}/upload/v1beta/files`, {
           method: 'POST',
-          headers: {
-            'x-goog-api-key': candidateKey,
-            'X-Goog-Upload-Protocol': 'resumable',
-            'X-Goog-Upload-Command': 'start',
-            'X-Goog-Upload-Header-Content-Length': String(fileSize),
-            'X-Goog-Upload-Header-Content-Type': mimeType,
-            'Content-Type': 'application/json; charset=utf-8'
-          },
+          headers: startHeaders,
           body: JSON.stringify({
             file: {
               displayName: fileName,
