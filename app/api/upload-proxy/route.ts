@@ -43,8 +43,15 @@ export async function POST(req: Request) {
 
     if (!googleRes.ok) {
       console.warn(`Google upload chunk error (${googleRes.status}):`, responseText)
+      let parsedError = ''
+      try {
+        const json = JSON.parse(responseText)
+        parsedError = json.error?.message || json.message || ''
+      } catch {
+        parsedError = responseText.slice(0, 150)
+      }
       return NextResponse.json(
-        { error: `Google upload failed (${googleRes.status})` },
+        { error: parsedError || `Google upload failed (${googleRes.status})` },
         { status: googleRes.status }
       )
     }
