@@ -30,10 +30,58 @@ type TelegramUserAlertParams = {
 // Throttle duplicate error alerts within 30 seconds to prevent alert floods
 const lastAlerts = new Map<string, number>()
 
+// Sliding window error spike detection (>=3 errors within 10 minutes)
+const recentErrorTimestamps: number[] = []
+let lastSpikeAlertSent = 0
+
 function getBotCredentials() {
   const token = (process.env.TELEGRAM_BOT_TOKEN || '').trim().replace(/["'\r\n]/g, '')
   const chatId = (process.env.TELEGRAM_CHAT_ID || '').trim().replace(/["'\r\n]/g, '')
   return { token, chatId }
+}
+
+async function checkAndSendSpikeAlert(token: string, chatId: string, endpoint?: string): Promise<void> {
+  const now = Date.now()
+  recentErrorTimestamps.push(now)
+
+  // Keep only errors within the last 10 minutes (600,000 ms)
+  const windowStart = now - 10 * 60 * 1000
+  while (recentErrorTimestamps.length > 0 && recentErrorTimestamps[0] < windowStart) {
+    recentErrorTimestamps.shift()
+  }
+
+  // Trigger alert if 3 or more errors occurred in 10 mins and cooldown (15 mins) has passed
+  if (recentErrorTimestamps.length >= 3 && now - lastSpikeAlertSent > 15 * 60 * 1000) {
+    lastSpikeAlertSent = now
+    const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC'
+
+    const spikeLines = [
+      `🚨 <b>CRITICAL: PLATFORM ERROR SPIKE DETECTED</b>`,
+      '',
+      `⚠️ <b>${recentErrorTimestamps.length} failure incidents</b> logged in the past 10 minutes!`,
+      endpoint ? `📍 <b>Trigger Endpoint:</b> <code>${escapeHtml(endpoint)}</code>` : '',
+      `⏱ <b>Detected at:</b> <code>${timestamp}</code>`,
+      '',
+      `💡 <b>Recommended Actions:</b>`,
+      `• Google API rate limits or quota drops (429)`,
+      `• Inspect Key Fleet health in Admin Operations Dashboard`,
+      `• Verify reverse proxy & upload timeouts`
+    ].filter(Boolean).join('\n')
+
+    try {
+      await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: spikeLines,
+          parse_mode: 'HTML'
+        })
+      })
+    } catch (err) {
+      console.error('[Telegram] Spike alert dispatch failed:', err)
+    }
+  }
 }
 
 export async function sendTelegramErrorAlert(params: TelegramAlertParams): Promise<boolean> {
@@ -127,6 +175,9 @@ export async function sendTelegramErrorAlert(params: TelegramAlertParams): Promi
         disable_web_page_preview: true
       })
     })
+
+    // Non-blocking spike detector
+    checkAndSendSpikeAlert(token, chatId, params.endpoint).catch((e) => console.error('[SpikeAlert]', e))
 
     return res.ok
   } catch (err) {
@@ -329,22 +380,25 @@ export async function sendTelegramDailyReport(
       minute: '2-digit'
     })
 
+    const estimatedCostUsd = ((totalTokens * 0.00000015)).toFixed(4)
+
     const lines = [
-      `📊 <b>DAILY TRANSCRIPT & USAGE DIGEST</b>`,
+      `📊 <b>Khmer Transcript Daily Recap</b>`,
       `📅 <b>Date:</b> <code>${dateStr}</code>`,
-      `⏰ <b>Scheduled Time:</b> <code>5:30 PM (Cambodia Time)</code>`,
-      `⏱ <b>Generated at:</b> <code>${timeStr}</code>`,
+      `⏰ <b>Scheduled Time:</b> <code>Daily Evening Digest (Phnom Penh)</code>`,
+      `⏱ <b>Dispatched at:</b> <code>${timeStr}</code>`,
       '',
-      `📈 <b>Performance & Volume:</b>`,
-      `• <b>Total Transcripts:</b> <b>${totalJobs}</b> (${successfulJobs} success / ${failedJobs} failed)`,
-      `• <b>Success Rate:</b> <b>${successRate}%</b>`,
+      `📈 <b>Operations & Volume:</b>`,
+      `• <b>Total Transcriptions:</b> <b>${totalJobs}</b> (${successfulJobs} success / ${failedJobs} failed)`,
       `• <b>Audio Processed:</b> <b>${durationFormatted}</b>`,
-      `• <b>Total Words:</b> <b>${totalWords.toLocaleString()}</b> words`,
-      `• <b>Est. Tokens:</b> <b>${totalTokens.toLocaleString()}</b> tokens`,
+      `• <b>Active Users:</b> <b>${activeUserIds.size}</b>`,
+      `• <b>Success Rate:</b> <b>${successRate}%</b>`,
+      `• <b>Est. Gemini Cost:</b> <b>$${estimatedCostUsd}</b>`,
       '',
-      `👥 <b>User Activity:</b>`,
-      `• <b>Active Users Today:</b> <b>${activeUserIds.size}</b>`,
-      `• <b>New Signups Today:</b> <b>${newUsers}</b>`
+      `👥 <b>Community Growth:</b>`,
+      `• <b>New Signups Today:</b> <b>${newUsers}</b>`,
+      `• <b>Total Words Generated:</b> <b>${totalWords.toLocaleString()}</b> words`,
+      `• <b>Estimated Tokens:</b> <b>${totalTokens.toLocaleString()}</b> tokens`
     ]
 
     const modelKeys = Object.keys(modelCounts)
