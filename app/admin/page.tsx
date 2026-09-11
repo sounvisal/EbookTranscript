@@ -76,6 +76,7 @@ type ErrorCluster = {
 type AdminStats = {
   range: {
     active: string
+    isHourly?: boolean
     startTime: string
     endTime: string
     daysCount: number
@@ -873,10 +874,16 @@ export default function AdminDashboardPage() {
               <div>
                 <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
                   <TrendingUp className="h-4 w-4 text-blue-500" />
-                  <span>Transcription Volume by Day</span>
+                  <span>
+                    {stats.range.isHourly
+                      ? (selectedRange === 'yesterday' ? "Yesterday's Hourly Audio Activity" : "Today's 24-Hour Activity Timeline")
+                      : "Transcription Volume by Day"}
+                  </span>
                 </h2>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Daily audio minutes and request volume across all users in active window.
+                  {stats.range.isHourly
+                    ? "Hourly distribution of audio minutes and request traffic (00:00 to 23:00)."
+                    : "Daily audio minutes and request volume across all users in active window."}
                 </p>
               </div>
               <div className="flex items-center gap-4 text-xs font-medium text-slate-500 dark:text-slate-400">
@@ -892,41 +899,62 @@ export default function AdminDashboardPage() {
             </div>
 
             {/* Visual Bar Chart */}
-            <div className="mt-4 flex h-48 items-end gap-1.5 sm:gap-2 pt-6 border-b border-slate-100 dark:border-slate-800">
-              {stats.dailyStats.map((day) => {
-                const maxDur = Math.max(1, ...stats.dailyStats.map((d) => d.duration))
-                const heightPercent = Math.min(100, Math.max(4, Math.round((day.duration / maxDur) * 100)))
-                const isToday = day.date === new Date().toISOString().split('T')[0]
+            <div className="mt-4 flex h-48 items-end justify-between gap-1 sm:gap-2 pt-6 border-b border-slate-100 dark:border-slate-800 px-1">
+              {stats.dailyStats.map((item, idx) => {
+                const maxDur = Math.max(0.1, ...stats.dailyStats.map((d) => d.duration))
+                const heightPercent = item.duration > 0
+                  ? Math.min(100, Math.max(12, Math.round((item.duration / maxDur) * 100)))
+                  : 0
+
+                // In hourly view, highlight current hour if viewing today
+                const currentHourStr = `${String(currentTime.getHours()).padStart(2, '0')}:00`
+                const isCurrentHour = stats.range.isHourly && item.date === currentHourStr && selectedRange === 'today'
+                const isToday = !stats.range.isHourly && item.date === new Date().toISOString().split('T')[0]
 
                 return (
                   <div
-                    key={day.date}
-                    className="group relative flex flex-1 flex-col items-center h-full justify-end cursor-pointer"
+                    key={item.date || idx}
+                    className="group relative flex flex-1 max-w-7 sm:max-w-9 flex-col items-center h-full justify-end cursor-pointer"
                   >
+                    {/* Tooltip on Hover */}
                     <div className="absolute -top-12 z-20 hidden group-hover:flex flex-col items-center rounded-lg bg-slate-950 text-white px-2.5 py-1 text-[10px] shadow-xl whitespace-nowrap pointer-events-none">
-                      <span className="font-bold">{day.date}</span>
-                      <span>{day.duration.toFixed(1)} mins | {day.requests} reqs</span>
+                      <span className="font-bold">{item.date}</span>
+                      <span>{item.duration.toFixed(1)} mins | {item.requests} reqs</span>
                     </div>
 
                     <div
-                      style={{ height: `${heightPercent}%` }}
+                      style={{ height: heightPercent > 0 ? `${heightPercent}%` : '4px' }}
                       className={`w-full rounded-t-md transition-all group-hover:brightness-125 ${
-                        isToday
-                          ? 'bg-gradient-to-t from-blue-600 to-indigo-500 shadow-sm shadow-blue-500/40'
-                          : day.duration > 0
-                            ? 'bg-blue-500/70 dark:bg-blue-500/50'
-                            : 'bg-slate-200 dark:bg-slate-800 h-[3px]!'
+                        isCurrentHour || isToday
+                          ? 'bg-gradient-to-t from-blue-600 to-indigo-500 shadow-sm shadow-blue-500/40 ring-1 ring-blue-400'
+                          : item.duration > 0
+                            ? 'bg-gradient-to-t from-blue-500 to-sky-400 shadow-sm shadow-blue-500/20'
+                            : 'bg-slate-200 dark:bg-slate-800/80'
                       }`}
                     />
                   </div>
                 )
               })}
             </div>
-            <div className="flex justify-between text-[10px] font-mono text-slate-400">
-              <span>{stats.dailyStats[0]?.date || 'Past'}</span>
-              <span>{stats.dailyStats[Math.floor(stats.dailyStats.length / 2)]?.date || 'Mid'}</span>
-              <span className="text-blue-500 font-bold">{stats.dailyStats[stats.dailyStats.length - 1]?.date || 'Today'}</span>
-            </div>
+
+            {/* X-axis labels */}
+            {stats.range.isHourly ? (
+              <div className="flex justify-between text-[10px] font-mono text-slate-400 px-1">
+                <span>00:00</span>
+                <span>04:00</span>
+                <span>08:00</span>
+                <span>12:00</span>
+                <span>16:00</span>
+                <span>20:00</span>
+                <span>23:00</span>
+              </div>
+            ) : (
+              <div className="flex justify-between text-[10px] font-mono text-slate-400 px-1">
+                <span>{stats.dailyStats[0]?.date || 'Past'}</span>
+                <span>{stats.dailyStats[Math.floor(stats.dailyStats.length / 2)]?.date || 'Mid'}</span>
+                <span className="text-blue-500 font-bold">{stats.dailyStats[stats.dailyStats.length - 1]?.date || 'Today'}</span>
+              </div>
+            )}
           </div>
 
           {/* Grid of 3 Distribution Breakdowns: Languages, Input Types, Peak Hours */}

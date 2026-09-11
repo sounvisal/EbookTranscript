@@ -149,18 +149,33 @@ export async function GET(req: Request) {
     const inputTypeMap: Record<string, number> = {}
     const formatMap: Record<string, number> = {}
     const hourlyMap: number[] = new Array(24).fill(0)
+    const isHourly = range === 'today' || range === 'yesterday' || daysCount === 1
 
-    // Build day buckets according to range
-    const bucketDays = Math.min(60, Math.max(1, daysCount))
-    for (let i = bucketDays - 1; i >= 0; i--) {
-      const d = new Date(endTime.getTime() - i * 24 * 60 * 60 * 1000)
-      const dateKey = d.toISOString().split('T')[0]
-      dailyTokenMap[dateKey] = {
-        date: dateKey,
-        tokens: 0,
-        requests: 0,
-        duration: 0,
-        errors: 0
+    if (isHourly) {
+      // Build 24 hourly buckets from 00:00 to 23:00
+      for (let h = 0; h < 24; h++) {
+        const hourStr = `${String(h).padStart(2, '0')}:00`
+        dailyTokenMap[hourStr] = {
+          date: hourStr,
+          tokens: 0,
+          requests: 0,
+          duration: 0,
+          errors: 0
+        }
+      }
+    } else {
+      // Build day buckets according to range
+      const bucketDays = Math.min(60, Math.max(1, daysCount))
+      for (let i = bucketDays - 1; i >= 0; i--) {
+        const d = new Date(endTime.getTime() - i * 24 * 60 * 60 * 1000)
+        const dateKey = d.toISOString().split('T')[0]
+        dailyTokenMap[dateKey] = {
+          date: dateKey,
+          tokens: 0,
+          requests: 0,
+          duration: 0,
+          errors: 0
+        }
       }
     }
 
@@ -195,12 +210,21 @@ export async function GET(req: Request) {
       modelUsageMap[m].tokens += metric.totalTokens
       modelUsageMap[m].duration += metricDuration
 
-      // Daily breakdown
-      const dateKey = metric.createdAt.toISOString().split('T')[0]
-      if (dailyTokenMap[dateKey]) {
-        dailyTokenMap[dateKey].tokens += metric.totalTokens
-        dailyTokenMap[dateKey].requests += 1
-        dailyTokenMap[dateKey].duration += metricDuration / 60
+      // Chart breakdown
+      if (isHourly) {
+        const hourKey = `${String(hour).padStart(2, '0')}:00`
+        if (dailyTokenMap[hourKey]) {
+          dailyTokenMap[hourKey].tokens += metric.totalTokens
+          dailyTokenMap[hourKey].requests += 1
+          dailyTokenMap[hourKey].duration += metricDuration / 60
+        }
+      } else {
+        const dateKey = metric.createdAt.toISOString().split('T')[0]
+        if (dailyTokenMap[dateKey]) {
+          dailyTokenMap[dateKey].tokens += metric.totalTokens
+          dailyTokenMap[dateKey].requests += 1
+          dailyTokenMap[dateKey].duration += metricDuration / 60
+        }
       }
     }
 
@@ -216,8 +240,10 @@ export async function GET(req: Request) {
       ? ((totalProcessedCount / (totalProcessedCount + errorCountTotal)) * 100).toFixed(1)
       : '100.0'
 
-    // Format daily data array for charts
-    const dailyStats = Object.values(dailyTokenMap).sort((a, b) => b.date.localeCompare(a.date))
+    // Format daily data array for charts in chronological left-to-right order
+    const dailyStats = isHourly
+      ? Object.values(dailyTokenMap)
+      : Object.values(dailyTokenMap).sort((a, b) => a.date.localeCompare(b.date))
 
     // Languages breakdown
     const totalWithLang = languageGroups.reduce((sum, g) => sum + g._count.id, 0)
@@ -369,6 +395,7 @@ export async function GET(req: Request) {
     return NextResponse.json({
       range: {
         active: range,
+        isHourly,
         startTime: startTime.toISOString(),
         endTime: endTime.toISOString(),
         daysCount
