@@ -2,18 +2,20 @@
 
 import { useCallback, useRef, useState } from 'react'
 import { useDropzone } from 'react-dropzone'
-import { FileAudio, AlertCircle, Check, Copy, Download, Loader2, X, PlayCircle, Layers, Sparkles, RefreshCw } from 'lucide-react'
+import { useSession } from 'next-auth/react'
+import { FileAudio, AlertCircle, Check, Copy, Download, Loader2, X, PlayCircle, Layers, Sparkles, RefreshCw, ShieldCheck } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { MAX_MEDIA_UPLOAD_BYTES, MAX_MEDIA_UPLOAD_MB } from '@/lib/uploadLimits'
 import { getPlainTranscriptText, type TranscriptSegment } from '@/lib/transcript'
-import { downloadTxt } from '@/lib/download'
+import { downloadTxt, downloadFile } from '@/lib/download'
 import { transcribeWithProgress } from '@/lib/transcribeClient'
 import ReportErrorButton from '@/components/common/ReportErrorButton'
 import AdvancedOptionsDrawer from './AdvancedOptionsDrawer'
 import { useTranscriptStore } from '@/store/transcriptStore'
 
-// Max files a user can queue at once
-const MAX_BATCH_FILES = 10
+// Role-based batch limits: 20 for standard users, 50 for admins
+const USER_BATCH_LIMIT = 20
+const ADMIN_BATCH_LIMIT = 50
 const STAGGER_MS = 400
 // Process up to 3 files concurrently in parallel across the rotated Gemini keys
 const MAX_CONCURRENT_JOBS = 3
@@ -50,6 +52,10 @@ function delay(ms: number) {
 }
 
 export default function BatchUploadZone() {
+  const { data: session } = useSession()
+  const isAdmin = session?.user?.role === 'admin'
+  const maxBatchFiles = isAdmin ? ADMIN_BATCH_LIMIT : USER_BATCH_LIMIT
+
   const [jobs, setJobs] = useState<BatchJob[]>([])
   const [running, setRunning] = useState(false)
   const [copiedId, setCopiedId] = useState<string | null>(null)
@@ -62,8 +68,9 @@ export default function BatchUploadZone() {
   const onDrop = useCallback((acceptedFiles: File[]) => {
     if (!acceptedFiles?.length) return
     setJobs((current) => {
-      const remainingSlots = MAX_BATCH_FILES - current.length
-      const incoming = acceptedFiles.slice(0, Math.max(0, remainingSlots)).map((file) => ({
+      const remainingSlots = maxBatchFiles - current.length
+      if (remainingSlots <= 0) return current
+      const incoming = acceptedFiles.slice(0, remainingSlots).map((file) => ({
         id: createId(),
         file,
         status: 'queued' as BatchJobStatus,
@@ -71,7 +78,7 @@ export default function BatchUploadZone() {
       }))
       return [...current, ...incoming]
     })
-  }, [])
+  }, [maxBatchFiles])
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -212,6 +219,22 @@ export default function BatchUploadZone() {
     downloadTxt(plainText, job.file.name)
   }
 
+  const handleDownloadAll = () => {
+    const completed = jobs.filter((job) => job.status === 'complete' && job.transcript)
+    if (!completed.length) return
+    const combinedText = completed
+      .map((job) => {
+        const plainText = getPlainTranscriptText(job.transcript?.text || '', job.transcript?.segments)
+        return `========================================\nFILE: ${job.file.name}\nLANGUAGE: ${job.transcript?.language || 'Auto'}\n========================================\n\n${plainText}\n\n`
+      })
+      .join('\n')
+    downloadFile(
+      combinedText,
+      `batch_transcripts_combined_${new Date().toISOString().split('T')[0]}.txt`,
+      'text/plain;charset=utf-8'
+    )
+  }
+
   const completedCount = jobs.filter((job) => job.status === 'complete').length
   const hasPending = jobs.some((job) => job.status === 'queued' || job.status === 'error')
 
@@ -230,22 +253,47 @@ export default function BatchUploadZone() {
         <span className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-b from-purple-50 to-purple-100/80 dark:from-purple-950/80 dark:to-purple-900/40 text-purple-600 dark:text-purple-400 shadow-xs ring-1 ring-purple-500/20 transition-transform duration-300 group-hover:scale-110">
           <Layers className="h-7 w-7" strokeWidth={1.75} />
         </span>
-        <h2 className="text-lg sm:text-xl font-bold tracking-tight text-slate-900 dark:text-white">
-          {isDragActive ? 'Drop batch files here' : 'Queue up to 10 files'}
-        </h2>
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          <h2 className="text-lg sm:text-xl font-bold tracking-tight text-slate-900 dark:text-white">
+            {isDragActive ? 'Drop batch files here' : `Queue up to ${maxBatchFiles} files`}
+          </h2>
+          {isAdmin ? (
+            <span className="flex items-center gap-1 rounded-full bg-purple-100 dark:bg-purple-950/80 border border-purple-300/60 dark:border-purple-800 px-2.5 py-0.5 text-[11px] font-bold text-purple-700 dark:text-purple-300 shadow-xs">
+              <ShieldCheck className="h-3 w-3" />
+              <span>Admin Limit: 50</span>
+            </span>
+          ) : (
+            <span className="rounded-full bg-slate-100 dark:bg-slate-800 px-2 py-0.5 text-[10px] font-semibold text-slate-600 dark:text-slate-400">
+              Standard: 20
+            </span>
+          )}
+        </div>
         <p className="mt-1.5 text-xs sm:text-sm text-slate-500 dark:text-slate-400">
           Drag and drop multiple audio or video files to transcribe in parallel
         </p>
         <p className="mt-3 text-[11px] font-medium text-slate-400 dark:text-slate-500">
-          Up to {MAX_MEDIA_UPLOAD_MB} MB per file · Rotated multi-key concurrent processing
+          Up to {MAX_MEDIA_UPLOAD_MB} MB per file · 3 concurrent parallel worker streams
         </p>
       </div>
 
       {jobs.length > 0 && (
-        <div className="flex items-center justify-between px-1 text-xs font-semibold text-slate-600 dark:text-slate-400">
-          <span>
-            {jobs.length} of {MAX_BATCH_FILES} files · {completedCount} completed
-          </span>
+        <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs font-semibold text-slate-600 dark:text-slate-400">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <span>
+              {jobs.length} of {maxBatchFiles} files · {completedCount} completed
+            </span>
+            {completedCount > 1 && (
+              <button
+                type="button"
+                onClick={handleDownloadAll}
+                className="flex items-center gap-1.5 rounded-lg bg-purple-50 dark:bg-purple-950/60 border border-purple-200/80 dark:border-purple-800/60 px-2.5 py-1 text-[11px] font-semibold text-purple-700 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-900/60 transition-colors cursor-pointer"
+                title="Download all completed transcripts as a single combined file"
+              >
+                <Download className="h-3.5 w-3.5" />
+                <span>Download All ({completedCount})</span>
+              </button>
+            )}
+          </div>
           <button
             onClick={clearAll}
             disabled={running}
@@ -257,7 +305,7 @@ export default function BatchUploadZone() {
       )}
 
       {/* Queue items */}
-      <div className="flex flex-col gap-3">
+      <div className={`flex flex-col gap-3 ${jobs.length > 5 ? 'max-h-[640px] overflow-y-auto pr-1' : ''}`}>
         <AnimatePresence>
           {jobs.map((job) => (
             <motion.div
