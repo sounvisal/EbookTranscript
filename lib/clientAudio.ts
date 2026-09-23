@@ -14,30 +14,62 @@
 export async function getMediaDuration(file: File): Promise<number> {
   if (typeof window === 'undefined') return 0
   return new Promise((resolve) => {
-    try {
-      const url = URL.createObjectURL(file)
-      const isVideo = file.type.startsWith('video/') || /\.(mp4|mov|webm|m4v|mkv|avi)$/i.test(file.name)
-      const element = isVideo
-        ? document.createElement('video')
-        : document.createElement('audio')
-      element.preload = 'metadata'
-      element.onloadedmetadata = () => {
-        const d = element.duration
-        URL.revokeObjectURL(url)
-        resolve(Number.isFinite(d) && d > 0 ? Math.round(d * 10) / 10 : 0)
+    let resolved = false
+    let url = ''
+
+    const cleanup = (d: number) => {
+      if (resolved) return
+      resolved = true
+      clearTimeout(timer)
+      if (url) {
+        try { URL.revokeObjectURL(url) } catch {}
       }
-      element.onerror = () => {
-        URL.revokeObjectURL(url)
-        resolve(0)
-      }
-      element.src = url
-      setTimeout(() => {
-        URL.revokeObjectURL(url)
-        resolve(0)
-      }, 3000)
-    } catch {
-      resolve(0)
+      resolve(Number.isFinite(d) && d > 0 ? Math.round(d * 10) / 10 : 0)
     }
+
+    try {
+      url = URL.createObjectURL(file)
+    } catch {
+      return resolve(0)
+    }
+
+    const timer = setTimeout(() => {
+      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+      if (AudioCtx && file.size < 60 * 1024 * 1024) {
+        file.arrayBuffer().then((buf) => {
+          const ctx = new AudioCtx()
+          return ctx.decodeAudioData(buf).then((decoded) => {
+            ctx.close().catch(() => {})
+            cleanup(decoded.duration)
+          }).catch(() => {
+            ctx.close().catch(() => {})
+            cleanup(0)
+          })
+        }).catch(() => cleanup(0))
+      } else {
+        cleanup(0)
+      }
+    }, 8000)
+
+    const isVideo = file.type.startsWith('video/') || /\.(mp4|mov|webm|m4v|mkv|avi)$/i.test(file.name)
+    const element = isVideo
+      ? document.createElement('video')
+      : document.createElement('audio')
+
+    element.preload = 'metadata'
+
+    const checkDuration = () => {
+      const d = element.duration
+      if (Number.isFinite(d) && d > 0 && d !== Infinity) {
+        cleanup(d)
+      }
+    }
+
+    element.onloadedmetadata = checkDuration
+    element.ondurationchange = checkDuration
+    element.oncanplay = checkDuration
+    element.onerror = () => cleanup(0)
+    element.src = url
   })
 }
 

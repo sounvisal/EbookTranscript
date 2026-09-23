@@ -3,7 +3,7 @@ import { prepareMediaForUpload } from '@/lib/clientAudio'
 import { useTranscriptStore } from '@/store/transcriptStore'
 
 export type TranscribeProgressEvent =
-  | { type: 'status'; phase: 'uploading' | 'processing'; duration?: number }
+  | { type: 'status'; phase: 'uploading' | 'processing'; duration?: number; message?: string }
   | { type: 'progress'; progress: number }
 
 export type TranscribeResult = {

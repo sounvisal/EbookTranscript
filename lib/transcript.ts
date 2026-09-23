@@ -140,8 +140,8 @@ function parseLooseStructuredTranscript(value: string): StructuredTranscriptPayl
     const text = decodeLooseJsonString(textMatch[1]).trim()
     if (!text) continue
 
-    const startMatch = block.match(/"start"\s*:\s*("([^"]+)"|([0-9.]+))/i)
-    const endMatch = block.match(/"end"\s*:\s*("([^"]+)"|([0-9.]+))/i)
+    const startMatch = block.match(/"(?:start|start_time|startTime)"\s*:\s*("([^"]+)"|([0-9.:]+))/i)
+    const endMatch = block.match(/"(?:end|end_time|endTime)"\s*:\s*("([^"]+)"|([0-9.:]+))/i)
 
     const rawStart = startMatch ? (startMatch[2] ?? startMatch[3]) : 0
     const rawEnd = endMatch ? (endMatch[2] ?? endMatch[3]) : undefined
@@ -164,8 +164,8 @@ function parseLooseStructuredTranscript(value: string): StructuredTranscriptPayl
       const text = decodeLooseJsonString(textMatch[1]).trim()
       if (!text) continue
 
-      const startMatch = block.match(/"start"\s*:\s*("([^"]+)"|([0-9.]+))/i)
-      const endMatch = block.match(/"end"\s*:\s*("([^"]+)"|([0-9.]+))/i)
+      const startMatch = block.match(/"(?:start|start_time|startTime)"\s*:\s*("([^"]+)"|([0-9.:]+))/i)
+      const endMatch = block.match(/"(?:end|end_time|endTime)"\s*:\s*("([^"]+)"|([0-9.:]+))/i)
 
       segments.push({
         start: startMatch ? cleanLooseJsonScalar(startMatch[2] ?? startMatch[3]) : 0,
@@ -273,7 +273,7 @@ function splitLongText(text: string) {
 
 export function parseTimestampToSeconds(value: string) {
   const normalizedValue = value.trim().replace(',', '.')
-  if (!/^(?:\d{1,2}:)?\d{1,2}:\d{2}(?:\.\d{1,3})?$/.test(normalizedValue)) {
+  if (!/^(?:(?:\d{1,2}:)?\d{1,2}:)?\d{1,2}(?:\.\d+)?$/.test(normalizedValue) || !normalizedValue.includes(':')) {
     return null
   }
 

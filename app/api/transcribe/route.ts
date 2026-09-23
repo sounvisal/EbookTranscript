@@ -18,7 +18,8 @@ import {
   extractTimestampedSegments,
   getPlainTranscriptText,
   normalizeTranscriptSegments,
-  parseStructuredTranscriptText
+  parseStructuredTranscriptText,
+  parseTimestampToSeconds
 } from '@/lib/transcript'
 import { MAX_MEDIA_UPLOAD_BYTES } from '@/lib/uploadLimits'
 import { trackUsage, trackError } from '@/lib/telemetry'
@@ -196,11 +197,19 @@ function parseDurationSeconds(durationText?: string) {
 // so far. Combined with the total media duration this yields real progress.
 function extractLatestEndSeconds(text: string) {
   let latest = 0
-  const pattern = /"end"\s*:\s*"?(\d+(?:\.\d+)?)/g
+  const pattern = /"(?:end|end_time|endTime)"\s*:\s*(?:"([^"]+)"|([0-9.:]+))/g
   let match: RegExpExecArray | null
 
   while ((match = pattern.exec(text)) !== null) {
-    const value = Number(match[1])
+    const raw = match[1] || match[2]
+    if (!raw) continue
+    let value = 0
+    if (raw.includes(':')) {
+      const parsed = parseTimestampToSeconds(raw)
+      if (parsed !== null) value = parsed
+    } else {
+      value = Number(raw)
+    }
     if (Number.isFinite(value) && value > latest) {
       latest = value
     }
@@ -504,7 +513,8 @@ const BASE_TRANSCRIPTION_PROMPT = [
   '1. AUTOMATIC LANGUAGE DETECTION: Automatically detect the spoken language. If the audio is in Khmer, set language to "Khmer". If in English, set language to "English". If bilingual mixed speech, set language to "Khmer / English".',
   '2. VERBATIM SPEECH ACCURACY: Transcribe every spoken word accurately in the native script. For Khmer speech, output clean Khmer script (អក្សរខ្មែរ) with proper spacing and spelling. For English speech, output English.',
   '3. HIGH-SENSITIVITY ACOUSTIC EXTRACTION: Listen with maximum sensitivity to all audio channels. Even if the voice is quiet, muffled, whispered, speaking fast, singing, chanting, talking over an intro, or partially masked by background music, sound effects, beats, or ambient noise, you MUST detect and transcribe all spoken words verbatim.',
-  '4. COMPLETE TRANSCRIPTION: Transcribe the entire duration verbatim from start to finish. Break into consecutive timestamped segments.',
+  '4. COMPLETE RECORDING CONTINUITY: Transcribe the entire duration verbatim from start to finish without stopping. Audio recordings often start with corporate advertisements, sponsor intros, or theme music followed by music interludes or pauses before the main content begins. You MUST continue listening and transcribing past any music breaks, interludes, or pauses from 0:00 all the way to the absolute end of the media.',
+  '5. NUMERIC SECONDS TIMESTAMPS: Every start and end timestamp in "segments" must be a raw number in seconds (e.g. 0.0, 4.5, 38.2, 145.6). Do NOT use formatted colon strings like "2:30".',
   'Format strictly as JSON with this exact shape:',
   '{"language":"Khmer","text":"Full continuous transcript text here","segments":[{"start":0.0,"end":4.5,"text":"phrase"}]}',
   'Ensure "text" contains the complete continuous transcript, and "segments" contains all timestamped phrases.',
@@ -533,7 +543,8 @@ function buildTranscriptionPrompt(options?: TranscribeOptions): string {
     langInstruction,
     '2. VERBATIM SPEECH ACCURACY: Transcribe every spoken word accurately in the native script. For Khmer speech, output clean Khmer script (អក្សរខ្មែរ) with proper spacing and spelling. For English speech, output English.',
     '3. HIGH-SENSITIVITY ACOUSTIC EXTRACTION: Listen with maximum sensitivity to all audio channels. Even if the voice is quiet, muffled, whispered, speaking fast, singing, chanting, talking over an intro, or partially masked by background music, sound effects, beats, or ambient noise, you MUST detect and transcribe all spoken words verbatim.',
-    '4. COMPLETE TRANSCRIPTION: Transcribe the entire duration verbatim from start to finish. Break into consecutive timestamped segments.'
+    '4. COMPLETE RECORDING CONTINUITY: Transcribe the entire duration verbatim from start to finish without stopping. Audio recordings often start with corporate advertisements, sponsor intros, or theme music followed by music interludes or pauses before the main content begins. You MUST continue listening and transcribing past any music breaks, interludes, or pauses from 0:00 all the way to the absolute end of the media.',
+    '5. NUMERIC SECONDS TIMESTAMPS: Every start and end timestamp in "segments" must be a raw number in seconds (e.g. 0.0, 4.5, 38.2, 145.6). Do NOT use formatted colon strings like "2:30".'
   ]
 
   if (diarization) {
@@ -575,7 +586,7 @@ type TranscriptResultPayload = {
 }
 
 type ProgressEvent =
-  | { type: 'status'; phase: 'uploading' | 'processing'; duration?: number }
+  | { type: 'status'; phase: 'uploading' | 'processing'; duration?: number; message?: string }
   | { type: 'progress'; progress: number }
   | { type: 'result' } & TranscriptResultPayload
   | { type: 'error'; error: string }
@@ -788,7 +799,28 @@ async function transcribeWithKey(
       }
     }
 
-    const totalDuration = audioInput.durationSeconds || metadataDuration
+    let totalDuration = audioInput.durationSeconds || metadataDuration
+
+    // If total duration is unknown but we have a fileUri on Gemini, probe duration quickly
+    if (totalDuration <= 0 && fileUri) {
+      try {
+        const probeRes = await streamGeminiTranscript(apiKey, {
+          modelName: 'gemini-2.5-flash',
+          prompt: 'What is the total duration of this audio file in seconds? Return strictly JSON: {"duration": 123.4}',
+          mimeType: mediaMimeType,
+          fileUri
+        })
+        const match = probeRes.match(/"duration"\s*:\s*([0-9.]+)/i)
+        if (match) {
+          const val = Number(match[1])
+          if (Number.isFinite(val) && val > 0) {
+            totalDuration = val
+          }
+        }
+      } catch (probeErr) {
+        console.warn('Duration probe skipped:', probeErr)
+      }
+    }
 
     emit({ type: 'status', phase: 'processing', duration: totalDuration })
 
@@ -819,23 +851,103 @@ async function transcribeWithKey(
         )
 
         const parsedTranscript = parseGeminiTranscriptResponse(responseText)
-        emit({ type: 'progress', progress: 100 })
 
-        // Extract maximum segment end timestamp as a rock-solid duration fallback
-        const maxSegmentEnd = parsedTranscript.segments?.reduce((max, s) => {
+        // Accumulate segments across initial pass and any necessary continuation passes
+        let accumulatedSegments = [...(parsedTranscript.segments || [])]
+        let currentMaxEnd = accumulatedSegments.reduce((max, s) => {
           const end = typeof s.end === 'number' && Number.isFinite(s.end) ? s.end : (typeof s.start === 'number' && Number.isFinite(s.start) ? s.start : 0)
           return Math.max(max, end)
-        }, 0) || 0
+        }, 0)
 
-        const wordCount = parsedTranscript.text ? parsedTranscript.text.split(/\s+/).filter(Boolean).length : 0
+        // AUTOMATIC CONTINUATION LOOP:
+        // If the media is longer than 50 seconds and the model stopped early (e.g. at an intro ad,
+        // musical pause, or token limit) before the end of the recording, automatically issue
+        // continuation requests from the last detected timestamp to capture all remaining speech.
+        let continuationPass = 0
+        const MAX_CONTINUATION_PASSES = 4
+
+        while (
+          totalDuration > 50 &&
+          currentMaxEnd > 0 &&
+          currentMaxEnd < totalDuration - 20 &&
+          continuationPass < MAX_CONTINUATION_PASSES
+        ) {
+          continuationPass++
+          const startOffset = Math.floor(currentMaxEnd)
+          emit({
+            type: 'status',
+            phase: 'processing',
+            message: `Continuing transcription past pause (${Math.round(currentMaxEnd)}s / ${Math.round(totalDuration)}s)...`
+          })
+
+          const contPrompt = [
+            `You are continuing the transcription of this audio media. Total media duration is ${Math.round(totalDuration)} seconds.`,
+            `Dialogue from 0:00 up to ${startOffset} seconds has already been transcribed.`,
+            `Now listen carefully and transcribe ALL remaining spoken dialogue and speech from ${startOffset} seconds to the very end (${Math.round(totalDuration)} seconds).`,
+            'Do not stop at music interludes, sound effects, or pauses. Transcribe all remaining speech verbatim.',
+            'Format strictly as JSON with this exact shape:',
+            `{"language":"${parsedTranscript.language || 'auto'}","segments":[{"start":${startOffset},"end":${startOffset + 5},"text":"phrase"}]}`,
+            'Crucial: start and end must be raw numeric seconds (e.g. 75.4), NOT formatted strings with colons.'
+          ].join(' ')
+
+          try {
+            const contResponseText = await withGeminiRetry(
+              () =>
+                streamGeminiTranscript(apiKey, {
+                  modelName,
+                  prompt: contPrompt,
+                  mimeType: mediaMimeType,
+                  ...(fileUri ? { fileUri } : { inlineData: audioInput.buffer }),
+                  onText: (accumulated) => {
+                    if (totalDuration <= 0) return
+                    const latestEnd = extractLatestEndSeconds(accumulated)
+                    const effectiveEnd = Math.max(currentMaxEnd, latestEnd)
+                    const percent = Math.min(99, Math.round((effectiveEnd / totalDuration) * 100))
+                    if (percent > lastProgress) {
+                      lastProgress = percent
+                      emit({ type: 'progress', progress: percent })
+                    }
+                  }
+                }),
+              `transcription continuation pass ${continuationPass} (${modelName})`
+            )
+
+            const contParsed = parseGeminiTranscriptResponse(contResponseText)
+            const newSegments = contParsed.segments?.filter((s) => s.start >= currentMaxEnd - 2) || []
+
+            if (newSegments.length === 0) {
+              break
+            }
+
+            accumulatedSegments.push(...newSegments)
+            const newMaxEnd = accumulatedSegments.reduce((max, s) => {
+              const end = typeof s.end === 'number' && Number.isFinite(s.end) ? s.end : s.start
+              return Math.max(max, end)
+            }, currentMaxEnd)
+
+            if (newMaxEnd <= currentMaxEnd) {
+              break
+            }
+            currentMaxEnd = newMaxEnd
+          } catch (contErr) {
+            console.warn(`Continuation pass ${continuationPass} failed; returning gathered segments:`, contErr)
+            break
+          }
+        }
+
+        emit({ type: 'progress', progress: 100 })
+
+        const maxSegmentEnd = currentMaxEnd
+        const finalSegments = normalizeTranscriptSegments(accumulatedSegments)
+        const textFromSegments = finalSegments.map((s) => s.text).join('\n\n')
+        let finalText = textFromSegments || parsedTranscript.text || ''
+
+        const wordCount = finalText ? finalText.split(/\s+/).filter(Boolean).length : 0
         const estimatedFromWords = wordCount > 0 ? Math.max(1, Math.round(wordCount / 2.3)) : 0
 
         const finalDuration = totalDuration > 0
           ? totalDuration
           : (maxSegmentEnd > 0 ? Math.round(maxSegmentEnd * 10) / 10 : estimatedFromWords)
-
-        let finalText = parsedTranscript.text
-        let finalSegments = parsedTranscript.segments
 
         if (!finalText && (!finalSegments || finalSegments.length === 0)) {
           if (modelIndex < models.length - 1) {
@@ -845,13 +957,21 @@ async function transcribeWithKey(
           }
 
           finalText = '[No spoken dialogue detected in media]'
-          finalSegments = [
+          const emptySegments = [
             {
               start: 0,
               end: finalDuration > 0 ? finalDuration : 5,
               text: '[No spoken dialogue detected in media]'
             }
           ]
+
+          return {
+            text: finalText,
+            segments: emptySegments,
+            language: parsedTranscript.language || 'auto',
+            duration: finalDuration,
+            source: sourceName || modelName
+          }
         }
 
         return {
