@@ -4,11 +4,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import ffmpegPath from 'ffmpeg-static'
 
-// Audio settings tuned for speech transcription. Mono + 16kHz MP3 is universally
-// supported by ffmpeg and Google Gemini on all platforms.
+// Audio settings tuned for speech transcription. Mono + 24kHz 128k MP3 preserves
+// speech clarity, sibilance, and quiet dialogue over background audio.
 const TARGET_CHANNELS = 1
-const TARGET_SAMPLE_RATE = 16000
-const TARGET_BITRATE = '32k'
+const TARGET_SAMPLE_RATE = 24000
+const TARGET_BITRATE = '128k'
 const TARGET_CODEC = 'libmp3lame'
 const TARGET_FORMAT = 'mp3'
 const TARGET_EXTENSION = 'mp3'

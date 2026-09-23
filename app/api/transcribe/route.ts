@@ -25,7 +25,7 @@ import { trackUsage, trackError } from '@/lib/telemetry'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
-export const maxDuration = 60
+export const maxDuration = 300
 
 const MAX_LOCAL_FILE_BYTES = MAX_MEDIA_UPLOAD_BYTES
 const MAX_REMOTE_FILE_BYTES = MAX_MEDIA_UPLOAD_BYTES
@@ -62,6 +62,7 @@ export type TranscribeOptions = {
   customVocabulary?: string[]
   speakerDiarization?: boolean
   languagePreference?: 'auto' | 'khmer' | 'english' | 'bilingual'
+  highSensitivity?: boolean
 }
 
 type MediaInput = {
@@ -502,11 +503,12 @@ const BASE_TRANSCRIPTION_PROMPT = [
   'Listen carefully to the entire media from the very beginning (0:00) to the absolute end.',
   '1. AUTOMATIC LANGUAGE DETECTION: Automatically detect the spoken language. If the audio is in Khmer, set language to "Khmer". If in English, set language to "English". If bilingual mixed speech, set language to "Khmer / English".',
   '2. VERBATIM SPEECH ACCURACY: Transcribe every spoken word accurately in the native script. For Khmer speech, output clean Khmer script (អក្សរខ្មែរ) with proper spacing and spelling. For English speech, output English.',
-  '3. BACKGROUND AUDIO & NOISE HANDLING: Even if background music, sound effects, TikTok audio tracks, ambient noise, fast speaking, or colloquial dialogue are present, transcribe all audible speech verbatim.',
+  '3. HIGH-SENSITIVITY ACOUSTIC EXTRACTION: Listen with maximum sensitivity to all audio channels. Even if the voice is quiet, muffled, whispered, speaking fast, singing, chanting, talking over an intro, or partially masked by background music, sound effects, beats, or ambient noise, you MUST detect and transcribe all spoken words verbatim.',
   '4. COMPLETE TRANSCRIPTION: Transcribe the entire duration verbatim from start to finish. Break into consecutive timestamped segments.',
-  'Format strictly as JSON:',
-  '{"language":"Khmer","segments":[{"start":0.0,"end":4.5,"text":"phrase"}]}',
-  'If there is absolutely no spoken audio at all, return {"language":"auto","segments":[]}.'
+  'Format strictly as JSON with this exact shape:',
+  '{"language":"Khmer","text":"Full continuous transcript text here","segments":[{"start":0.0,"end":4.5,"text":"phrase"}]}',
+  'Ensure "text" contains the complete continuous transcript, and "segments" contains all timestamped phrases.',
+  'Only return empty segments if the audio is 100% complete dead silence or pure instrumental music with absolutely zero human vocal sounds or words.'
 ].join(' ')
 
 function buildTranscriptionPrompt(options?: TranscribeOptions): string {
@@ -530,7 +532,7 @@ function buildTranscriptionPrompt(options?: TranscribeOptions): string {
     'Listen carefully to the entire media from the very beginning (0:00) to the absolute end.',
     langInstruction,
     '2. VERBATIM SPEECH ACCURACY: Transcribe every spoken word accurately in the native script. For Khmer speech, output clean Khmer script (អក្សរខ្មែរ) with proper spacing and spelling. For English speech, output English.',
-    '3. BACKGROUND AUDIO & NOISE HANDLING: Even if background music, sound effects, TikTok audio tracks, ambient noise, fast speaking, or colloquial dialogue are present, transcribe all audible speech verbatim.',
+    '3. HIGH-SENSITIVITY ACOUSTIC EXTRACTION: Listen with maximum sensitivity to all audio channels. Even if the voice is quiet, muffled, whispered, speaking fast, singing, chanting, talking over an intro, or partially masked by background music, sound effects, beats, or ambient noise, you MUST detect and transcribe all spoken words verbatim.',
     '4. COMPLETE TRANSCRIPTION: Transcribe the entire duration verbatim from start to finish. Break into consecutive timestamped segments.'
   ]
 
@@ -546,10 +548,17 @@ function buildTranscriptionPrompt(options?: TranscribeOptions): string {
     )
   }
 
+  if (options.highSensitivity) {
+    promptParts.push(
+      '7. MAXIMUM AUDIO SENSITIVITY ACTIVE: The recording contains quiet dialogue, whispering, lyrics, or speech over background music/beats. Boost vocal channel detection and transcribe all audible utterances verbatim without omitting any words.'
+    )
+  }
+
   promptParts.push(
-    'Format strictly as JSON:',
-    '{"language":"Khmer","segments":[{"start":0.0,"end":4.5,"text":"phrase"}]}',
-    'If there is absolutely no spoken audio at all, return {"language":"auto","segments":[]}.'
+    'Format strictly as JSON with this exact shape:',
+    '{"language":"Khmer","text":"Full continuous transcript text here","segments":[{"start":0.0,"end":4.5,"text":"phrase"}]}',
+    'Ensure "text" contains the complete continuous transcript, and "segments" contains all timestamped phrases.',
+    'Only return empty segments if the audio is 100% complete dead silence or pure instrumental music with absolutely zero human vocal sounds or words.'
   )
 
   return promptParts.join(' ')
@@ -829,6 +838,12 @@ async function transcribeWithKey(
         let finalSegments = parsedTranscript.segments
 
         if (!finalText && (!finalSegments || finalSegments.length === 0)) {
+          if (modelIndex < models.length - 1) {
+            console.warn(`Model "${modelName}" detected no spoken dialogue; trying next fallback model (${models[modelIndex + 1]}) with acoustic sensitivity override...`)
+            promptText = `${promptText} ACOUSTIC SENSITIVITY OVERRIDE: Human speech, dialogue, lyrics, or voiceover is present in this media. Isolate voice from background music, instruments, beats, or ambient noise, and transcribe all spoken words verbatim into the native script.`
+            continue
+          }
+
           finalText = '[No spoken dialogue detected in media]'
           finalSegments = [
             {

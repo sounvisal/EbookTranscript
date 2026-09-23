@@ -82,7 +82,7 @@ export async function prepareMediaForUpload(file: File): Promise<{ file: File; d
  * Encodes an AudioBuffer into a mono 16-bit 16kHz WAV Blob
  * with Voice Activity Detection (VAD) silence trimming.
  */
-function audioBufferToMonoWav(buffer: AudioBuffer, trimSilence = true): Blob {
+function audioBufferToMonoWav(buffer: AudioBuffer, trimSilence = false): Blob {
   const numChannels = buffer.numberOfChannels
   const totalLength = buffer.length
   
@@ -95,14 +95,14 @@ function audioBufferToMonoWav(buffer: AudioBuffer, trimSilence = true): Blob {
     }
   }
 
-  // Voice Activity Detection & Silence Trimming (detect energy above -48dB)
+  // Voice Activity Detection & Silence Trimming (ultra-safe threshold ~ -60dB)
   let startIndex = 0
   let endIndex = totalLength
   
   if (trimSilence && totalLength > buffer.sampleRate * 2) {
     const windowSize = Math.floor(buffer.sampleRate * 0.05) // 50ms window
-    const silenceThreshold = 0.004 // RMS ~ -48dB
-    const padding = Math.floor(buffer.sampleRate * 0.15) // 150ms padding
+    const silenceThreshold = 0.001 // RMS ~ -60dB (preserve quiet voices)
+    const padding = Math.floor(buffer.sampleRate * 0.5) // 500ms padding
 
     // Find leading speech start
     for (let i = 0; i < totalLength - windowSize; i += windowSize) {

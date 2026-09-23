@@ -25,6 +25,7 @@ type StreamEvent =
  */
 function inferMimeType(file: File): string {
   if (file.type && file.type !== 'application/octet-stream') {
+    if (file.type === 'audio/mp3') return 'audio/mpeg'
     return file.type
   }
   const ext = file.name.split('.').pop()?.toLowerCase()
@@ -424,16 +425,12 @@ export async function transcribeWithProgress(
   }
 
   if (!result) {
-    if (chunkCount === 0) {
-      throw new Error('Transcription stream disconnected unexpectedly. Please check your network and try again.')
-    }
-    return {
-      text: '[No spoken dialogue detected in media]',
-      segments: [{ start: 0, end: 5, text: '[No spoken dialogue detected in media]' }],
-      language: 'auto',
-      duration: 5,
-      source: 'auto'
-    }
+    throw new Error(
+      errorMessage ||
+      (chunkCount > 0
+        ? 'Transcription stream ended unexpectedly before completion. Please check your network connection and try again.'
+        : 'Transcription stream disconnected. Please check your network and try again.')
+    )
   }
 
   try {

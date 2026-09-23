@@ -16,6 +16,7 @@ export type AdvancedOptions = {
   customVocabulary: string[]
   speakerDiarization: boolean
   languagePreference: 'auto' | 'khmer' | 'english' | 'bilingual'
+  highSensitivity?: boolean
 }
 
 interface TranscriptState {
@@ -59,6 +60,7 @@ interface TranscriptState {
   removeCustomTerm: (term: string) => void
   setSpeakerDiarization: (enabled: boolean) => void
   setLanguagePreference: (pref: 'auto' | 'khmer' | 'english' | 'bilingual') => void
+  setHighSensitivity: (enabled: boolean) => void
   resetAdvancedOptions: () => void
   startListening: () => void
   stopListening: () => void
@@ -172,12 +174,17 @@ export const useTranscriptStore = create<TranscriptState>((set) => ({
     set((state) => ({
       advancedOptions: { ...state.advancedOptions, languagePreference: pref }
     })),
+  setHighSensitivity: (enabled) =>
+    set((state) => ({
+      advancedOptions: { ...state.advancedOptions, highSensitivity: enabled }
+    })),
   resetAdvancedOptions: () =>
     set((state) => ({
       advancedOptions: {
         customVocabulary: [],
         speakerDiarization: false,
-        languagePreference: 'auto'
+        languagePreference: 'auto',
+        highSensitivity: false
       }
     })),
   startListening: () => set({ isListening: true }),

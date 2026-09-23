@@ -24,11 +24,13 @@ import {
   Pencil,
   X,
   Edit3,
-  Loader2
+  Loader2,
+  Volume2
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import ReportErrorButton from '@/components/common/ReportErrorButton'
 import AudioPlayer from '@/components/transcript/AudioPlayer'
+import { transcribeWithProgress } from '@/lib/transcribeClient'
 
 const SPEAKER_REGEX = /^(?:\[?(?:Speaker\s*[A-Za-z0-9]+|Person\s*[A-Za-z0-9]+|Host|Guest|Interviewer|Interviewee|អ្នកនិយាយ\s*[០-៩0-9]+)\]?)\s*[:：]\s*/i
 
@@ -93,13 +95,17 @@ function getSpeakerStyle(speaker: string) {
 }
 
 export default function TranscriptPanel() {
-  const { transcript, file, audioBlob, audioUrl: storeAudioUrl, customAudioUrl, resetAll, updateTranscriptContent } = useTranscriptStore()
+  const { transcript, file, audioBlob, audioUrl: storeAudioUrl, customAudioUrl, resetAll, updateTranscriptContent, advancedOptions } = useTranscriptStore()
   const [viewMode, setViewMode] = useState<'paragraphs' | 'timestamps'>('timestamps')
   const [wordSyncEnabled, setWordSyncEnabled] = useState(true)
   const [copied, setCopied] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const hasSaved = useRef(false)
+
+  // High-sensitivity re-scan state
+  const [isRetryingSensitivity, setIsRetryingSensitivity] = useState(false)
+  const [retryError, setRetryError] = useState<string | null>(null)
 
   // In-line editing state
   const [editingSegmentIdx, setEditingSegmentIdx] = useState<number | null>(null)
@@ -258,6 +264,35 @@ export default function TranscriptPanel() {
 
     event.clipboardData.setData('text/plain', stripTimestampMarkers(selection))
     event.preventDefault()
+  }
+
+  const isNoDialogueDetected = liveText.includes('[No spoken dialogue detected in media]')
+
+  const handleRetryWithHighSensitivity = async () => {
+    if (!file && !transcript?.source) return
+    setIsRetryingSensitivity(true)
+    setRetryError(null)
+
+    try {
+      const data = await transcribeWithProgress(
+        file ? { file } : { url: transcript?.source },
+        undefined,
+        { ...advancedOptions, highSensitivity: true }
+      )
+
+      useTranscriptStore.getState().setTranscript({
+        text: data.text,
+        segments: data.segments,
+        source: data.source || (file ? file.name : transcript?.source) || 'MEDIA INPUT',
+        language: data.language,
+        duration: data.duration,
+        kind: 'transcript'
+      })
+    } catch (err: any) {
+      setRetryError(err?.message || 'High sensitivity scan failed. Please try again.')
+    } finally {
+      setIsRetryingSensitivity(false)
+    }
   }
 
   const handleSeekToSegment = (startTime: number) => {
@@ -541,6 +576,51 @@ export default function TranscriptPanel() {
 
       {/* Editorial Content Area with Word-by-Word Karaoke Highlighting & In-Line Editing */}
       <div className="p-5 sm:p-8">
+        {isNoDialogueDetected && (
+          <div className="mb-6 rounded-2xl border border-amber-300 dark:border-amber-800/80 bg-amber-50/90 dark:bg-amber-950/40 p-5 shadow-sm backdrop-blur-md">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-start gap-3.5">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-100 dark:bg-amber-900/60 text-amber-700 dark:text-amber-300">
+                  <Volume2 className="h-5 w-5" />
+                </div>
+                <div>
+                  <h4 className="font-semibold text-slate-900 dark:text-white text-sm">
+                    Audible speech but words not detected?
+                  </h4>
+                  <p className="mt-0.5 text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                    The AI may have filtered this audio as background noise, music, or low-volume audio. Click below to re-scan with <strong>Maximum Acoustic Sensitivity</strong> to capture quiet voices, lyrics, and speech past background audio.
+                  </p>
+                  {retryError && (
+                    <p className="mt-2 text-xs font-medium text-rose-600 dark:text-rose-400">
+                      {retryError}
+                    </p>
+                  )}
+                </div>
+              </div>
+              {(file || transcript?.source) && (
+                <button
+                  type="button"
+                  disabled={isRetryingSensitivity}
+                  onClick={handleRetryWithHighSensitivity}
+                  className="flex items-center justify-center gap-2 rounded-xl bg-amber-600 hover:bg-amber-700 active:scale-95 disabled:opacity-50 text-white font-medium px-4 py-2.5 text-xs shadow-sm transition-all cursor-pointer shrink-0"
+                >
+                  {isRetryingSensitivity ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <span>Re-scanning Audio…</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="h-4 w-4" />
+                      <span>Re-scan with High Sensitivity</span>
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
         <div
           className="max-h-[580px] overflow-y-auto pr-2 text-base leading-relaxed text-slate-800 dark:text-slate-200 outline-none"
           onCopy={handleTranscriptCopy}

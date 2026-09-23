@@ -289,7 +289,7 @@ export async function streamGeminiTranscript(
 
   const host = getGeminiApiHost()
   const cleanKey = (apiKey || '').trim().replace(/["'\r\n]/g, '')
-  const url = `https://${host}/${GEMINI_API_VERSION}/models/${input.modelName}:generateContent`
+  const url = `https://${host}/${GEMINI_API_VERSION}/models/${input.modelName}:streamGenerateContent?alt=sse`
 
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), GENERATION_TIMEOUT_MS)
@@ -306,8 +306,8 @@ export async function streamGeminiTranscript(
       signal: controller.signal
     })
 
-    const responseText = await res.text()
     if (!res.ok) {
+      const responseText = await res.text().catch(() => '')
       const errorMessage = parseGeminiErrorMessage(responseText)
       throw new Error(
         errorMessage
@@ -316,25 +316,64 @@ export async function streamGeminiTranscript(
       )
     }
 
-    const parsed = JSON.parse(responseText) as GeminiGenerateContentResponse
-    const text = parsed.candidates
-      ?.flatMap((candidate) => candidate.content?.parts || [])
-      .map((part) => part.text || '')
-      .join('')
-      .trim()
-
-    if (text) {
-      input.onText?.(text)
-      return text
+    if (!res.body) {
+      throw new Error('Gemini returned an empty response body.')
     }
 
-    if (parsed.promptFeedback?.blockReason) {
-      throw new Error(`Gemini blocked the transcription request: ${parsed.promptFeedback.blockReason}.`)
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let accumulatedText = ''
+    let lastBlockReason: string | undefined
+
+    const processLine = (line: string) => {
+      const trimmed = line.trim()
+      if (!trimmed || !trimmed.startsWith('data:')) return
+      const jsonStr = trimmed.slice(5).trim()
+      if (!jsonStr) return
+
+      try {
+        const chunk = JSON.parse(jsonStr) as GeminiGenerateContentResponse
+        if (chunk.promptFeedback?.blockReason) {
+          lastBlockReason = chunk.promptFeedback.blockReason
+        }
+        const textParts = chunk.candidates
+          ?.flatMap((c) => c.content?.parts || [])
+          .map((p) => p.text || '')
+          .join('')
+
+        if (textParts) {
+          accumulatedText += textParts
+          input.onText?.(accumulatedText)
+        }
+      } catch {
+        // Ignore partial JSON or parse errors in individual SSE lines
+      }
     }
 
-    const finishReason = parsed.candidates?.[0]?.finishReason
-    if (finishReason && finishReason !== 'STOP') {
-      console.warn(`Gemini candidate finished with reason: ${finishReason}`)
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+
+      let newlineIndex: number
+      while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
+        processLine(buffer.slice(0, newlineIndex))
+        buffer = buffer.slice(newlineIndex + 1)
+      }
+    }
+
+    if (buffer.trim()) {
+      processLine(buffer)
+    }
+
+    const trimmedResult = accumulatedText.trim()
+    if (trimmedResult) {
+      return trimmedResult
+    }
+
+    if (lastBlockReason) {
+      throw new Error(`Gemini blocked the transcription request: ${lastBlockReason}.`)
     }
 
     // Return clean empty structure if media contained no discernable speech/text

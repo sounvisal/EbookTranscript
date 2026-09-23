@@ -8,12 +8,19 @@ type TranscriptSegmentInput = {
   start?: unknown
   end?: unknown
   text?: unknown
+  start_time?: unknown
+  end_time?: unknown
+  startTime?: unknown
+  endTime?: unknown
+  content?: unknown
+  transcription?: unknown
 }
 
 type StructuredTranscriptPayload = {
   language?: unknown
   text?: unknown
   transcript?: unknown
+  transcription?: unknown
   segments?: TranscriptSegmentInput[]
 }
 
@@ -53,8 +60,11 @@ function stripJsonFence(value: string) {
 
 function looksLikeJsonStructure(text: string) {
   const trimmed = stripJsonFence(text)
-  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
     return true
+  }
+  if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+    return /"(?:segments|transcript|text|language|start|end)"\s*:/i.test(trimmed) || /^\s*\[\s*\{/s.test(trimmed)
   }
   return /"(?:segments|transcript|text|language|start|end)"\s*:/i.test(trimmed)
 }
@@ -105,6 +115,10 @@ function getPlainTextValue(payload: StructuredTranscriptPayload) {
 
   if (typeof payload.transcript === 'string') {
     return stripTimestampMarkers(payload.transcript)
+  }
+
+  if (typeof payload.transcription === 'string') {
+    return stripTimestampMarkers(payload.transcription)
   }
 
   return ''
@@ -342,9 +356,12 @@ export function normalizeTranscriptSegments(inputSegments?: TranscriptSegmentInp
 
   const segments = inputSegments
     .map((segment) => {
-      const start = toFiniteSeconds(segment.start)
-      const end = toFiniteSeconds(segment.end)
-      const text = typeof segment.text === 'string' ? stripTimestampMarkers(segment.text) : ''
+      const rawStart = segment.start ?? segment.start_time ?? segment.startTime
+      const rawEnd = segment.end ?? segment.end_time ?? segment.endTime
+      const rawText = segment.text ?? segment.content ?? segment.transcription
+      const start = toFiniteSeconds(rawStart)
+      const end = toFiniteSeconds(rawEnd)
+      const text = typeof rawText === 'string' ? stripTimestampMarkers(rawText) : ''
 
       if (start === null || !text.trim()) {
         return null
