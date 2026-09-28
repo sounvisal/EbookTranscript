@@ -134,7 +134,7 @@ export async function POST(req: Request) {
 
   // Ensure every user who interacts with the bot is immediately registered in PostgreSQL
   if (sender) {
-    getOrCreateTelegramUser(sender).catch((err) =>
+    await getOrCreateTelegramUser(sender).catch((err) =>
       console.error('[Telegram User Sync] Registration error:', err)
     )
   }
