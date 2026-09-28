@@ -9,9 +9,11 @@ import {
   handleTelegramUsersCommand,
   handleTelegramWebCommand,
   handleTelegramAudioUpload,
+  handleTelegramTranscribeHelp,
   sendTelegramDailyReport,
   sendTelegramResponse
 } from '@/lib/telegram'
+
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
@@ -242,11 +244,19 @@ export async function POST(req: Request) {
   const cleanCmd = text.toLowerCase().replace(/^\//, '').trim()
 
   if (
+    text.includes('Audio Transcribe') ||
+    cleanCmd === 'transcribe' ||
+    cleanCmd === 'audio' ||
+    cleanCmd === 'voice'
+  ) {
+    await handleTelegramTranscribeHelp(incomingChatId)
+  } else if (
     text.includes('Live Stats') ||
     cleanCmd === 'stats' ||
     cleanCmd === 'status'
   ) {
     await handleTelegramStatsCommand(incomingChatId)
+
   } else if (
     text.includes('System Health') ||
     cleanCmd === 'health' ||

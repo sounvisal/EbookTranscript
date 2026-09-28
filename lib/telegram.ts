@@ -534,17 +534,43 @@ function escapeHtml(text: string): string {
 }
 
 /**
- * Persistent 6-button keyboard pinned to the bottom of Telegram chat.
- * Admin never has to type commands on their phone.
+ * Persistent 7-button keyboard pinned to the bottom of Telegram chat.
+ * Includes direct Audio Transcribe guide & quick intelligence commands.
  */
 export const TELEGRAM_MAIN_KEYBOARD = {
   keyboard: [
-    [{ text: '📊 Live Stats' }, { text: '🩺 System Health' }],
-    [{ text: '🔑 Key Fleet' }, { text: '👥 Active Users' }],
-    [{ text: '🔄 Run Daily Report' }, { text: '🌐 Open Admin Web' }]
+    [{ text: '🎙️ Audio Transcribe' }, { text: '📊 Live Stats' }],
+    [{ text: '🩺 System Health' }, { text: '🔑 Key Fleet' }],
+    [{ text: '👥 Active Users' }, { text: '🔄 Run Daily Report' }],
+    [{ text: '🌐 Open Admin Web' }]
   ],
   resize_keyboard: true,
   is_persistent: true
+}
+
+export async function handleTelegramTranscribeHelp(chatId: string | number): Promise<boolean> {
+  const message = [
+    `🎙️ <b>Instant Speech Transcription (In This Chat)</b>`,
+    '',
+    `You can transcribe speech directly on Telegram with zero setup:`,
+    '',
+    `1️⃣ <b>Voice Note (Hold to Record):</b>`,
+    `• Hold down the 🎙️ <b>Microphone icon</b> (bottom right next to the text bar).`,
+    `• Speak in Khmer (ភាសាខ្មែរ) or English.`,
+    `• Release to send — the bot transcribes it in 3-5 seconds!`,
+    '',
+    `2️⃣ <b>Audio / Video Files:</b>`,
+    `• Tap the 📎 <b>Paperclip icon</b> (bottom left).`,
+    `• Select any audio file: <code>.mp3, .m4a, .wav, .aac, .ogg, .mp4</code>`,
+    `• Send it here — the bot downloads, transcribes, and replies with the full text!`,
+    '',
+    `☁️ <b>Automatic Cloud Sync:</b>`,
+    `All transcripts created here are automatically saved to your Website History and Dashboard.`,
+    '',
+    `👉 <i>Try it right now: Tap the 📎 paperclip to send an audio file, or hold the 🎙️ mic button!</i>`
+  ].join('\n')
+
+  return sendTelegramResponse(chatId, message, undefined, true)
 }
 
 export async function sendTelegramResponse(
@@ -553,6 +579,7 @@ export async function sendTelegramResponse(
   inlineKeyboard?: Array<Array<{ text: string; callback_data?: string; url?: string }>>,
   includeMainKeyboard: boolean = true
 ): Promise<boolean> {
+
   const { token } = getBotCredentials()
   if (!token) return false
 
