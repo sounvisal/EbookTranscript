@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import {
   getBotCredentials,
   isChatIdAdmin,
+  getOrCreateTelegramUser,
+  TelegramSenderInfo,
   answerTelegramCallback,
   handleTelegramWelcome,
   handleTelegramStatsCommand,
@@ -27,6 +29,7 @@ interface TelegramWebhookUpdate {
       id: number
       is_bot: boolean
       first_name?: string
+      last_name?: string
       username?: string
     }
     chat?: {
@@ -69,7 +72,9 @@ interface TelegramWebhookUpdate {
     from: {
       id: number
       first_name?: string
+      last_name?: string
       username?: string
+      is_bot?: boolean
     }
     message?: {
       message_id: number
@@ -114,6 +119,25 @@ export async function POST(req: Request) {
   }
 
   const isAdmin = isChatIdAdmin(incomingChatId)
+
+  // Extract Telegram sender metadata
+  const rawSender = update.message?.from || update.callback_query?.from
+  const sender: TelegramSenderInfo | undefined = rawSender
+    ? {
+        id: rawSender.id,
+        firstName: rawSender.first_name,
+        lastName: rawSender.last_name,
+        username: rawSender.username,
+        isBot: rawSender.is_bot
+      }
+    : undefined
+
+  // Ensure every user who interacts with the bot is immediately registered in PostgreSQL
+  if (sender) {
+    getOrCreateTelegramUser(sender).catch((err) =>
+      console.error('[Telegram User Sync] Registration error:', err)
+    )
+  }
 
   // Handle Callback Query (Inline Button Click)
   if (isCallback && update.callback_query) {
@@ -178,7 +202,8 @@ export async function POST(req: Request) {
       fileName: `voice-note-${new Date().toISOString().slice(11, 19).replace(/:/g, '')}.ogg`,
       mimeType: msg.voice.mime_type || 'audio/ogg',
       fileSize: msg.voice.file_size,
-      durationSeconds: msg.voice.duration
+      durationSeconds: msg.voice.duration,
+      sender
     })
     return NextResponse.json({ ok: true, type: 'voice' })
   }
@@ -191,7 +216,8 @@ export async function POST(req: Request) {
       fileName: msg.audio.file_name || `audio-${Date.now()}.mp3`,
       mimeType: msg.audio.mime_type || 'audio/mpeg',
       fileSize: msg.audio.file_size,
-      durationSeconds: msg.audio.duration
+      durationSeconds: msg.audio.duration,
+      sender
     })
     return NextResponse.json({ ok: true, type: 'audio' })
   }
@@ -204,7 +230,8 @@ export async function POST(req: Request) {
       fileName: msg.video.file_name || `video-${Date.now()}.mp4`,
       mimeType: msg.video.mime_type || 'video/mp4',
       fileSize: msg.video.file_size,
-      durationSeconds: msg.video.duration
+      durationSeconds: msg.video.duration,
+      sender
     })
     return NextResponse.json({ ok: true, type: 'video' })
   }
@@ -224,7 +251,8 @@ export async function POST(req: Request) {
         fileId: doc.file_id,
         fileName: doc.file_name || `media-${Date.now()}.mp3`,
         mimeType: doc.mime_type || 'audio/mpeg',
-        fileSize: doc.file_size
+        fileSize: doc.file_size,
+        sender
       })
       return NextResponse.json({ ok: true, type: 'document_media' })
     } else {

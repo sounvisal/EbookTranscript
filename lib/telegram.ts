@@ -546,6 +546,170 @@ export function isChatIdAdmin(chatId: string | number): boolean {
   return adminIds.includes(String(chatId).trim())
 }
 
+export interface TelegramSenderInfo {
+  id: number | string
+  firstName?: string
+  lastName?: string
+  username?: string
+  isBot?: boolean
+}
+
+/**
+ * Resolves or creates a database User for the given Telegram user.
+ * - If admin, links with existing admin account and ensures Account record exists.
+ * - If team member, finds existing user by telegram Account or creates a new User with role 'user'.
+ * - Sends instant user alert to admin if a new team user registers.
+ */
+export async function getOrCreateTelegramUser(sender: TelegramSenderInfo) {
+  const telegramIdStr = String(sender.id).trim()
+  const isAdmin = isChatIdAdmin(sender.id)
+
+  const fullName = [sender.firstName, sender.lastName].filter(Boolean).join(' ').trim()
+  const displayName = fullName
+    ? (sender.username ? `${fullName} (@${sender.username})` : fullName)
+    : (sender.username ? `@${sender.username}` : `Telegram User #${telegramIdStr}`)
+
+  // 1. If admin, check existing admin account first
+  if (isAdmin) {
+    const adminEmails = (process.env.ADMIN_EMAILS || 'sounvisal154@gmail.com,suonvisal154@gmail.com,suonvisal.biu@gmail.com')
+      .split(',')
+      .map((e) => e.trim().toLowerCase())
+      .filter(Boolean)
+
+    const adminUser = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { role: 'admin' },
+          { email: { in: adminEmails } },
+          { accounts: { some: { provider: 'telegram', providerAccountId: telegramIdStr } } }
+        ]
+      },
+      include: { accounts: true }
+    })
+
+    if (adminUser) {
+      if (!adminUser.name && displayName) {
+        await prisma.user.update({
+          where: { id: adminUser.id },
+          data: { name: displayName }
+        }).catch(() => {})
+      }
+
+      const hasTelegramAccount = adminUser.accounts?.some((a) => a.provider === 'telegram' && a.providerAccountId === telegramIdStr)
+      if (!hasTelegramAccount) {
+        await prisma.account.create({
+          data: {
+            userId: adminUser.id,
+            type: 'oauth',
+            provider: 'telegram',
+            providerAccountId: telegramIdStr
+          }
+        }).catch(() => {})
+      }
+
+      return adminUser
+    }
+  }
+
+  // 2. Check if user already linked via Account record
+  const existingAccount = await prisma.account.findUnique({
+    where: {
+      provider_providerAccountId: {
+        provider: 'telegram',
+        providerAccountId: telegramIdStr
+      }
+    },
+    include: { user: true }
+  })
+
+  if (existingAccount?.user) {
+    if (displayName && existingAccount.user.name !== displayName) {
+      const updated = await prisma.user.update({
+        where: { id: existingAccount.user.id },
+        data: { name: displayName }
+      }).catch(() => existingAccount.user)
+      return updated
+    }
+    return existingAccount.user
+  }
+
+  // 3. Check if user already exists by synthetic Telegram email
+  const syntheticEmail = sender.username
+    ? `${sender.username.toLowerCase()}@telegram.signal`
+    : `tg_${telegramIdStr}@telegram.signal`
+
+  let existingUser = await prisma.user.findFirst({
+    where: {
+      OR: [
+        { email: syntheticEmail },
+        { email: `tg_${telegramIdStr}@telegram.signal` }
+      ]
+    }
+  })
+
+  if (existingUser) {
+    await prisma.account.create({
+      data: {
+        userId: existingUser.id,
+        type: 'oauth',
+        provider: 'telegram',
+        providerAccountId: telegramIdStr
+      }
+    }).catch(() => {})
+
+    if (displayName && existingUser.name !== displayName) {
+      existingUser = await prisma.user.update({
+        where: { id: existingUser.id },
+        data: { name: displayName }
+      }).catch(() => existingUser)
+    }
+
+    return existingUser
+  }
+
+  // 4. Create new user in PostgreSQL for this Telegram team member
+  try {
+    const newUser = await prisma.user.create({
+      data: {
+        name: displayName,
+        email: syntheticEmail,
+        role: isAdmin ? 'admin' : 'user',
+        accounts: {
+          create: {
+            type: 'oauth',
+            provider: 'telegram',
+            providerAccountId: telegramIdStr
+          }
+        }
+      }
+    })
+
+    // Notify administrator that a new team user just joined via Telegram
+    if (!isAdmin) {
+      sendTelegramUserAlert({
+        email: syntheticEmail,
+        name: displayName,
+        isNewUser: true,
+        provider: 'telegram'
+      }).catch(() => {})
+    }
+
+    return newUser
+  } catch (err) {
+    console.error('[getOrCreateTelegramUser] Error creating user, checking fallback:', err)
+    const fallback = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { email: syntheticEmail },
+          { accounts: { some: { provider: 'telegram', providerAccountId: telegramIdStr } } }
+        ]
+      }
+    })
+    if (fallback) return fallback
+    throw err
+  }
+}
+
 /**
  * Persistent 7-button keyboard pinned to the bottom of Telegram chat for Admins.
  * Includes direct Audio Transcribe guide & quick intelligence commands.
@@ -1044,6 +1208,7 @@ export async function handleTelegramAudioUpload(params: {
   mimeType?: string
   fileSize?: number
   durationSeconds?: number
+  sender?: TelegramSenderInfo
 }): Promise<boolean> {
   const { token } = getBotCredentials()
   if (!token) return false
@@ -1125,25 +1290,17 @@ export async function handleTelegramAudioUpload(params: {
       return true
     }
 
-    // 7. Calculate metrics and save to Database (Full Cloud Sync)
+    // 7. Calculate metrics and save to Database (Full Cloud Sync with User Persistence)
     const wordCount = text.trim().split(/\s+/).filter(Boolean).length
     const durationSeconds = params.durationSeconds || Math.max(1, Math.round(buffer.length / 16000))
 
-    const adminEmails = (process.env.ADMIN_EMAILS || 'sounvisal154@gmail.com,suonvisal154@gmail.com,suonvisal.biu@gmail.com')
-      .split(',')
-      .map((e) => e.trim().toLowerCase())
-      .filter(Boolean)
-
-    const adminUser = await prisma.user.findFirst({
-      where: {
-        OR: [
-          { role: 'admin' },
-          { email: { in: adminEmails } }
-        ]
-      }
+    // Resolve or create user in database
+    const dbUser = await getOrCreateTelegramUser(params.sender || { id: params.chatId }).catch((err) => {
+      console.error('[Telegram Audio Handler] Failed to get/create user:', err)
+      return null
     })
 
-    // Save to prisma.transcript (accessible in Web History)
+    // Save to prisma.transcript (accessible in Web History and User Directory)
     await prisma.transcript.create({
       data: {
         text,
@@ -1152,15 +1309,15 @@ export async function handleTelegramAudioUpload(params: {
         duration: durationSeconds,
         wordCount,
         language,
-        userId: adminUser?.id || null
+        userId: dbUser?.id || null
       }
     }).catch((e) => console.error('[Telegram DB Sync] Transcript save error:', e))
 
-    // Save to prisma.usageMetric (telemetry)
+    // Save to prisma.usageMetric (telemetry & per-user quota calculation)
     const ext = fileName.split('.').pop()?.toLowerCase() || 'audio'
     await prisma.usageMetric.create({
       data: {
-        userId: adminUser?.id || null,
+        userId: dbUser?.id || null,
         model,
         inputType: 'telegram',
         fileFormat: ext,
@@ -1190,7 +1347,7 @@ export async function handleTelegramAudioUpload(params: {
     const inlineKeyboard = [
       [
         { text: '🌐 View in Web History', url: 'https://ebook-transcript.vercel.app/history' },
-        { text: '📊 Live Stats', callback_data: 'stats' }
+        ...(isChatIdAdmin(params.chatId) ? [{ text: '📊 Live Stats', callback_data: 'stats' }] : [])
       ]
     ]
 
