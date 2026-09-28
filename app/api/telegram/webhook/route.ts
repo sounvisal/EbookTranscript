@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import {
   getBotCredentials,
+  isChatIdAdmin,
   answerTelegramCallback,
   handleTelegramWelcome,
   handleTelegramStatsCommand,
@@ -112,24 +113,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, ignored: true })
   }
 
-  // Strict Security Authorization: Only configured admin TELEGRAM_CHAT_ID can interact
-  const incomingChatIdStr = String(incomingChatId).trim()
-  const expectedChatIdStr = String(allowedChatId).trim()
-
-  if (!expectedChatIdStr || incomingChatIdStr !== expectedChatIdStr) {
-    console.warn(`[Telegram Webhook] Unauthorized attempt from chatId: ${incomingChatIdStr}`)
-    if (isCallback && update.callback_query) {
-      await answerTelegramCallback(update.callback_query.id, '⛔ Access Denied: Unauthorized admin chat.', true)
-    } else {
-      await sendTelegramResponse(
-        incomingChatId,
-        '⛔ <b>Access Denied:</b> This bot is strictly configured for the Signal Platform Administrator.',
-        undefined,
-        false
-      )
-    }
-    return NextResponse.json({ ok: true, status: 'unauthorized_ignored' })
-  }
+  const isAdmin = isChatIdAdmin(incomingChatId)
 
   // Handle Callback Query (Inline Button Click)
   if (isCallback && update.callback_query) {
@@ -141,19 +125,39 @@ export async function POST(req: Request) {
 
     switch (rawAction) {
       case 'stats':
-        await handleTelegramStatsCommand(incomingChatId)
+        if (isAdmin) {
+          await handleTelegramStatsCommand(incomingChatId)
+        } else {
+          await answerTelegramCallback(callback.id, '🔒 Admin Access Required for platform metrics.', true)
+        }
         break
       case 'health':
-        await handleTelegramHealthCommand(incomingChatId)
+        if (isAdmin) {
+          await handleTelegramHealthCommand(incomingChatId)
+        } else {
+          await answerTelegramCallback(callback.id, '🔒 Admin Access Required for system health probes.', true)
+        }
         break
       case 'keys':
-        await handleTelegramKeysCommand(incomingChatId)
+        if (isAdmin) {
+          await handleTelegramKeysCommand(incomingChatId)
+        } else {
+          await answerTelegramCallback(callback.id, '🔒 Admin Access Required for Key Fleet.', true)
+        }
         break
       case 'users':
-        await handleTelegramUsersCommand(incomingChatId)
+        if (isAdmin) {
+          await handleTelegramUsersCommand(incomingChatId)
+        } else {
+          await answerTelegramCallback(callback.id, '🔒 Admin Access Required for user management.', true)
+        }
         break
       case 'report':
-        await sendTelegramDailyReport(undefined, true)
+        if (isAdmin) {
+          await sendTelegramDailyReport(undefined, true)
+        } else {
+          await answerTelegramCallback(callback.id, '🔒 Admin Access Required for report trigger.', true)
+        }
         break
       default:
         await handleTelegramWelcome(incomingChatId)
@@ -162,6 +166,7 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ ok: true, action: rawAction })
   }
+
 
   const msg = update.message
 
@@ -239,9 +244,8 @@ export async function POST(req: Request) {
   // Handle Standard Message (Text or Persistent Bottom Reply Keyboard Button)
   const text = (msg?.text || '').trim()
 
-
-  // Match normalized commands
-  const cleanCmd = text.toLowerCase().replace(/^\//, '').trim()
+  // Match normalized commands (supporting group mentions like /start@transcript_signal_bot)
+  const cleanCmd = text.toLowerCase().replace(/^\//, '').split('@')[0].trim()
 
   if (
     text.includes('Audio Transcribe') ||
@@ -255,48 +259,84 @@ export async function POST(req: Request) {
     cleanCmd === 'stats' ||
     cleanCmd === 'status'
   ) {
-    await handleTelegramStatsCommand(incomingChatId)
-
+    if (isAdmin) {
+      await handleTelegramStatsCommand(incomingChatId)
+    } else {
+      await sendTelegramResponse(
+        incomingChatId,
+        '🔒 <b>Admin Feature Restricted:</b> Platform statistics are reserved for administrators. You have full access to transcribe any voice note or audio file directly in this chat!'
+      )
+    }
   } else if (
     text.includes('System Health') ||
     cleanCmd === 'health' ||
     cleanCmd === 'ping'
   ) {
-    await handleTelegramHealthCommand(incomingChatId)
+    if (isAdmin) {
+      await handleTelegramHealthCommand(incomingChatId)
+    } else {
+      await sendTelegramResponse(
+        incomingChatId,
+        '🔒 <b>Admin Feature Restricted:</b> System health probes are reserved for administrators.'
+      )
+    }
   } else if (
     text.includes('Key Fleet') ||
     cleanCmd === 'keys' ||
     cleanCmd === 'fleet' ||
     cleanCmd === 'gemini'
   ) {
-    await handleTelegramKeysCommand(incomingChatId)
+    if (isAdmin) {
+      await handleTelegramKeysCommand(incomingChatId)
+    } else {
+      await sendTelegramResponse(
+        incomingChatId,
+        '🔒 <b>Admin Feature Restricted:</b> Key Fleet telemetry is reserved for administrators.'
+      )
+    }
   } else if (
     text.includes('Active Users') ||
     cleanCmd === 'users' ||
     cleanCmd === 'user' ||
     cleanCmd === 'accounts'
   ) {
-    await handleTelegramUsersCommand(incomingChatId)
+    if (isAdmin) {
+      await handleTelegramUsersCommand(incomingChatId)
+    } else {
+      await sendTelegramResponse(
+        incomingChatId,
+        '🔒 <b>Admin Feature Restricted:</b> User account management is reserved for administrators.'
+      )
+    }
   } else if (
     text.includes('Run Daily Report') ||
     cleanCmd === 'report' ||
     cleanCmd === 'digest' ||
     cleanCmd === 'daily'
   ) {
-    await sendTelegramResponse(incomingChatId, '⏳ <i>Generating and dispatching 5:30 PM Daily Digest report...</i>')
-    const result = await sendTelegramDailyReport(undefined, true)
-    if (!result.success) {
-      await sendTelegramResponse(incomingChatId, `⚠️ <b>Report generation failed:</b>\n<code>${result.error}</code>`)
+    if (isAdmin) {
+      await sendTelegramResponse(incomingChatId, '⏳ <i>Generating and dispatching 5:30 PM Daily Digest report...</i>')
+      const result = await sendTelegramDailyReport(undefined, true)
+      if (!result.success) {
+        await sendTelegramResponse(incomingChatId, `⚠️ <b>Report generation failed:</b>\n<code>${result.error}</code>`)
+      }
+    } else {
+      await sendTelegramResponse(
+        incomingChatId,
+        '🔒 <b>Admin Feature Restricted:</b> Daily digest report trigger is reserved for administrators.'
+      )
     }
   } else if (
     text.includes('Open Admin Web') ||
+    text.includes('Open Web App') ||
     cleanCmd === 'web' ||
     cleanCmd === 'admin' ||
-    cleanCmd === 'dashboard'
+    cleanCmd === 'dashboard' ||
+    cleanCmd === 'app'
   ) {
     await handleTelegramWebCommand(incomingChatId)
   } else {
-    // /start, /help or unrecognized command -> send welcome card with persistent 6-button keyboard
+    // /start, /help or unrecognized command -> send welcome card
     await handleTelegramWelcome(incomingChatId)
   }
 

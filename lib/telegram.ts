@@ -534,7 +534,20 @@ function escapeHtml(text: string): string {
 }
 
 /**
- * Persistent 7-button keyboard pinned to the bottom of Telegram chat.
+ * Check if incoming Telegram chat ID has administrator privileges.
+ * Supports comma-separated IDs in TELEGRAM_CHAT_ID or TELEGRAM_ADMIN_CHATS.
+ */
+export function isChatIdAdmin(chatId: string | number): boolean {
+  const raw = `${process.env.TELEGRAM_CHAT_ID || ''},${process.env.TELEGRAM_ADMIN_CHATS || ''}`
+  const adminIds = raw
+    .split(',')
+    .map((id) => id.trim().replace(/["'\r\n]/g, ''))
+    .filter(Boolean)
+  return adminIds.includes(String(chatId).trim())
+}
+
+/**
+ * Persistent 7-button keyboard pinned to the bottom of Telegram chat for Admins.
  * Includes direct Audio Transcribe guide & quick intelligence commands.
  */
 export const TELEGRAM_MAIN_KEYBOARD = {
@@ -548,11 +561,23 @@ export const TELEGRAM_MAIN_KEYBOARD = {
   is_persistent: true
 }
 
+/**
+ * Clean 2-button keyboard for team members focused on Speech Transcription.
+ */
+export const TELEGRAM_TEAM_KEYBOARD = {
+  keyboard: [
+    [{ text: '🎙️ Audio Transcribe' }],
+    [{ text: '🌐 Open Web App' }]
+  ],
+  resize_keyboard: true,
+  is_persistent: true
+}
+
 export async function handleTelegramTranscribeHelp(chatId: string | number): Promise<boolean> {
   const message = [
     `🎙️ <b>Instant Speech Transcription (In This Chat)</b>`,
     '',
-    `You can transcribe speech directly on Telegram with zero setup:`,
+    `You and your team can transcribe speech directly on Telegram with zero setup:`,
     '',
     `1️⃣ <b>Voice Note (Hold to Record):</b>`,
     `• Hold down the 🎙️ <b>Microphone icon</b> (bottom right next to the text bar).`,
@@ -579,7 +604,6 @@ export async function sendTelegramResponse(
   inlineKeyboard?: Array<Array<{ text: string; callback_data?: string; url?: string }>>,
   includeMainKeyboard: boolean = true
 ): Promise<boolean> {
-
   const { token } = getBotCredentials()
   if (!token) return false
 
@@ -593,7 +617,7 @@ export async function sendTelegramResponse(
   if (inlineKeyboard && inlineKeyboard.length > 0) {
     body.reply_markup = { inline_keyboard: inlineKeyboard }
   } else if (includeMainKeyboard) {
-    body.reply_markup = TELEGRAM_MAIN_KEYBOARD
+    body.reply_markup = isChatIdAdmin(chatId) ? TELEGRAM_MAIN_KEYBOARD : TELEGRAM_TEAM_KEYBOARD
   }
 
   try {
@@ -610,28 +634,51 @@ export async function sendTelegramResponse(
 }
 
 export async function handleTelegramWelcome(chatId: string | number): Promise<boolean> {
-  const message = [
-    `🤖 <b>Welcome to Signal Command Center!</b>`,
+  const isAdmin = isChatIdAdmin(chatId)
+
+  if (isAdmin) {
+    const message = [
+      `🤖 <b>Welcome to Signal Command Center!</b>`,
+      '',
+      `You have full remote administrator control over the Signal platform directly from this chat.`,
+      `<b>No typing required</b> — use the one-tap buttons below:`,
+      '',
+      `• <b>🎙️ Audio Transcribe:</b> Send audio files or voice notes to transcribe instantly`,
+      `• <b>📊 Live Stats:</b> Today's audio duration, requests & error rate`,
+      `• <b>🩺 System Health:</b> Real-time Database, Gemini & Edge ping`,
+      `• <b>🔑 Key Fleet:</b> Gemini API key latency & quota status`,
+      `• <b>👥 Active Users:</b> New signups & top transcribers`,
+      `• <b>🔄 Run Daily Report:</b> Trigger on-demand 5:30 PM digest`,
+      `• <b>🌐 Open Admin Web:</b> Direct link to Web Dashboard`,
+      '',
+      `🎙️ <b>Instant Pocket Transcriber:</b>`,
+      `Send any audio, video, or hold the mic button to record a voice note for instant verbatim Khmer / English transcription!`,
+      '',
+      `Tap any button below or send audio now ⬇️`
+    ].join('\n')
+
+    return sendTelegramResponse(chatId, message, undefined, true)
+  }
+
+  const teamMessage = [
+    `👋 <b>Welcome to Signal Speech Transcriber!</b>`,
     '',
-    `You have full remote control over the Signal platform directly from this chat.`,
-    `<b>No typing required</b> — use the one-tap buttons below:`,
+    `You can transcribe speech directly in this chat with zero setup:`,
     '',
-    `• <b>📊 Live Stats:</b> Today's audio duration, requests & error rate`,
-    `• <b>🩺 System Health:</b> Real-time Database, Gemini & Edge ping`,
-    `• <b>🔑 Key Fleet:</b> Gemini API key latency & quota status`,
-    `• <b>👥 Active Users:</b> New signups & top transcribers`,
-    `• <b>🔄 Run Daily Report:</b> Trigger on-demand 5:30 PM digest`,
-    `• <b>🌐 Open Admin Web:</b> Direct link to Web Dashboard`,
+    `🎙️ <b>Option 1: Voice Note (Hold to Record)</b>`,
+    `Hold down the 🎙️ <b>microphone icon</b> (bottom right), speak in Khmer (ភាសាខ្មែរ) or English, and release to send!`,
     '',
-    `🎙️ <b>Instant Pocket Transcriber:</b>`,
-    `Send any audio, video, or hold the mic button to record a voice note for instant verbatim Khmer / English transcription!`,
+    `📁 <b>Option 2: Audio & Video Files</b>`,
+    `Tap the 📎 <b>paperclip icon</b> (bottom left) and send any <code>.mp3, .m4a, .wav, .aac, .ogg, .mp4</code> recording.`,
     '',
-    `Tap any button below or send audio now ⬇️`
+    `⚡ The bot will automatically analyze the audio and reply with the clean verbatim text within seconds!`,
+    '',
+    `Tap below or send an audio file to get started ⬇️`
   ].join('\n')
 
-  return sendTelegramResponse(chatId, message, undefined, true)
-
+  return sendTelegramResponse(chatId, teamMessage, undefined, true)
 }
+
 
 export async function handleTelegramStatsCommand(chatId: string | number): Promise<boolean> {
   const now = new Date()
@@ -898,21 +945,41 @@ export async function answerTelegramCallback(
 }
 
 export async function handleTelegramWebCommand(chatId: string | number): Promise<boolean> {
-  const siteUrl = process.env.NEXTAUTH_URL || 'https://ebook-transcript.vercel.app'
-  const adminUrl = `${siteUrl.replace(/\/$/, '')}/admin`
+  const isAdmin = isChatIdAdmin(chatId)
+  const siteUrl = (process.env.NEXTAUTH_URL || 'https://ebook-transcript.vercel.app').replace(/\/$/, '')
+
+  if (isAdmin) {
+    const adminUrl = `${siteUrl}/admin`
+    const message = [
+      `🌐 <b>Signal Web Admin Portal</b>`,
+      '',
+      `Access complete analytics, user quotas, Key Fleet, and live system logs:`,
+      `🔗 <code>${adminUrl}</code>`,
+      '',
+      `Tap the button below to launch directly:`
+    ].join('\n')
+
+    return sendTelegramResponse(
+      chatId,
+      message,
+      [[{ text: '🚀 Open Admin Dashboard', url: adminUrl }]],
+      true
+    )
+  }
+
   const message = [
-    `🌐 <b>Signal Web Admin Portal</b>`,
+    `🌐 <b>Signal Web Application</b>`,
     '',
-    `Access complete analytics, user quotas, Key Fleet, and live system logs:`,
-    `🔗 <code>${adminUrl}</code>`,
+    `Upload large audio files (up to 2 GB), view complete transcription history, and export in TXT / SRT / Word / PDF format:`,
+    `🔗 <code>${siteUrl}</code>`,
     '',
-    `Tap the button below to launch directly:`
+    `Tap the button below to open in your browser:`
   ].join('\n')
 
   return sendTelegramResponse(
     chatId,
     message,
-    [[{ text: '🚀 Open Admin Dashboard', url: adminUrl }]],
+    [[{ text: '🚀 Open Web App', url: siteUrl }]],
     true
   )
 }
