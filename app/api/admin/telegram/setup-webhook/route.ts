@@ -62,9 +62,12 @@ export async function POST(req: Request) {
     // Body optional
   }
 
-  // Derive target webhook URL
-  const origin = (process.env.NEXTAUTH_URL || 'https://ebook-transcript.vercel.app').replace(/\/$/, '')
-  const webhookUrl = customUrl || `${origin}/api/telegram/webhook`
+  // Always target the public production URL to avoid Vercel preview branch 401 authentication gates
+  const prodOrigin = 'https://ebook-transcript.vercel.app'
+  const webhookUrl = customUrl && !customUrl.includes('-projects.vercel.app')
+    ? customUrl
+    : `${prodOrigin}/api/telegram/webhook`
+
 
   try {
     const res = await fetch(`https://api.telegram.org/bot${token}/setWebhook`, {

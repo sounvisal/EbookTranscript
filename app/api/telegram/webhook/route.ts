@@ -8,11 +8,13 @@ import {
   handleTelegramKeysCommand,
   handleTelegramUsersCommand,
   handleTelegramWebCommand,
+  handleTelegramAudioUpload,
   sendTelegramDailyReport,
   sendTelegramResponse
 } from '@/lib/telegram'
 
 export const dynamic = 'force-dynamic'
+export const maxDuration = 300
 
 interface TelegramWebhookUpdate {
   update_id: number
@@ -30,6 +32,34 @@ interface TelegramWebhookUpdate {
     }
     date: number
     text?: string
+    caption?: string
+    voice?: {
+      file_id: string
+      duration: number
+      mime_type?: string
+      file_size?: number
+    }
+    audio?: {
+      file_id: string
+      duration: number
+      file_name?: string
+      mime_type?: string
+      title?: string
+      file_size?: number
+    }
+    video?: {
+      file_id: string
+      duration: number
+      file_name?: string
+      mime_type?: string
+      file_size?: number
+    }
+    document?: {
+      file_id: string
+      file_name?: string
+      mime_type?: string
+      file_size?: number
+    }
   }
   callback_query?: {
     id: string
@@ -47,6 +77,7 @@ interface TelegramWebhookUpdate {
     data?: string
   }
 }
+
 
 export async function GET() {
   const { token, chatId } = getBotCredentials()
@@ -130,8 +161,82 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, action: rawAction })
   }
 
+  const msg = update.message
+
+  // 1. Direct Voice Note Dictation (e.g. user holds mic button in Telegram)
+  if (msg?.voice) {
+    await handleTelegramAudioUpload({
+      chatId: incomingChatId,
+      fileId: msg.voice.file_id,
+      fileName: `voice-note-${new Date().toISOString().slice(11, 19).replace(/:/g, '')}.ogg`,
+      mimeType: msg.voice.mime_type || 'audio/ogg',
+      fileSize: msg.voice.file_size,
+      durationSeconds: msg.voice.duration
+    })
+    return NextResponse.json({ ok: true, type: 'voice' })
+  }
+
+  // 2. Direct Audio File Upload (.mp3, .m4a, .wav, .aac, etc.)
+  if (msg?.audio) {
+    await handleTelegramAudioUpload({
+      chatId: incomingChatId,
+      fileId: msg.audio.file_id,
+      fileName: msg.audio.file_name || `audio-${Date.now()}.mp3`,
+      mimeType: msg.audio.mime_type || 'audio/mpeg',
+      fileSize: msg.audio.file_size,
+      durationSeconds: msg.audio.duration
+    })
+    return NextResponse.json({ ok: true, type: 'audio' })
+  }
+
+  // 3. Direct Video File Upload (.mp4, .mov, etc.)
+  if (msg?.video) {
+    await handleTelegramAudioUpload({
+      chatId: incomingChatId,
+      fileId: msg.video.file_id,
+      fileName: msg.video.file_name || `video-${Date.now()}.mp4`,
+      mimeType: msg.video.mime_type || 'video/mp4',
+      fileSize: msg.video.file_size,
+      durationSeconds: msg.video.duration
+    })
+    return NextResponse.json({ ok: true, type: 'video' })
+  }
+
+  // 4. File Uploaded as Document Attachment
+  if (msg?.document) {
+    const doc = msg.document
+    const docName = (doc.file_name || '').toLowerCase()
+    const isMedia =
+      doc.mime_type?.startsWith('audio/') ||
+      doc.mime_type?.startsWith('video/') ||
+      /\.(mp3|wav|m4a|aac|ogg|oga|opus|flac|mp4|mov|webm|mkv)$/i.test(docName)
+
+    if (isMedia) {
+      await handleTelegramAudioUpload({
+        chatId: incomingChatId,
+        fileId: doc.file_id,
+        fileName: doc.file_name || `media-${Date.now()}.mp3`,
+        mimeType: doc.mime_type || 'audio/mpeg',
+        fileSize: doc.file_size
+      })
+      return NextResponse.json({ ok: true, type: 'document_media' })
+    } else {
+      await sendTelegramResponse(
+        incomingChatId,
+        [
+          `⚠️ <b>Unsupported file format:</b>`,
+          `Please send an audio or video file (e.g. <code>.mp3, .m4a, .wav, .aac, .ogg, .mp4</code>) or a voice note.`,
+          '',
+          `💡 <i>Voice notes can be recorded by holding the mic button in Telegram.</i>`
+        ].join('\n')
+      )
+      return NextResponse.json({ ok: true, type: 'document_unsupported' })
+    }
+  }
+
   // Handle Standard Message (Text or Persistent Bottom Reply Keyboard Button)
-  const text = (update.message?.text || '').trim()
+  const text = (msg?.text || '').trim()
+
 
   // Match normalized commands
   const cleanCmd = text.toLowerCase().replace(/^\//, '').trim()

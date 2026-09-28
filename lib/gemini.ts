@@ -414,3 +414,123 @@ export async function generateGeminiText(apiKey: string, input: { modelName: str
 export async function generateGeminiFileAnalysis(apiKey: string, input: { modelName: string; prompt: string; fileUri: string; mimeType: string }) {
   return generateGeminiTranscript(apiKey, input)
 }
+
+/**
+ * Transcribes an in-memory audio or video buffer using Gemini.
+ * Supports inline transmission for files <= 8MB, and automatic
+ * File API upload & cleanup for larger files up to 20MB.
+ * Features automated key & model failover.
+ */
+export async function transcribeAudioBufferWithGemini(
+  buffer: Buffer,
+  mimeType: string,
+  displayName: string = 'telegram-audio'
+): Promise<{ text: string; language: string; model: string }> {
+  const keys = (process.env.GEMINI_API_KEYS || process.env.GEMINI_API_KEY || '')
+    .split(',')
+    .map((k) => k.trim().replace(/["'\r\n]/g, ''))
+    .filter(Boolean)
+
+  if (keys.length === 0) {
+    throw new Error('No Gemini API keys configured in environment.')
+  }
+
+  const models = (process.env.GEMINI_MODELS || 'gemini-3.6-flash,gemini-flash-latest,gemini-2.5-flash,gemini-3.5-flash-lite')
+    .split(',')
+    .map((m) => m.trim())
+    .filter(Boolean)
+
+  const prompt = [
+    'You are an expert multilingual audio transcription AI specialized in automatic language detection (Khmer / ភាសាខ្មែរ, English, and bilingual speech) and noisy audio extraction.',
+    'Listen carefully to the entire audio from the very beginning to the absolute end.',
+    '1. AUTOMATIC LANGUAGE DETECTION: Detect the spoken language. If the audio is in Khmer, set language to "Khmer". If in English, set language to "English". If bilingual mixed speech, set language to "Khmer / English".',
+    '2. VERBATIM SPEECH ACCURACY: Transcribe every spoken word accurately in the native script. For Khmer speech, output clean Khmer script (អក្សរខ្មែរ) with proper spacing and spelling. For English speech, output English.',
+    '3. HIGH-SENSITIVITY: Transcribe verbatim even with background music, sound effects, noise, quiet speech, singing, or fast speaking.',
+    'Format strictly as JSON with this exact shape:',
+    '{"language":"Khmer","text":"Full continuous transcript text here"}',
+    'Only return empty text if the audio is 100% complete dead silence or pure instrumental music with zero human words.'
+  ].join(' ')
+
+  let lastError: Error | null = null
+
+  for (const apiKey of keys) {
+    for (const modelName of models) {
+      try {
+        let rawResponseText = ''
+
+        if (buffer.length <= 8 * 1024 * 1024) {
+          const host = getGeminiApiHost()
+          const cleanKey = apiKey.trim().replace(/["'\r\n]/g, '')
+          const url = `https://${host}/${GEMINI_API_VERSION}/models/${modelName}:generateContent`
+
+          const res = await fetch(url, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-goog-api-client': GEMINI_API_CLIENT,
+              'x-goog-api-key': cleanKey
+            },
+            body: JSON.stringify({
+              contents: [
+                {
+                  parts: [
+                    { text: prompt },
+                    {
+                      inlineData: {
+                        mimeType,
+                        data: buffer.toString('base64')
+                      }
+                    }
+                  ]
+                }
+              ],
+              safetySettings: PERMISSIVE_SAFETY_SETTINGS,
+              generationConfig: {
+                maxOutputTokens: 65536,
+                temperature: 0.1,
+                responseMimeType: 'application/json'
+              }
+            })
+          })
+
+          const data = await res.json()
+          if (!res.ok) {
+            throw new Error(data.error?.message || `Gemini HTTP ${res.status}`)
+          }
+          rawResponseText = extractTextFromGenerateContentResponse(data)
+        } else {
+          const uploadRes = await uploadGeminiFile(apiKey, { buffer, mimeType, displayName })
+          try {
+            rawResponseText = await generateGeminiTranscript(apiKey, {
+              modelName,
+              prompt,
+              fileUri: uploadRes.file.uri,
+              mimeType
+            })
+          } finally {
+            deleteGeminiFile(apiKey, uploadRes.file.name).catch(() => {})
+          }
+        }
+
+        let text = ''
+        let language = 'auto'
+        try {
+          const cleanedJson = rawResponseText.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim()
+          const parsed = JSON.parse(cleanedJson)
+          text = parsed.text || ''
+          language = parsed.language || 'auto'
+        } catch {
+          text = rawResponseText.trim()
+        }
+
+        return { text, language, model: modelName }
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err))
+        console.warn(`[Gemini Transcribe] Failover from ${modelName}:`, lastError.message)
+      }
+    }
+  }
+
+  throw lastError || new Error('All Gemini API keys and models failed to transcribe audio.')
+}
+

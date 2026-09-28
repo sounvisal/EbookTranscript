@@ -6,6 +6,8 @@
  */
 
 import { prisma } from './prisma'
+import { transcribeAudioBufferWithGemini } from './gemini'
+
 
 type TelegramAlertParams = {
   title?: string
@@ -594,10 +596,14 @@ export async function handleTelegramWelcome(chatId: string | number): Promise<bo
     `• <b>🔄 Run Daily Report:</b> Trigger on-demand 5:30 PM digest`,
     `• <b>🌐 Open Admin Web:</b> Direct link to Web Dashboard`,
     '',
-    `Tap any button below to get instant intelligence ⬇️`
+    `🎙️ <b>Instant Pocket Transcriber:</b>`,
+    `Send any audio, video, or hold the mic button to record a voice note for instant verbatim Khmer / English transcription!`,
+    '',
+    `Tap any button below or send audio now ⬇️`
   ].join('\n')
 
   return sendTelegramResponse(chatId, message, undefined, true)
+
 }
 
 export async function handleTelegramStatsCommand(chatId: string | number): Promise<boolean> {
@@ -883,5 +889,252 @@ export async function handleTelegramWebCommand(chatId: string | number): Promise
     true
   )
 }
+
+export async function sendTelegramChatAction(
+  chatId: string | number,
+  action: 'typing' | 'upload_document' | 'record_voice' | 'upload_voice' = 'typing'
+): Promise<boolean> {
+  const { token } = getBotCredentials()
+  if (!token) return false
+  try {
+    await fetch(`https://api.telegram.org/bot${token}/sendChatAction`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, action })
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
+export async function sendTelegramDocument(
+  chatId: string | number,
+  fileName: string,
+  content: string | Buffer,
+  caption?: string
+): Promise<boolean> {
+  const { token } = getBotCredentials()
+  if (!token) return false
+
+  const formData = new FormData()
+  formData.append('chat_id', String(chatId))
+  if (caption) {
+    formData.append('caption', caption)
+    formData.append('parse_mode', 'HTML')
+  }
+
+  const blob = typeof content === 'string'
+    ? new Blob([content], { type: 'text/plain;charset=utf-8' })
+    : new Blob([new Uint8Array(content)])
+
+  formData.append('document', blob, fileName)
+
+
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${token}/sendDocument`, {
+      method: 'POST',
+      body: formData
+    })
+    return res.ok
+  } catch (err) {
+    console.error('[Telegram] sendDocument failed:', err)
+    return false
+  }
+}
+
+export async function handleTelegramAudioUpload(params: {
+  chatId: string | number
+  fileId: string
+  fileName?: string
+  mimeType?: string
+  fileSize?: number
+  durationSeconds?: number
+}): Promise<boolean> {
+  const { token } = getBotCredentials()
+  if (!token) return false
+
+  // 1. Check file size limit (Telegram Bot API allows up to 20MB downloads)
+  if (params.fileSize && params.fileSize > 20 * 1024 * 1024) {
+    await sendTelegramResponse(
+      params.chatId,
+      [
+        `⚠️ <b>File size exceeds Telegram limit:</b>`,
+        `Telegram Bot API limits direct bot downloads to 20MB.`,
+        '',
+        `💡 <i>For large multi-hour recordings, upload directly to the Web Dashboard (which supports up to 2GB):</i>`,
+        `🌐 https://ebook-transcript.vercel.app`
+      ].join('\n')
+    )
+    return false
+  }
+
+  // 2. Infer clean file name & MIME type
+  let fileName = params.fileName || 'voice-note.ogg'
+  let mimeType = params.mimeType || 'audio/ogg'
+
+  const lowerName = fileName.toLowerCase()
+  if (lowerName.endsWith('.mp3')) {
+    mimeType = 'audio/mpeg'
+  } else if (lowerName.endsWith('.m4a')) {
+    mimeType = 'audio/mp4'
+  } else if (lowerName.endsWith('.wav')) {
+    mimeType = 'audio/wav'
+  } else if (lowerName.endsWith('.aac')) {
+    mimeType = 'audio/aac'
+  } else if (lowerName.endsWith('.ogg') || lowerName.endsWith('.oga') || lowerName.endsWith('.opus')) {
+    mimeType = 'audio/ogg'
+  } else if (lowerName.endsWith('.mp4') || lowerName.endsWith('.mov') || lowerName.endsWith('.webm')) {
+    mimeType = lowerName.endsWith('.mp4') ? 'video/mp4' : lowerName.endsWith('.mov') ? 'video/quicktime' : 'video/webm'
+  }
+
+  // 3. Send progress acknowledgment
+  const sizeMb = params.fileSize ? ` (${(params.fileSize / (1024 * 1024)).toFixed(1)} MB)` : ''
+  await sendTelegramResponse(
+    params.chatId,
+    [
+      `🎙️ <b>Signal AI Speech Engine</b>`,
+      `📁 <code>${escapeHtml(fileName)}</code>${sizeMb}`,
+      '',
+      `⏳ <i>Downloading audio & transcribing verbatim in Khmer / English...</i>`,
+      `Please wait a few seconds ⚡`
+    ].join('\n')
+  )
+  await sendTelegramChatAction(params.chatId, 'typing')
+
+  try {
+    // 4. Resolve download URL from Telegram
+    const fileInfoRes = await fetch(`https://api.telegram.org/bot${token}/getFile?file_id=${params.fileId}`)
+    const fileInfo = await fileInfoRes.json()
+    if (!fileInfo.ok || !fileInfo.result?.file_path) {
+      throw new Error(fileInfo.description || 'Unable to locate media file on Telegram servers.')
+    }
+
+    const filePath = fileInfo.result.file_path
+
+    // 5. Download binary audio buffer
+    const audioRes = await fetch(`https://api.telegram.org/file/bot${token}/${filePath}`)
+    if (!audioRes.ok) {
+      throw new Error(`Failed to download audio from Telegram (HTTP ${audioRes.status})`)
+    }
+    const arrayBuffer = await audioRes.arrayBuffer()
+    const buffer = Buffer.from(arrayBuffer)
+
+    // 6. Transcribe with Gemini
+    const { text, language, model } = await transcribeAudioBufferWithGemini(buffer, mimeType, fileName)
+
+    if (!text || !text.trim()) {
+      await sendTelegramResponse(
+        params.chatId,
+        `⚠️ <b>No audible speech detected:</b> The audio file appears to contain silence or background noise with no distinguishable words.`
+      )
+      return true
+    }
+
+    // 7. Calculate metrics and save to Database (Full Cloud Sync)
+    const wordCount = text.trim().split(/\s+/).filter(Boolean).length
+    const durationSeconds = params.durationSeconds || Math.max(1, Math.round(buffer.length / 16000))
+
+    const adminEmails = (process.env.ADMIN_EMAILS || 'sounvisal154@gmail.com,suonvisal154@gmail.com,suonvisal.biu@gmail.com')
+      .split(',')
+      .map((e) => e.trim().toLowerCase())
+      .filter(Boolean)
+
+    const adminUser = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { role: 'admin' },
+          { email: { in: adminEmails } }
+        ]
+      }
+    })
+
+    // Save to prisma.transcript (accessible in Web History)
+    await prisma.transcript.create({
+      data: {
+        text,
+        source: 'telegram-bot',
+        filename: fileName,
+        duration: durationSeconds,
+        wordCount,
+        language,
+        userId: adminUser?.id || null
+      }
+    }).catch((e) => console.error('[Telegram DB Sync] Transcript save error:', e))
+
+    // Save to prisma.usageMetric (telemetry)
+    const ext = fileName.split('.').pop()?.toLowerCase() || 'audio'
+    await prisma.usageMetric.create({
+      data: {
+        userId: adminUser?.id || null,
+        model,
+        inputType: 'telegram',
+        fileFormat: ext,
+        fileSizeBytes: buffer.length,
+        durationSeconds,
+        wordCount,
+        status: 'success'
+      }
+    }).catch((e) => console.error('[Telegram DB Sync] Usage metric save error:', e))
+
+    // 8. Deliver final transcript back to chat
+    const mins = Math.floor(durationSeconds / 60)
+    const secs = Math.round(durationSeconds % 60)
+    const durationStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`
+
+    const header = [
+      `✅ <b>TRANSCRIPTION COMPLETE</b>`,
+      `📁 <code>${escapeHtml(fileName)}</code>`,
+      `🌐 <b>Language:</b> <code>${escapeHtml(language)}</code>`,
+      `⏱ <b>Duration:</b> <code>${durationStr}</code> • <b>Words:</b> <code>${wordCount.toLocaleString()}</code>`,
+      `🤖 <b>Model:</b> <code>${escapeHtml(model)}</code>`,
+      '',
+      '━━━━━━━━━━━━━━━━━━━━━',
+      ''
+    ].join('\n')
+
+    const inlineKeyboard = [
+      [
+        { text: '🌐 View in Web History', url: 'https://ebook-transcript.vercel.app/history' },
+        { text: '📊 Live Stats', callback_data: 'stats' }
+      ]
+    ]
+
+    // If text fits in Telegram's 4096 char limit
+    if (text.length <= 3200) {
+      const fullMessage = `${header}${escapeHtml(text)}\n\n⚡ <i>Synced to your Web History & Dashboard.</i>`
+      await sendTelegramResponse(params.chatId, fullMessage, inlineKeyboard, true)
+    } else {
+      // Long transcript: send preview + full document attachment
+      const previewText = text.slice(0, 2600) + '...\n\n<i>[Full transcript continues in the document attachment below ⬇️]</i>'
+      await sendTelegramResponse(params.chatId, `${header}${escapeHtml(previewText)}`, inlineKeyboard, true)
+
+      const docName = `${fileName.replace(/\.[^/.]+$/, '')}_transcript.txt`
+      await sendTelegramDocument(
+        params.chatId,
+        docName,
+        text,
+        `📄 <b>Full Transcript Attachment:</b> <code>${escapeHtml(docName)}</code> (${wordCount.toLocaleString()} words)`
+      )
+    }
+
+    return true
+  } catch (err) {
+    console.error('[Telegram Audio Handler] Failed:', err)
+    const errText = err instanceof Error ? err.message : String(err)
+    await sendTelegramResponse(
+      params.chatId,
+      [
+        `❌ <b>Transcription Failed:</b>`,
+        `<code>${escapeHtml(errText.slice(0, 400))}</code>`,
+        '',
+        `💡 <i>You can also upload this file on the Web Dashboard:</i>`,
+        `🌐 https://ebook-transcript.vercel.app`
+      ].join('\n')
+    )
+    return false
+  }
+}
+
 
 
