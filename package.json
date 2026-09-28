@@ -11,6 +11,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "test:smoke": "k6 run load-tests/smoke-test.js",
+    "test:load": "k6 run load-tests/load-test.js",
+    "test:api": "k6 run load-tests/api-load-test.js",
     "postinstall": "prisma generate && node scripts/prepare-ytdlp.js"
   },
   "keywords": [],

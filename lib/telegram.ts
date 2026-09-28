@@ -34,7 +34,7 @@ const lastAlerts = new Map<string, number>()
 const recentErrorTimestamps: number[] = []
 let lastSpikeAlertSent = 0
 
-function getBotCredentials() {
+export function getBotCredentials() {
   const token = (process.env.TELEGRAM_BOT_TOKEN || '').trim().replace(/["'\r\n]/g, '')
   const chatId = (process.env.TELEGRAM_CHAT_ID || '').trim().replace(/["'\r\n]/g, '')
   return { token, chatId }
@@ -530,3 +530,358 @@ function escapeHtml(text: string): string {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;')
 }
+
+/**
+ * Persistent 6-button keyboard pinned to the bottom of Telegram chat.
+ * Admin never has to type commands on their phone.
+ */
+export const TELEGRAM_MAIN_KEYBOARD = {
+  keyboard: [
+    [{ text: '📊 Live Stats' }, { text: '🩺 System Health' }],
+    [{ text: '🔑 Key Fleet' }, { text: '👥 Active Users' }],
+    [{ text: '🔄 Run Daily Report' }, { text: '🌐 Open Admin Web' }]
+  ],
+  resize_keyboard: true,
+  is_persistent: true
+}
+
+export async function sendTelegramResponse(
+  chatId: string | number,
+  text: string,
+  inlineKeyboard?: Array<Array<{ text: string; callback_data?: string; url?: string }>>,
+  includeMainKeyboard: boolean = true
+): Promise<boolean> {
+  const { token } = getBotCredentials()
+  if (!token) return false
+
+  const body: Record<string, unknown> = {
+    chat_id: chatId,
+    text,
+    parse_mode: 'HTML',
+    disable_web_page_preview: true
+  }
+
+  if (inlineKeyboard && inlineKeyboard.length > 0) {
+    body.reply_markup = { inline_keyboard: inlineKeyboard }
+  } else if (includeMainKeyboard) {
+    body.reply_markup = TELEGRAM_MAIN_KEYBOARD
+  }
+
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+    return res.ok
+  } catch (err) {
+    console.error('[Telegram] Failed to send response:', err)
+    return false
+  }
+}
+
+export async function handleTelegramWelcome(chatId: string | number): Promise<boolean> {
+  const message = [
+    `🤖 <b>Welcome to Signal Command Center!</b>`,
+    '',
+    `You have full remote control over the Signal platform directly from this chat.`,
+    `<b>No typing required</b> — use the one-tap buttons below:`,
+    '',
+    `• <b>📊 Live Stats:</b> Today's audio duration, requests & error rate`,
+    `• <b>🩺 System Health:</b> Real-time Database, Gemini & Edge ping`,
+    `• <b>🔑 Key Fleet:</b> Gemini API key latency & quota status`,
+    `• <b>👥 Active Users:</b> New signups & top transcribers`,
+    `• <b>🔄 Run Daily Report:</b> Trigger on-demand 5:30 PM digest`,
+    `• <b>🌐 Open Admin Web:</b> Direct link to Web Dashboard`,
+    '',
+    `Tap any button below to get instant intelligence ⬇️`
+  ].join('\n')
+
+  return sendTelegramResponse(chatId, message, undefined, true)
+}
+
+export async function handleTelegramStatsCommand(chatId: string | number): Promise<boolean> {
+  const now = new Date()
+  const localOffsetHours = 7
+  const localNow = new Date(now.getTime() + localOffsetHours * 3600 * 1000)
+  const localStart = new Date(Date.UTC(localNow.getUTCFullYear(), localNow.getUTCMonth(), localNow.getUTCDate(), 0, 0, 0))
+  const startOfDayUtc = new Date(localStart.getTime() - localOffsetHours * 3600 * 1000)
+
+  const timeStr = localNow.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })
+
+  try {
+    const [metricsCount, sumData, errorsCount, activeUsersGroup] = await Promise.all([
+      prisma.usageMetric.count({ where: { createdAt: { gte: startOfDayUtc } } }),
+      prisma.usageMetric.aggregate({
+        _sum: { durationSeconds: true, wordCount: true },
+        where: { createdAt: { gte: startOfDayUtc } }
+      }),
+      prisma.errorLog.count({ where: { createdAt: { gte: startOfDayUtc } } }),
+      prisma.usageMetric.groupBy({
+        by: ['userId'],
+        where: { createdAt: { gte: startOfDayUtc }, userId: { not: null } }
+      })
+    ])
+
+    const totalSeconds = sumData._sum.durationSeconds || 0
+    const totalWords = sumData._sum.wordCount || 0
+    const activeUsers = activeUsersGroup.length
+    const hours = Math.floor(totalSeconds / 3600)
+    const minutes = Math.floor((totalSeconds % 3600) / 60)
+    const durationFormatted = hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m ${Math.floor(totalSeconds % 60)}s`
+
+    const totalRuns = metricsCount + errorsCount
+    const errorRate = totalRuns > 0 ? ((errorsCount / totalRuns) * 100).toFixed(1) : '0.0'
+
+    const message = [
+      `📊 <b>TODAY'S LIVE PLATFORM STATS</b>`,
+      `⏱ <i>As of: ${timeStr} (Cambodia Time)</i>`,
+      '',
+      `🎧 <b>Audio Transcribed:</b> <code>${durationFormatted}</code>`,
+      `📝 <b>Words Generated:</b> <code>${totalWords.toLocaleString()} words</code>`,
+      `⚡ <b>Successful Runs:</b> <code>${metricsCount.toLocaleString()}</code>`,
+      `👥 <b>Active Users Today:</b> <code>${activeUsers} user${activeUsers === 1 ? '' : 's'}</code>`,
+      `🚨 <b>Errors Encountered:</b> <code>${errorsCount} (${errorRate}% error rate)</code>`,
+      '',
+      `💡 <i>Tip: Tap Refresh Stats below for live updates.</i>`
+    ].join('\n')
+
+    const inlineKeyboard = [
+      [
+        { text: '🔄 Refresh Stats', callback_data: 'stats' },
+        { text: '🩺 System Health', callback_data: 'health' }
+      ],
+      [
+        { text: '🌐 Open Admin Dashboard', url: 'https://ebook-transcript.vercel.app/admin' }
+      ]
+    ]
+
+    return sendTelegramResponse(chatId, message, inlineKeyboard, true)
+  } catch (err) {
+    return sendTelegramResponse(chatId, `⚠️ <b>Error retrieving stats:</b>\n<code>${escapeHtml(String(err))}</code>`)
+  }
+}
+
+export async function handleTelegramHealthCommand(chatId: string | number): Promise<boolean> {
+  const timestamp = new Date().toLocaleTimeString('en-US', { timeZone: 'Asia/Phnom_Penh' })
+
+  // 1. Check PostgreSQL via Prisma
+  let dbStatus = '🟢 Operational'
+  let dbLatency = 0
+  const dbStart = Date.now()
+  try {
+    await prisma.$queryRaw`SELECT 1`
+    dbLatency = Date.now() - dbStart
+    dbStatus = `🟢 Healthy (${dbLatency}ms)`
+  } catch (err) {
+    dbStatus = `🔴 Error: ${escapeHtml(String(err).slice(0, 80))}`
+  }
+
+  // 2. Check Gemini API
+  const keys = (process.env.GEMINI_API_KEYS || process.env.GEMINI_API_KEY || '').split(',').map((k) => k.trim()).filter(Boolean)
+  let geminiStatus = '🟢 Online'
+  let geminiLatency = 0
+
+  if (keys.length > 0) {
+    const key = keys[0]
+    const gStart = Date.now()
+    try {
+      const controller = new AbortController()
+      const tId = setTimeout(() => controller.abort(), 5000)
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${key}&pageSize=1`, {
+        signal: controller.signal
+      })
+      clearTimeout(tId)
+      geminiLatency = Date.now() - gStart
+      if (res.ok) {
+        geminiStatus = `🟢 Online (${geminiLatency}ms)`
+      } else if (res.status === 429) {
+        geminiStatus = `🟡 Rate Limited (429)`
+      } else {
+        geminiStatus = `🔴 HTTP ${res.status}`
+      }
+    } catch {
+      geminiStatus = `🔴 Connection Timeout`
+    }
+  } else {
+    geminiStatus = `🟡 No Keys Configured`
+  }
+
+  const message = [
+    `🩺 <b>SIGNAL PLATFORM HEALTH CHECK</b>`,
+    `⏱ <i>Time: ${timestamp} (UTC+7)</i>`,
+    '',
+    `🗄 <b>PostgreSQL Database:</b>`,
+    `   ↳ ${dbStatus}`,
+    '',
+    `🤖 <b>Gemini AI Engine:</b>`,
+    `   ↳ ${geminiStatus}`,
+    '',
+    `⚡ <b>Vercel Serverless Edge:</b>`,
+    `   ↳ 🟢 Operational`,
+    '',
+    `🔑 <b>Key Fleet Size:</b> <code>${keys.length} API key${keys.length === 1 ? '' : 's'} loaded</code>`,
+    '',
+    `🛡️ <i>All critical systems operational.</i>`
+  ].join('\n')
+
+  const inlineKeyboard = [
+    [
+      { text: '🔄 Re-check Health', callback_data: 'health' },
+      { text: '🔑 Check Key Fleet', callback_data: 'keys' }
+    ],
+    [
+      { text: '📊 View Live Stats', callback_data: 'stats' }
+    ]
+  ]
+
+  return sendTelegramResponse(chatId, message, inlineKeyboard, true)
+}
+
+export async function handleTelegramKeysCommand(chatId: string | number): Promise<boolean> {
+  const keys = (process.env.GEMINI_API_KEYS || process.env.GEMINI_API_KEY || '').split(',').map((k) => k.trim()).filter(Boolean)
+
+  if (keys.length === 0) {
+    return sendTelegramResponse(chatId, `⚠️ <b>No Gemini API keys configured</b> in environment variables.`)
+  }
+
+  const results = await Promise.all(
+    keys.map(async (key, idx) => {
+      const masked = `${key.slice(0, 6)}...${key.slice(-4)}`
+      const start = Date.now()
+      try {
+        const controller = new AbortController()
+        const tId = setTimeout(() => controller.abort(), 5000)
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${key}&pageSize=3`, {
+          signal: controller.signal
+        })
+        clearTimeout(tId)
+        const latency = Date.now() - start
+        if (res.ok) {
+          return `🟢 <b>Key #${idx + 1}:</b> <code>${masked}</code> — ${latency}ms\n   ↳ <i>Status: Active & Operational</i>`
+        }
+        if (res.status === 429) {
+          return `🟡 <b>Key #${idx + 1}:</b> <code>${masked}</code> — Rate Limited (429)`
+        }
+        return `🔴 <b>Key #${idx + 1}:</b> <code>${masked}</code> — HTTP ${res.status}`
+      } catch {
+        return `🔴 <b>Key #${idx + 1}:</b> <code>${masked}</code> — Timeout / Unreachable`
+      }
+    })
+  )
+
+  const message = [
+    `🔑 <b>GEMINI API KEY FLEET (${keys.length} Keys)</b>`,
+    '',
+    results.join('\n\n'),
+    '',
+    `🔄 <b>Failover Engine:</b> Automatic round-robin rotation active.`
+  ].join('\n')
+
+  const inlineKeyboard = [
+    [
+      { text: '🔄 Re-test Keys', callback_data: 'keys' },
+      { text: '🩺 Health', callback_data: 'health' }
+    ]
+  ]
+
+  return sendTelegramResponse(chatId, message, inlineKeyboard, true)
+}
+
+export async function handleTelegramUsersCommand(chatId: string | number): Promise<boolean> {
+  try {
+    const [recentUsers, totalUsersCount] = await Promise.all([
+      prisma.user.findMany({
+        take: 5,
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          role: true,
+          createdAt: true
+        }
+      }),
+      prisma.user.count()
+    ])
+
+    const now = Date.now()
+    const userLines = recentUsers.map((u, i) => {
+      const email = u.email || 'Anonymous'
+      const roleBadge = u.role === 'admin' ? '👑 Admin' : '👤 User'
+      const diffHours = Math.round((now - new Date(u.createdAt).getTime()) / (3600 * 1000))
+      const timeAgo = diffHours < 1 ? 'Just now' : diffHours < 24 ? `${diffHours}h ago` : `${Math.round(diffHours / 24)}d ago`
+      return `${i + 1}. <code>${escapeHtml(email)}</code> (${roleBadge}, ${timeAgo})`
+    })
+
+    const message = [
+      `👥 <b>USER INTELLIGENCE & SIGNUPS</b>`,
+      `📊 <b>Total Registered Users:</b> <code>${totalUsersCount}</code>`,
+      '',
+      `✨ <b>Latest 5 Signups:</b>`,
+      userLines.join('\n'),
+      '',
+      `💡 <i>Manage roles and daily quotas directly in the Admin Web.</i>`
+    ].join('\n')
+
+    const inlineKeyboard = [
+      [
+        { text: '🔄 Refresh Users', callback_data: 'users' },
+        { text: '📊 Live Stats', callback_data: 'stats' }
+      ],
+      [
+        { text: '🌐 Open Admin Users Table', url: 'https://ebook-transcript.vercel.app/admin' }
+      ]
+    ]
+
+    return sendTelegramResponse(chatId, message, inlineKeyboard, true)
+  } catch (err) {
+    return sendTelegramResponse(chatId, `⚠️ <b>Error fetching users:</b>\n<code>${escapeHtml(String(err))}</code>`)
+  }
+}
+
+export async function answerTelegramCallback(
+  callbackQueryId: string,
+  text?: string,
+  showAlert: boolean = false
+): Promise<boolean> {
+  const { token } = getBotCredentials()
+  if (!token) return false
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        callback_query_id: callbackQueryId,
+        text,
+        show_alert: showAlert
+      })
+    })
+    return res.ok
+  } catch (err) {
+    console.error('[Telegram] answerCallbackQuery failed:', err)
+    return false
+  }
+}
+
+export async function handleTelegramWebCommand(chatId: string | number): Promise<boolean> {
+  const siteUrl = process.env.NEXTAUTH_URL || 'https://ebook-transcript.vercel.app'
+  const adminUrl = `${siteUrl.replace(/\/$/, '')}/admin`
+  const message = [
+    `🌐 <b>Signal Web Admin Portal</b>`,
+    '',
+    `Access complete analytics, user quotas, Key Fleet, and live system logs:`,
+    `🔗 <code>${adminUrl}</code>`,
+    '',
+    `Tap the button below to launch directly:`
+  ].join('\n')
+
+  return sendTelegramResponse(
+    chatId,
+    message,
+    [[{ text: '🚀 Open Admin Dashboard', url: adminUrl }]],
+    true
+  )
+}
+
+

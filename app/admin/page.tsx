@@ -38,6 +38,7 @@ import {
   Send,
   ShieldAlert,
   ShieldCheck,
+  Smartphone,
   Sparkles,
   Terminal,
   Trash2,
@@ -45,6 +46,7 @@ import {
   UserCheck,
   Users,
   UserX,
+  Wifi,
   X,
   Zap
 } from 'lucide-react'
@@ -62,6 +64,21 @@ type KeyDiagnostic = {
   modelsCount?: number
   lastChecked: string
 }
+
+type TelegramSetupState = {
+  configured: boolean
+  bot?: { id: number; is_bot: boolean; first_name: string; username?: string } | null
+  adminChatIdConfigured?: boolean
+  webhook?: {
+    url?: string
+    has_custom_certificate?: boolean
+    pending_update_count?: number
+    last_error_date?: number
+    last_error_message?: string
+  } | null
+  error?: string
+}
+
 
 type ErrorCluster = {
   id: string
@@ -266,6 +283,11 @@ export default function AdminDashboardPage() {
   // 5. Telegram Operations Modal State
   const [telegramModalOpen, setTelegramModalOpen] = useState(false)
   const [dispatchingDigest, setDispatchingDigest] = useState(false)
+  const [telegramSetup, setTelegramSetup] = useState<TelegramSetupState | null>(null)
+  const [loadingTelegramSetup, setLoadingTelegramSetup] = useState(false)
+  const [registeringWebhook, setRegisteringWebhook] = useState(false)
+  const [disconnectingWebhook, setDisconnectingWebhook] = useState(false)
+
 
   // 6. Error Cluster Active View
   const [activeClusterId, setActiveClusterId] = useState<string | null>(null)
@@ -515,6 +537,67 @@ export default function AdminDashboardPage() {
     }
   }
 
+  // Fetch Webhook and Bot Setup Info
+  const fetchTelegramSetup = useCallback(async () => {
+    setLoadingTelegramSetup(true)
+    try {
+      const res = await fetch('/api/admin/telegram/setup-webhook')
+      if (res.ok) {
+        const data = await res.json()
+        setTelegramSetup(data)
+      }
+    } catch (err) {
+      console.error('Failed to load webhook setup:', err)
+    } finally {
+      setLoadingTelegramSetup(false)
+    }
+  }, [])
+
+  // Register / Connect 2-Way Interactive Webhook
+  const handleRegisterWebhook = async () => {
+    setRegisteringWebhook(true)
+    try {
+      const res = await fetch('/api/admin/telegram/setup-webhook', { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed to register webhook.')
+      }
+      showNotification('✅ Telegram 2-way button bot connected & buttons pushed to chat!')
+      await fetchTelegramSetup()
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Webhook registration failed.')
+    } finally {
+      setRegisteringWebhook(false)
+    }
+  }
+
+  // Disconnect Webhook
+  const handleDeleteWebhook = async () => {
+    if (!confirm('Are you sure you want to disconnect the Telegram webhook? The bot will no longer respond to interactive buttons until reconnected.')) return
+    setDisconnectingWebhook(true)
+    try {
+      const res = await fetch('/api/admin/telegram/setup-webhook', { method: 'DELETE' })
+      const data = await res.json()
+      if (res.ok && data.success) {
+        showNotification('Telegram webhook disconnected.')
+        await fetchTelegramSetup()
+      } else {
+        throw new Error(data.error || 'Failed to disconnect webhook.')
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to disconnect webhook.')
+    } finally {
+      setDisconnectingWebhook(false)
+    }
+  }
+
+  useEffect(() => {
+    if (telegramModalOpen) {
+      fetchTelegramSetup()
+    }
+  }, [telegramModalOpen, fetchTelegramSetup])
+
+
   // Lifecycle
   useEffect(() => {
     if (status !== 'authenticated' || session?.user?.role !== 'admin') {
@@ -642,12 +725,17 @@ export default function AdminDashboardPage() {
           {/* Telegram Command Center Button */}
           <button
             onClick={() => setTelegramModalOpen(true)}
-            className="flex items-center gap-1.5 rounded-xl bg-sky-500/10 dark:bg-sky-500/20 px-3 py-2 text-xs font-semibold text-sky-600 dark:text-sky-400 hover:bg-sky-500/20 transition-all active:scale-95 cursor-pointer border border-sky-500/20"
-            title="Open Telegram Bot Operations & Alert Rules"
+            className="flex items-center gap-2 rounded-xl bg-sky-500/10 dark:bg-sky-500/20 px-3.5 py-1.5 text-xs font-semibold text-sky-600 dark:text-sky-400 hover:bg-sky-500/20 transition-all active:scale-95 cursor-pointer border border-sky-500/20 shadow-xs"
+            title="Open Telegram Bot Operations & 2-Way Interactive Controls"
           >
             <Send className="h-3.5 w-3.5" />
-            <span>Telegram Hub</span>
+            <span>Telegram Bot</span>
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sky-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-sky-500"></span>
+            </span>
           </button>
+
 
           <button
             onClick={() => {
@@ -1355,8 +1443,34 @@ export default function AdminDashboardPage() {
               </button>
             </div>
 
+            {/* Telegram Remote Sync Callout */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-2xl bg-sky-500/5 border border-sky-500/20 dark:bg-sky-950/20">
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-sky-500/10 text-sky-500">
+                  <Smartphone className="h-4 w-4" />
+                </div>
+                <div>
+                  <span className="text-xs font-bold text-slate-900 dark:text-white block">
+                    Zero-Typing Telegram Key Monitor
+                  </span>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    Tap <code className="bg-sky-100 dark:bg-sky-950 text-sky-700 dark:text-sky-300 px-1.5 py-0.5 rounded font-bold">[ 🔑 Key Fleet ]</code> on your phone anytime to run this exact live probe.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setTelegramModalOpen(true)}
+                  className="rounded-xl border border-sky-500/30 bg-sky-500/10 px-3 py-1.5 text-xs font-bold text-sky-600 dark:text-sky-400 hover:bg-sky-500/20 transition-all cursor-pointer"
+                >
+                  Manage Telegram Bot
+                </button>
+              </div>
+            </div>
+
             {/* Key Cards Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-1">
               {stats.keyFleet?.map((k) => {
                 const diagnostic = pingResults[k.index]
                 const hasPing = !!diagnostic
@@ -1951,7 +2065,7 @@ export default function AdminDashboardPage() {
         )}
       </AnimatePresence>
 
-      {/* Feature 7: Telegram Operations Hub Modal */}
+      {/* Feature 7: Telegram Operations Hub & 2-Way Interactive Command Center */}
       <AnimatePresence>
         {telegramModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
@@ -1959,77 +2073,231 @@ export default function AdminDashboardPage() {
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="relative w-full max-w-md rounded-3xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-2xl overflow-hidden flex flex-col gap-4"
+              className="relative w-full max-w-xl rounded-3xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-2xl overflow-hidden flex flex-col gap-4 max-h-[90vh] overflow-y-auto"
             >
+              {/* Header */}
               <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-4">
-                <div className="flex items-center gap-2 text-sky-500 font-bold text-sm">
-                  <Send className="h-5 w-5" />
-                  <span>Telegram Intelligence Operations</span>
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-sky-500/10 text-sky-500 border border-sky-500/20">
+                    <Send className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-extrabold text-base text-slate-900 dark:text-white flex items-center gap-2">
+                      <span>Telegram 2-Way Command Center</span>
+                      {telegramSetup?.bot?.username && (
+                        <span className="text-xs font-mono font-normal text-sky-600 dark:text-sky-400">
+                          @{telegramSetup.bot.username}
+                        </span>
+                      )}
+                    </h3>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      Zero-typing remote phone controls & automated real-time incident alerts.
+                    </p>
+                  </div>
                 </div>
                 <button
                   onClick={() => setTelegramModalOpen(false)}
-                  className="rounded-full p-1 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                  className="rounded-full p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
                 >
                   <X className="h-5 w-5" />
                 </button>
               </div>
 
-              <div className="flex flex-col gap-3 text-xs">
-                {/* Active Bot Connection */}
-                <div className="p-3 rounded-2xl bg-sky-50 dark:bg-sky-950/40 border border-sky-200/60 dark:border-sky-900/50 flex items-center justify-between">
-                  <div>
-                    <span className="font-bold text-sky-900 dark:text-sky-200 block">Bot Connection: Active</span>
-                    <span className="text-[11px] text-sky-700 dark:text-sky-400 font-mono">
-                      Chat ID: {stats?.telegram.chatId || 'Not Configured'}
+              <div className="flex flex-col gap-4 text-xs">
+                {/* 1. Live Webhook 2-Way Connection Status Card */}
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-sky-500/5 via-blue-500/5 to-indigo-500/5 border border-sky-200/80 dark:border-sky-900/40 flex flex-col gap-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="relative flex h-2.5 w-2.5">
+                        <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
+                          telegramSetup?.webhook?.url ? 'bg-emerald-400' : 'bg-amber-400'
+                        }`} />
+                        <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${
+                          telegramSetup?.webhook?.url ? 'bg-emerald-500' : 'bg-amber-500'
+                        }`} />
+                      </span>
+                      <span className="font-bold text-slate-900 dark:text-white text-xs">
+                        {loadingTelegramSetup
+                          ? 'Checking Webhook Status...'
+                          : telegramSetup?.webhook?.url
+                            ? '2-Way Interactive Bot: Active'
+                            : 'Webhook Inactive (One-Way Alerts Only)'}
+                      </span>
+                    </div>
+
+                    {telegramSetup?.webhook?.url ? (
+                      <span className="rounded-full bg-emerald-100 dark:bg-emerald-950/60 px-2.5 py-0.5 text-[10px] font-bold text-emerald-700 dark:text-emerald-400 border border-emerald-300/40">
+                        Webhook Connected
+                      </span>
+                    ) : (
+                      <span className="rounded-full bg-amber-100 dark:bg-amber-950/60 px-2.5 py-0.5 text-[10px] font-bold text-amber-700 dark:text-amber-400 border border-amber-300/40">
+                        Setup Required
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex flex-col gap-1 text-[11px] text-slate-600 dark:text-slate-400">
+                    <div className="flex justify-between font-mono">
+                      <span>Authorized Admin Chat:</span>
+                      <span className="font-bold text-slate-800 dark:text-slate-200">
+                        {stats?.telegram.chatId || '5859388585'}
+                      </span>
+                    </div>
+                    {telegramSetup?.webhook?.url && (
+                      <div className="flex flex-col gap-0.5 mt-1 pt-1 border-t border-slate-200/60 dark:border-slate-800">
+                        <span className="text-[10px] text-slate-400">Target Webhook Endpoint:</span>
+                        <code className="text-[10px] truncate bg-white/70 dark:bg-slate-950/60 px-2 py-1 rounded-md text-sky-600 dark:text-sky-400">
+                          {telegramSetup.webhook.url}
+                        </code>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Webhook Action Trigger */}
+                  <div className="pt-1 flex items-center gap-2">
+                    <button
+                      onClick={handleRegisterWebhook}
+                      disabled={registeringWebhook}
+                      className="flex-1 flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 px-4 py-2 text-xs font-bold text-white shadow-md shadow-sky-500/20 hover:opacity-95 active:scale-95 disabled:opacity-50 transition-all cursor-pointer"
+                    >
+                      {registeringWebhook ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Wifi className="h-4 w-4" />
+                      )}
+                      <span>
+                        {telegramSetup?.webhook?.url
+                          ? 'Re-Sync & Push Buttons to Phone'
+                          : '🚀 Connect 2-Way Interactive Bot Now'}
+                      </span>
+                    </button>
+
+                    {telegramSetup?.webhook?.url && (
+                      <button
+                        onClick={handleDeleteWebhook}
+                        disabled={disconnectingWebhook}
+                        className="rounded-xl border border-red-200 dark:border-red-900/50 bg-red-50/50 dark:bg-red-950/30 px-3 py-2 text-xs font-semibold text-red-600 dark:text-red-400 hover:bg-red-100 disabled:opacity-50 transition-colors cursor-pointer"
+                        title="Disconnect Webhook"
+                      >
+                        {disconnectingWebhook ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Disconnect'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* 2. Zero-Typing Interactive Keyboard Showcase */}
+                <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/80 dark:border-slate-800 flex flex-col gap-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-slate-900 dark:text-white text-[11px] uppercase tracking-wider flex items-center gap-1.5">
+                      <Smartphone className="h-3.5 w-3.5 text-blue-500" />
+                      <span>Pinned Telegram Keyboard (No Typing Required)</span>
+                    </span>
+                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold">
+                      1-Tap Responses
                     </span>
                   </div>
-                  <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    These 6 physical buttons stay pinned to the bottom of your Telegram chat for instant remote control:
+                  </p>
+
+                  <div className="grid grid-cols-2 gap-2 mt-1">
+                    <div className="p-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-200/60 dark:border-slate-800/80">
+                      <span className="font-bold text-slate-800 dark:text-slate-200 block text-[11px]">
+                        📊 Live Stats
+                      </span>
+                      <span className="text-[10px] text-slate-400">
+                        Today's audio duration, words, request volume & error rate
+                      </span>
+                    </div>
+
+                    <div className="p-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-200/60 dark:border-slate-800/80">
+                      <span className="font-bold text-slate-800 dark:text-slate-200 block text-[11px]">
+                        🩺 System Health
+                      </span>
+                      <span className="text-[10px] text-slate-400">
+                        Neon DB latency, Gemini API status & Vercel edge probe
+                      </span>
+                    </div>
+
+                    <div className="p-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-200/60 dark:border-slate-800/80">
+                      <span className="font-bold text-slate-800 dark:text-slate-200 block text-[11px]">
+                        🔑 Key Fleet
+                      </span>
+                      <span className="text-[10px] text-slate-400">
+                        Multi-key latency probe & 429 quota exhaustion check
+                      </span>
+                    </div>
+
+                    <div className="p-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-200/60 dark:border-slate-800/80">
+                      <span className="font-bold text-slate-800 dark:text-slate-200 block text-[11px]">
+                        👥 Active Users
+                      </span>
+                      <span className="text-[10px] text-slate-400">
+                        Recent 5 signups, roles & top transcribers
+                      </span>
+                    </div>
+
+                    <div className="p-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-200/60 dark:border-slate-800/80">
+                      <span className="font-bold text-slate-800 dark:text-slate-200 block text-[11px]">
+                        🔄 Run Daily Report
+                      </span>
+                      <span className="text-[10px] text-slate-400">
+                        On-demand trigger for the 5:30 PM performance digest
+                      </span>
+                    </div>
+
+                    <div className="p-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-200/60 dark:border-slate-800/80">
+                      <span className="font-bold text-slate-800 dark:text-slate-200 block text-[11px]">
+                        🌐 Open Admin Web
+                      </span>
+                      <span className="text-[10px] text-slate-400">
+                        Instant 1-tap launcher to this Web Dashboard
+                      </span>
+                    </div>
+                  </div>
                 </div>
 
-                {/* Automated Rules Summary */}
-                <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/60 dark:border-slate-800 flex flex-col gap-2">
-                  <span className="font-bold text-slate-900 dark:text-white text-[11px] uppercase tracking-wider">
-                    Automated Alert Rules:
-                  </span>
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-600 dark:text-slate-300">🚨 Error Spike Rule:</span>
-                    <span className="font-semibold text-emerald-600 dark:text-emerald-400">Trigger on &ge;3 errors / 10m</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-600 dark:text-slate-300">📢 Direct User Reports:</span>
-                    <span className="font-semibold text-emerald-600 dark:text-emerald-400">Real-time Push</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-600 dark:text-slate-300">📊 Evening Recap:</span>
-                    <span className="font-semibold text-sky-600 dark:text-sky-400">Scheduled (Phnom Penh)</span>
-                  </div>
-                </div>
+                {/* 3. Action Buttons */}
+                <div className="flex flex-col gap-2 pt-1">
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      onClick={handleDispatchEveningDigest}
+                      disabled={dispatchingDigest}
+                      className="flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors cursor-pointer"
+                    >
+                      {dispatchingDigest ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <BarChart3 className="h-3.5 w-3.5" />}
+                      <span>Dispatch 5:30 PM Digest</span>
+                    </button>
 
-                {/* Action Buttons */}
-                <div className="flex flex-col gap-2 mt-2">
-                  <button
-                    onClick={handleDispatchEveningDigest}
-                    disabled={dispatchingDigest}
-                    className="flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 px-4 py-2.5 text-xs font-bold text-white shadow-md shadow-sky-500/20 hover:opacity-95 active:scale-95 disabled:opacity-50 transition-all cursor-pointer"
-                  >
-                    {dispatchingDigest ? <Loader2 className="h-4 w-4 animate-spin" /> : <BarChart3 className="h-4 w-4" />}
-                    <span>Dispatch Evening Digest Now</span>
-                  </button>
+                    <button
+                      onClick={handleTestTelegram}
+                      disabled={testingTelegram}
+                      className="flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors cursor-pointer"
+                    >
+                      {testingTelegram ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                      <span>Send Ping Test Alert</span>
+                    </button>
+                  </div>
 
-                  <button
-                    onClick={handleTestTelegram}
-                    disabled={testingTelegram}
-                    className="flex items-center justify-center gap-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors cursor-pointer"
-                  >
-                    {testingTelegram ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
-                    <span>Send Quick Ping Test Alert</span>
-                  </button>
+                  {telegramSetup?.bot?.username && (
+                    <a
+                      href={`https://t.me/${telegramSetup.bot.username}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center justify-center gap-2 rounded-xl bg-sky-500/10 dark:bg-sky-500/20 py-2 text-xs font-bold text-sky-600 dark:text-sky-400 hover:bg-sky-500/20 transition-all"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" />
+                      <span>Open @{telegramSetup.bot.username} in Telegram</span>
+                    </a>
+                  )}
                 </div>
               </div>
             </motion.div>
           </div>
         )}
       </AnimatePresence>
+
 
       {/* Raw Error Detail Modal */}
       <AnimatePresence>
