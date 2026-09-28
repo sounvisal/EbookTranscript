@@ -14,6 +14,8 @@ import {
   handleTelegramAudioUpload,
   handleTelegramTranscribeHelp,
   sendTelegramDailyReport,
+  sendTelegramMessage,
+  deleteTelegramMessage,
   sendTelegramResponse
 } from '@/lib/telegram'
 
@@ -343,8 +345,11 @@ export async function POST(req: Request) {
     cleanCmd === 'daily'
   ) {
     if (isAdmin) {
-      await sendTelegramResponse(incomingChatId, '⏳ <i>Generating and dispatching 5:30 PM Daily Digest report...</i>')
+      const loading = await sendTelegramMessage(incomingChatId, '⏳ <i>Generating and dispatching 5:30 PM Daily Digest report...</i>', undefined, false)
       const result = await sendTelegramDailyReport(undefined, true)
+      if (loading.messageId) {
+        await deleteTelegramMessage(incomingChatId, loading.messageId)
+      }
       if (!result.success) {
         await sendTelegramResponse(incomingChatId, `⚠️ <b>Report generation failed:</b>\n<code>${result.error}</code>`)
       }

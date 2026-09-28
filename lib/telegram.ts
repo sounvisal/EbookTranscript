@@ -762,14 +762,14 @@ export async function handleTelegramTranscribeHelp(chatId: string | number): Pro
   return sendTelegramResponse(chatId, message, undefined, true)
 }
 
-export async function sendTelegramResponse(
+export async function sendTelegramMessage(
   chatId: string | number,
   text: string,
   inlineKeyboard?: Array<Array<{ text: string; callback_data?: string; url?: string }>>,
   includeMainKeyboard: boolean = true
-): Promise<boolean> {
+): Promise<{ success: boolean; messageId?: number }> {
   const { token } = getBotCredentials()
-  if (!token) return false
+  if (!token) return { success: false }
 
   const body: Record<string, unknown> = {
     chat_id: chatId,
@@ -790,11 +790,48 @@ export async function sendTelegramResponse(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     })
-    return res.ok
+    const data = await res.json()
+    if (res.ok && data.ok) {
+      return { success: true, messageId: data.result?.message_id }
+    }
+    return { success: false }
   } catch (err) {
-    console.error('[Telegram] Failed to send response:', err)
+    console.error('[Telegram] Failed to send message:', err)
+    return { success: false }
+  }
+}
+
+export async function deleteTelegramMessage(
+  chatId: string | number,
+  messageId?: number | null
+): Promise<boolean> {
+  const { token } = getBotCredentials()
+  if (!token || !messageId) return false
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${token}/deleteMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        message_id: messageId
+      })
+    })
+    const data = await res.json()
+    return Boolean(data.ok)
+  } catch (err) {
+    console.error('[Telegram] Failed to delete message:', err)
     return false
   }
+}
+
+export async function sendTelegramResponse(
+  chatId: string | number,
+  text: string,
+  inlineKeyboard?: Array<Array<{ text: string; callback_data?: string; url?: string }>>,
+  includeMainKeyboard: boolean = true
+): Promise<boolean> {
+  const res = await sendTelegramMessage(chatId, text, inlineKeyboard, includeMainKeyboard)
+  return res.success
 }
 
 export async function handleTelegramWelcome(chatId: string | number): Promise<boolean> {
@@ -845,6 +882,7 @@ export async function handleTelegramWelcome(chatId: string | number): Promise<bo
 
 
 export async function handleTelegramStatsCommand(chatId: string | number): Promise<boolean> {
+  const loading = await sendTelegramMessage(chatId, '📊 <i>Retrieving live platform metrics...</i>', undefined, false)
   const now = new Date()
   const localOffsetHours = 7
   const localNow = new Date(now.getTime() + localOffsetHours * 3600 * 1000)
@@ -900,13 +938,16 @@ export async function handleTelegramStatsCommand(chatId: string | number): Promi
       ]
     ]
 
+    if (loading.messageId) await deleteTelegramMessage(chatId, loading.messageId)
     return sendTelegramResponse(chatId, message, inlineKeyboard, true)
   } catch (err) {
+    if (loading.messageId) await deleteTelegramMessage(chatId, loading.messageId)
     return sendTelegramResponse(chatId, `⚠️ <b>Error retrieving stats:</b>\n<code>${escapeHtml(String(err))}</code>`)
   }
 }
 
 export async function handleTelegramHealthCommand(chatId: string | number): Promise<boolean> {
+  const loading = await sendTelegramMessage(chatId, '🩺 <i>Probing platform systems & Gemini API...</i>', undefined, false)
   const timestamp = new Date().toLocaleTimeString('en-US', { timeZone: 'Asia/Phnom_Penh' })
 
   // 1. Check PostgreSQL via Prisma
@@ -979,6 +1020,7 @@ export async function handleTelegramHealthCommand(chatId: string | number): Prom
     ]
   ]
 
+  if (loading.messageId) await deleteTelegramMessage(chatId, loading.messageId)
   return sendTelegramResponse(chatId, message, inlineKeyboard, true)
 }
 
@@ -988,6 +1030,8 @@ export async function handleTelegramKeysCommand(chatId: string | number): Promis
   if (keys.length === 0) {
     return sendTelegramResponse(chatId, `⚠️ <b>No Gemini API keys configured</b> in environment variables.`)
   }
+
+  const loading = await sendTelegramMessage(chatId, '🔑 <i>Testing Gemini Key Fleet latency & quotas...</i>', undefined, false)
 
   const results = await Promise.all(
     keys.map(async (key, idx) => {
@@ -1029,10 +1073,12 @@ export async function handleTelegramKeysCommand(chatId: string | number): Promis
     ]
   ]
 
+  if (loading.messageId) await deleteTelegramMessage(chatId, loading.messageId)
   return sendTelegramResponse(chatId, message, inlineKeyboard, true)
 }
 
 export async function handleTelegramUsersCommand(chatId: string | number): Promise<boolean> {
+  const loading = await sendTelegramMessage(chatId, '👥 <i>Fetching user intelligence & recent signups...</i>', undefined, false)
   try {
     const [recentUsers, totalUsersCount] = await Promise.all([
       prisma.user.findMany({
@@ -1078,8 +1124,10 @@ export async function handleTelegramUsersCommand(chatId: string | number): Promi
       ]
     ]
 
+    if (loading.messageId) await deleteTelegramMessage(chatId, loading.messageId)
     return sendTelegramResponse(chatId, message, inlineKeyboard, true)
   } catch (err) {
+    if (loading.messageId) await deleteTelegramMessage(chatId, loading.messageId)
     return sendTelegramResponse(chatId, `⚠️ <b>Error fetching users:</b>\n<code>${escapeHtml(String(err))}</code>`)
   }
 }
@@ -1249,7 +1297,7 @@ export async function handleTelegramAudioUpload(params: {
 
   // 3. Send progress acknowledgment
   const sizeMb = params.fileSize ? ` (${(params.fileSize / (1024 * 1024)).toFixed(1)} MB)` : ''
-  await sendTelegramResponse(
+  const loading = await sendTelegramMessage(
     params.chatId,
     [
       `🎙️ <b>Signal AI Speech Engine</b>`,
@@ -1257,8 +1305,11 @@ export async function handleTelegramAudioUpload(params: {
       '',
       `⏳ <i>Downloading audio & transcribing verbatim in Khmer / English...</i>`,
       `Please wait a few seconds ⚡`
-    ].join('\n')
+    ].join('\n'),
+    undefined,
+    false
   )
+  const loadingMsgId = loading.messageId
   await sendTelegramChatAction(params.chatId, 'typing')
 
   try {
@@ -1283,6 +1334,7 @@ export async function handleTelegramAudioUpload(params: {
     const { text, language, model } = await transcribeAudioBufferWithGemini(buffer, mimeType, fileName)
 
     if (!text || !text.trim()) {
+      if (loadingMsgId) await deleteTelegramMessage(params.chatId, loadingMsgId)
       await sendTelegramResponse(
         params.chatId,
         `⚠️ <b>No audible speech detected:</b> The audio file appears to contain silence or background noise with no distinguishable words.`
@@ -1328,6 +1380,11 @@ export async function handleTelegramAudioUpload(params: {
       }
     }).catch((e) => console.error('[Telegram DB Sync] Usage metric save error:', e))
 
+    // Auto-delete the loading message so only the clean final transcript shows in chat
+    if (loadingMsgId) {
+      await deleteTelegramMessage(params.chatId, loadingMsgId)
+    }
+
     // 8. Deliver final transcript back to chat
     const mins = Math.floor(durationSeconds / 60)
     const secs = Math.round(durationSeconds % 60)
@@ -1371,6 +1428,9 @@ export async function handleTelegramAudioUpload(params: {
 
     return true
   } catch (err) {
+    if (loadingMsgId) {
+      await deleteTelegramMessage(params.chatId, loadingMsgId)
+    }
     console.error('[Telegram Audio Handler] Failed:', err)
     const errText = err instanceof Error ? err.message : String(err)
     await sendTelegramResponse(
