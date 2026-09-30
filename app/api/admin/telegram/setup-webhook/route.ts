@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions, isUserAdmin } from '@/lib/auth'
-import { getBotCredentials, handleTelegramWelcome } from '@/lib/telegram'
+import { getBotCredentials, handleTelegramWelcome, syncTelegramBotCommands } from '@/lib/telegram'
 
 export const dynamic = 'force-dynamic'
 
@@ -88,7 +88,12 @@ export async function POST(req: Request) {
       }, { status: 400 })
     }
 
-    // Proactively send welcome keyboard to admin so buttons appear immediately on their device
+    // Sync native Menu button & command scopes with Telegram API
+    await syncTelegramBotCommands().catch((err) =>
+      console.error('[Telegram Setup] Command sync failed:', err)
+    )
+
+    // Proactively send welcome card to admin so interactive controls appear
     if (chatId) {
       handleTelegramWelcome(chatId).catch((err) =>
         console.error('[Telegram Setup] Initial welcome push failed:', err)

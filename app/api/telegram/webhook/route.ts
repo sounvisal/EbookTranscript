@@ -150,6 +150,9 @@ export async function POST(req: Request) {
     await answerTelegramCallback(callback.id)
 
     switch (rawAction) {
+      case 'transcribe':
+        await handleTelegramTranscribeHelp(incomingChatId)
+        break
       case 'stats':
         if (isAdmin) {
           await handleTelegramStatsCommand(incomingChatId)

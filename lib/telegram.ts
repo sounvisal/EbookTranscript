@@ -711,8 +711,7 @@ export async function getOrCreateTelegramUser(sender: TelegramSenderInfo) {
 }
 
 /**
- * Persistent 7-button keyboard pinned to the bottom of Telegram chat for Admins.
- * Includes direct Audio Transcribe guide & quick intelligence commands.
+ * Persistent reply keyboards (kept for optional reference or backward compatibility).
  */
 export const TELEGRAM_MAIN_KEYBOARD = {
   keyboard: [
@@ -721,20 +720,83 @@ export const TELEGRAM_MAIN_KEYBOARD = {
     [{ text: '👥 Active Users' }, { text: '🔄 Run Daily Report' }],
     [{ text: '🌐 Open Admin Web' }]
   ],
-  resize_keyboard: true,
-  is_persistent: true
+  resize_keyboard: true
 }
 
-/**
- * Clean 2-button keyboard for team members focused on Speech Transcription.
- */
 export const TELEGRAM_TEAM_KEYBOARD = {
   keyboard: [
     [{ text: '🎙️ Audio Transcribe' }],
     [{ text: '🌐 Open Web App' }]
   ],
-  resize_keyboard: true,
-  is_persistent: true
+  resize_keyboard: true
+}
+
+/**
+ * Synchronize Telegram Bot Commands & enable native "Menu" button on input bar.
+ * - Default commands for team members & groups
+ * - Admin scope commands for admin chats
+ */
+export async function syncTelegramBotCommands(): Promise<{ success: boolean; error?: string }> {
+  const { token, chatId } = getBotCredentials()
+  if (!token) return { success: false, error: 'No bot token configured.' }
+
+  try {
+    // 1. Enable native "Menu" button on chat input bar
+    await fetch(`https://api.telegram.org/bot${token}/setChatMenuButton`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        menu_button: { type: 'commands' }
+      })
+    })
+
+    // 2. Default commands (for team members and group chats)
+    await fetch(`https://api.telegram.org/bot${token}/setMyCommands`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commands: [
+          { command: 'transcribe', description: '🎙️ Transcribe audio or voice notes' },
+          { command: 'web', description: '🌐 Open Signal Web App' },
+          { command: 'help', description: 'ℹ️ How to use this bot' }
+        ],
+        scope: { type: 'default' }
+      })
+    })
+
+    // 3. Admin-scoped commands (for primary admin & admin chat list)
+    if (chatId) {
+      const adminIds = `${chatId},${process.env.TELEGRAM_ADMIN_CHATS || ''}`
+        .split(',')
+        .map((id) => id.trim())
+        .filter(Boolean)
+
+      for (const adminId of adminIds) {
+        await fetch(`https://api.telegram.org/bot${token}/setMyCommands`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            commands: [
+              { command: 'transcribe', description: '🎙️ Transcribe audio or voice notes' },
+              { command: 'stats', description: '📊 Today\'s live platform stats' },
+              { command: 'health', description: '🩺 Real-time system health ping' },
+              { command: 'keys', description: '🔑 Gemini Key Fleet telemetry' },
+              { command: 'users', description: '👥 Active users & signups' },
+              { command: 'report', description: '🔄 Run 5:30 PM daily digest' },
+              { command: 'web', description: '🌐 Open Admin Web Dashboard' },
+              { command: 'help', description: 'ℹ️ Command center guide' }
+            ],
+            scope: { type: 'chat', chat_id: adminId }
+          })
+        })
+      }
+    }
+
+    return { success: true }
+  } catch (err) {
+    console.error('[Telegram] Failed to sync bot commands:', err)
+    return { success: false, error: err instanceof Error ? err.message : String(err) }
+  }
 }
 
 export async function handleTelegramTranscribeHelp(chatId: string | number): Promise<boolean> {
@@ -759,14 +821,20 @@ export async function handleTelegramTranscribeHelp(chatId: string | number): Pro
     `👉 <i>Try it right now: Tap the 📎 paperclip to send an audio file, or hold the 🎙️ mic button!</i>`
   ].join('\n')
 
-  return sendTelegramResponse(chatId, message, undefined, true)
+  const inlineKeyboard = [
+    [
+      { text: '🌐 Open Web App', url: 'https://ebook-transcript.vercel.app' }
+    ]
+  ]
+
+  return sendTelegramResponse(chatId, message, inlineKeyboard)
 }
 
 export async function sendTelegramMessage(
   chatId: string | number,
   text: string,
   inlineKeyboard?: Array<Array<{ text: string; callback_data?: string; url?: string }>>,
-  includeMainKeyboard: boolean = true
+  includeMainKeyboard: boolean = false
 ): Promise<{ success: boolean; messageId?: number }> {
   const { token } = getBotCredentials()
   if (!token) return { success: false }
@@ -782,6 +850,9 @@ export async function sendTelegramMessage(
     body.reply_markup = { inline_keyboard: inlineKeyboard }
   } else if (includeMainKeyboard) {
     body.reply_markup = isChatIdAdmin(chatId) ? TELEGRAM_MAIN_KEYBOARD : TELEGRAM_TEAM_KEYBOARD
+  } else {
+    // Automatically close & remove legacy persistent reply keyboard from the screen
+    body.reply_markup = { remove_keyboard: true }
   }
 
   try {
@@ -828,7 +899,7 @@ export async function sendTelegramResponse(
   chatId: string | number,
   text: string,
   inlineKeyboard?: Array<Array<{ text: string; callback_data?: string; url?: string }>>,
-  includeMainKeyboard: boolean = true
+  includeMainKeyboard: boolean = false
 ): Promise<boolean> {
   const res = await sendTelegramMessage(chatId, text, inlineKeyboard, includeMainKeyboard)
   return res.success
@@ -842,7 +913,7 @@ export async function handleTelegramWelcome(chatId: string | number): Promise<bo
       `🤖 <b>Welcome to Signal Command Center!</b>`,
       '',
       `You have full remote administrator control over the Signal platform directly from this chat.`,
-      `<b>No typing required</b> — use the one-tap buttons below:`,
+      `Tap <b>Menu</b> (bottom-left) or tap the one-touch buttons below:`,
       '',
       `• <b>🎙️ Audio Transcribe:</b> Send audio files or voice notes to transcribe instantly`,
       `• <b>📊 Live Stats:</b> Today's audio duration, requests & error rate`,
@@ -852,13 +923,31 @@ export async function handleTelegramWelcome(chatId: string | number): Promise<bo
       `• <b>🔄 Run Daily Report:</b> Trigger on-demand 5:30 PM digest`,
       `• <b>🌐 Open Admin Web:</b> Direct link to Web Dashboard`,
       '',
-      `🎙️ <b>Instant Pocket Transcriber:</b>`,
-      `Send any audio, video, or hold the mic button to record a voice note for instant verbatim Khmer / English transcription!`,
+      `🎙️ <b>Instant Speech Transcription:</b>`,
+      `Send any audio, video, or hold the 🎙️ mic button to record a voice note for instant verbatim Khmer / English transcription!`,
       '',
-      `Tap any button below or send audio now ⬇️`
+      `👇 <i>Quick actions or tap <b>Menu</b> on the bottom-left at any time:</i>`
     ].join('\n')
 
-    return sendTelegramResponse(chatId, message, undefined, true)
+    const adminInlineKeyboard = [
+      [
+        { text: '🎙️ Audio Transcribe', callback_data: 'transcribe' },
+        { text: '📊 Live Stats', callback_data: 'stats' }
+      ],
+      [
+        { text: '🩺 System Health', callback_data: 'health' },
+        { text: '🔑 Key Fleet', callback_data: 'keys' }
+      ],
+      [
+        { text: '👥 Active Users', callback_data: 'users' },
+        { text: '🔄 Run Daily Report', callback_data: 'report' }
+      ],
+      [
+        { text: '🌐 Open Admin Web', url: 'https://ebook-transcript.vercel.app/admin' }
+      ]
+    ]
+
+    return sendTelegramResponse(chatId, message, adminInlineKeyboard)
   }
 
   const teamMessage = [
@@ -874,10 +963,17 @@ export async function handleTelegramWelcome(chatId: string | number): Promise<bo
     '',
     `⚡ The bot will automatically analyze the audio and reply with the clean verbatim text within seconds!`,
     '',
-    `Tap below or send an audio file to get started ⬇️`
+    `👇 <i>Tap below or tap <b>Menu</b> at any time:</i>`
   ].join('\n')
 
-  return sendTelegramResponse(chatId, teamMessage, undefined, true)
+  const teamInlineKeyboard = [
+    [
+      { text: '🎙️ How to Transcribe', callback_data: 'transcribe' },
+      { text: '🌐 Open Web App', url: 'https://ebook-transcript.vercel.app' }
+    ]
+  ]
+
+  return sendTelegramResponse(chatId, teamMessage, teamInlineKeyboard)
 }
 
 
