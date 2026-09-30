@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions, isUserAdmin } from '@/lib/auth'
-import { getBotCredentials, handleTelegramWelcome, syncTelegramBotCommands } from '@/lib/telegram'
+import { getBotCredentials, handleTelegramWelcome } from '@/lib/telegram'
 
 export const dynamic = 'force-dynamic'
 
@@ -88,12 +88,33 @@ export async function POST(req: Request) {
       }, { status: 400 })
     }
 
-    // Sync native Menu button & command scopes with Telegram API
-    await syncTelegramBotCommands().catch((err) =>
-      console.error('[Telegram Setup] Command sync failed:', err)
-    )
+    // Ensure Telegram Menu button is set to native commands list (NOT a mini app)
+    fetch(`https://api.telegram.org/bot${token}/setChatMenuButton`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ menu_button: { type: 'commands' } })
+    }).catch(() => {})
 
-    // Proactively send welcome card to admin so interactive controls appear
+    // Sync bot commands with /start at the top
+    fetch(`https://api.telegram.org/bot${token}/setMyCommands`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commands: [
+          { command: 'start', description: '🚀 Open bot menu & control buttons' },
+          { command: 'transcribe', description: '🎙️ Audio & Voice Transcriber' },
+          { command: 'stats', description: '📊 Today Live Stats' },
+          { command: 'health', description: '🩺 System Health Check' },
+          { command: 'keys', description: '🔑 Gemini Key Fleet Latency' },
+          { command: 'users', description: '👥 Active Users & Signups' },
+          { command: 'report', description: '🔄 Run 5:30 PM Daily Report' },
+          { command: 'web', description: '🌐 Open Web Portal' },
+          { command: 'help', description: 'ℹ️ Help & Instructions' }
+        ]
+      })
+    }).catch(() => {})
+
+    // Proactively send welcome keyboard to admin so buttons appear immediately on their device
     if (chatId) {
       handleTelegramWelcome(chatId).catch((err) =>
         console.error('[Telegram Setup] Initial welcome push failed:', err)

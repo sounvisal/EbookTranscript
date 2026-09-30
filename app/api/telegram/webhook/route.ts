@@ -2,23 +2,22 @@ import { NextResponse } from 'next/server'
 import {
   getBotCredentials,
   isChatIdAdmin,
-  getOrCreateTelegramUser,
-  TelegramSenderInfo,
   answerTelegramCallback,
   handleTelegramWelcome,
+  handleTelegramTranscribeHelp,
   handleTelegramStatsCommand,
   handleTelegramHealthCommand,
   handleTelegramKeysCommand,
   handleTelegramUsersCommand,
   handleTelegramWebCommand,
   handleTelegramAudioUpload,
-  handleTelegramTranscribeHelp,
   sendTelegramDailyReport,
+  sendTelegramResponse,
   sendTelegramMessage,
   deleteTelegramMessage,
-  sendTelegramResponse
+  TelegramSenderInfo,
+  getOrCreateTelegramUser
 } from '@/lib/telegram'
-
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
@@ -33,6 +32,7 @@ interface TelegramWebhookUpdate {
       first_name?: string
       last_name?: string
       username?: string
+      language_code?: string
     }
     chat?: {
       id: number
@@ -76,7 +76,6 @@ interface TelegramWebhookUpdate {
       first_name?: string
       last_name?: string
       username?: string
-      is_bot?: boolean
     }
     message?: {
       message_id: number
@@ -87,7 +86,6 @@ interface TelegramWebhookUpdate {
     data?: string
   }
 }
-
 
 export async function GET() {
   const { token, chatId } = getBotCredentials()
@@ -100,8 +98,6 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-  const { chatId: allowedChatId } = getBotCredentials()
-
   let update: TelegramWebhookUpdate
   try {
     update = await req.json()
@@ -109,7 +105,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: 'Invalid JSON payload' }, { status: 400 })
   }
 
-  // Extract Chat ID & payload
+  // Extract Chat ID & sender
   const isCallback = Boolean(update.callback_query)
   const incomingChatId = isCallback
     ? update.callback_query?.message?.chat?.id || update.callback_query?.from?.id
@@ -120,26 +116,18 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, ignored: true })
   }
 
-  const isAdmin = isChatIdAdmin(incomingChatId)
-
-  // Extract Telegram sender metadata
-  const rawSender = update.message?.from || update.callback_query?.from
-  const sender: TelegramSenderInfo | undefined = rawSender
-    ? {
-        id: rawSender.id,
-        firstName: rawSender.first_name,
-        lastName: rawSender.last_name,
-        username: rawSender.username,
-        isBot: rawSender.is_bot
-      }
-    : undefined
-
-  // Ensure every user who interacts with the bot is immediately registered in PostgreSQL
-  if (sender) {
-    await getOrCreateTelegramUser(sender).catch((err) =>
-      console.error('[Telegram User Sync] Registration error:', err)
-    )
+  const sender: TelegramSenderInfo = {
+    id: update.callback_query?.from?.id || update.message?.from?.id || incomingChatId,
+    first_name: update.callback_query?.from?.first_name || update.message?.from?.first_name,
+    last_name: update.message?.from?.last_name,
+    username: update.callback_query?.from?.username || update.message?.from?.username,
+    language_code: update.message?.from?.language_code
   }
+
+  // Background registration: ensure sender is registered in Database
+  getOrCreateTelegramUser(sender).catch((e) => console.error('[Webhook User Sync]', e))
+
+  const isAdmin = isChatIdAdmin(incomingChatId)
 
   // Handle Callback Query (Inline Button Click)
   if (isCallback && update.callback_query) {
@@ -195,7 +183,6 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ ok: true, action: rawAction })
   }
-
 
   const msg = update.message
 
@@ -277,7 +264,7 @@ export async function POST(req: Request) {
   // Handle Standard Message (Text or Persistent Bottom Reply Keyboard Button)
   const text = (msg?.text || '').trim()
 
-  // Match normalized commands (supporting group mentions like /start@transcript_signal_bot)
+  // Match normalized commands
   const cleanCmd = text.toLowerCase().replace(/^\//, '').split('@')[0].trim()
 
   if (
@@ -372,7 +359,7 @@ export async function POST(req: Request) {
   ) {
     await handleTelegramWebCommand(incomingChatId)
   } else {
-    // /start, /help or unrecognized command -> send welcome card
+    // /start, /help or unrecognized command -> send welcome card with 7-button reply keyboard
     await handleTelegramWelcome(incomingChatId)
   }
 

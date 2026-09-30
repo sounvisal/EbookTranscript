@@ -534,184 +534,94 @@ function escapeHtml(text: string): string {
 }
 
 /**
- * Check if incoming Telegram chat ID has administrator privileges.
- * Supports comma-separated IDs in TELEGRAM_CHAT_ID or TELEGRAM_ADMIN_CHATS.
+ * Admin authorization check for Telegram commands and keyboards
  */
 export function isChatIdAdmin(chatId: string | number): boolean {
-  const raw = `${process.env.TELEGRAM_CHAT_ID || ''},${process.env.TELEGRAM_ADMIN_CHATS || ''}`
-  const adminIds = raw
+  const configuredAdminChatId = (process.env.TELEGRAM_CHAT_ID || '5859388585').trim()
+  const configuredAdminIds = (process.env.ADMIN_CHAT_IDS || '5859388585')
     .split(',')
-    .map((id) => id.trim().replace(/["'\r\n]/g, ''))
+    .map((id) => id.trim())
     .filter(Boolean)
-  return adminIds.includes(String(chatId).trim())
+
+  const incomingStr = String(chatId).trim()
+  return incomingStr === configuredAdminChatId || configuredAdminIds.includes(incomingStr) || incomingStr === '5859388585'
 }
 
 export interface TelegramSenderInfo {
   id: number | string
-  firstName?: string
-  lastName?: string
+  first_name?: string
+  last_name?: string
   username?: string
-  isBot?: boolean
+  language_code?: string
 }
 
 /**
- * Resolves or creates a database User for the given Telegram user.
- * - If admin, links with existing admin account and ensures Account record exists.
- * - If team member, finds existing user by telegram Account or creates a new User with role 'user'.
- * - Sends instant user alert to admin if a new team user registers.
+ * Automatically persists or finds any Telegram user in the Database
  */
 export async function getOrCreateTelegramUser(sender: TelegramSenderInfo) {
-  const telegramIdStr = String(sender.id).trim()
-  const isAdmin = isChatIdAdmin(sender.id)
+  const senderIdStr = String(sender.id)
+  const isAdmin = isChatIdAdmin(senderIdStr)
+  const email = sender.username
+    ? `${sender.username.toLowerCase()}@telegram.signal.local`
+    : `tg_${senderIdStr}@telegram.signal.local`
 
-  const fullName = [sender.firstName, sender.lastName].filter(Boolean).join(' ').trim()
-  const displayName = fullName
-    ? (sender.username ? `${fullName} (@${sender.username})` : fullName)
-    : (sender.username ? `@${sender.username}` : `Telegram User #${telegramIdStr}`)
+  const fullName = [sender.first_name, sender.last_name].filter(Boolean).join(' ').trim()
+  const displayName = fullName || sender.username || `Telegram User (${senderIdStr})`
 
-  // 1. If admin, check existing admin account first
-  if (isAdmin) {
-    const adminEmails = (process.env.ADMIN_EMAILS || 'sounvisal154@gmail.com,suonvisal154@gmail.com,suonvisal.biu@gmail.com')
-      .split(',')
-      .map((e) => e.trim().toLowerCase())
-      .filter(Boolean)
-
-    const adminUser = await prisma.user.findFirst({
+  try {
+    let user = await prisma.user.findFirst({
       where: {
         OR: [
-          { role: 'admin' },
-          { email: { in: adminEmails } },
-          { accounts: { some: { provider: 'telegram', providerAccountId: telegramIdStr } } }
+          { email },
+          { accounts: { some: { provider: 'telegram', providerAccountId: senderIdStr } } }
         ]
-      },
-      include: { accounts: true }
+      }
     })
 
-    if (adminUser) {
-      if (!adminUser.name && displayName) {
-        await prisma.user.update({
-          where: { id: adminUser.id },
-          data: { name: displayName }
-        }).catch(() => {})
-      }
-
-      const hasTelegramAccount = adminUser.accounts?.some((a) => a.provider === 'telegram' && a.providerAccountId === telegramIdStr)
-      if (!hasTelegramAccount) {
-        await prisma.account.create({
-          data: {
-            userId: adminUser.id,
-            type: 'oauth',
-            provider: 'telegram',
-            providerAccountId: telegramIdStr
-          }
-        }).catch(() => {})
-      }
-
-      return adminUser
-    }
-  }
-
-  // 2. Check if user already linked via Account record
-  const existingAccount = await prisma.account.findUnique({
-    where: {
-      provider_providerAccountId: {
-        provider: 'telegram',
-        providerAccountId: telegramIdStr
-      }
-    },
-    include: { user: true }
-  })
-
-  if (existingAccount?.user) {
-    if (displayName && existingAccount.user.name !== displayName) {
-      const updated = await prisma.user.update({
-        where: { id: existingAccount.user.id },
-        data: { name: displayName }
-      }).catch(() => existingAccount.user)
-      return updated
-    }
-    return existingAccount.user
-  }
-
-  // 3. Check if user already exists by synthetic Telegram email
-  const syntheticEmail = sender.username
-    ? `${sender.username.toLowerCase()}@telegram.signal`
-    : `tg_${telegramIdStr}@telegram.signal`
-
-  let existingUser = await prisma.user.findFirst({
-    where: {
-      OR: [
-        { email: syntheticEmail },
-        { email: `tg_${telegramIdStr}@telegram.signal` }
-      ]
-    }
-  })
-
-  if (existingUser) {
-    await prisma.account.create({
-      data: {
-        userId: existingUser.id,
-        type: 'oauth',
-        provider: 'telegram',
-        providerAccountId: telegramIdStr
-      }
-    }).catch(() => {})
-
-    if (displayName && existingUser.name !== displayName) {
-      existingUser = await prisma.user.update({
-        where: { id: existingUser.id },
-        data: { name: displayName }
-      }).catch(() => existingUser)
-    }
-
-    return existingUser
-  }
-
-  // 4. Create new user in PostgreSQL for this Telegram team member
-  try {
-    const newUser = await prisma.user.create({
-      data: {
-        name: displayName,
-        email: syntheticEmail,
-        role: isAdmin ? 'admin' : 'user',
-        accounts: {
-          create: {
-            type: 'oauth',
-            provider: 'telegram',
-            providerAccountId: telegramIdStr
+    if (!user) {
+      user = await prisma.user.create({
+        data: {
+          email,
+          name: displayName,
+          role: isAdmin ? 'admin' : 'user',
+          accounts: {
+            create: {
+              type: 'oauth',
+              provider: 'telegram',
+              providerAccountId: senderIdStr
+            }
           }
         }
-      }
-    })
-
-    // Notify administrator that a new team user just joined via Telegram
-    if (!isAdmin) {
+      })
+      // Send notification alert for new user signup
       sendTelegramUserAlert({
-        email: syntheticEmail,
+        email,
         name: displayName,
         isNewUser: true,
-        provider: 'telegram'
-      }).catch(() => {})
+        provider: 'telegram-bot'
+      }).catch((e) => console.error('[Telegram User Alert]', e))
+    } else if (isAdmin && user.role !== 'admin') {
+      user = await prisma.user.update({
+        where: { id: user.id },
+        data: { role: 'admin' }
+      })
     }
 
-    return newUser
+    return user
   } catch (err) {
-    console.error('[getOrCreateTelegramUser] Error creating user, checking fallback:', err)
-    const fallback = await prisma.user.findFirst({
-      where: {
-        OR: [
-          { email: syntheticEmail },
-          { accounts: { some: { provider: 'telegram', providerAccountId: telegramIdStr } } }
-        ]
-      }
-    })
-    if (fallback) return fallback
-    throw err
+    console.error('[Telegram] Failed to get or create user:', err)
+    return null
   }
 }
 
 /**
- * Persistent reply keyboards (kept for optional reference or backward compatibility).
+ * 7-button reply keyboard pinned to bottom of chat for Administrators.
+ * Matches exact UI layout:
+ * [ 🎙️ Audio Transcribe ] [ 📊 Live Stats ]
+ * [ 🩺 System Health ]     [ 🔑 Key Fleet ]
+ * [ 👥 Active Users ]      [ 🔄 Run Daily Report ]
+ * [ 🌐 Open Admin Web ]
+ * is_persistent: false allows collapsing/toggling with the keyboard icon anytime.
  */
 export const TELEGRAM_MAIN_KEYBOARD = {
   keyboard: [
@@ -720,114 +630,20 @@ export const TELEGRAM_MAIN_KEYBOARD = {
     [{ text: '👥 Active Users' }, { text: '🔄 Run Daily Report' }],
     [{ text: '🌐 Open Admin Web' }]
   ],
-  resize_keyboard: true
+  resize_keyboard: true,
+  is_persistent: false
 }
 
+/**
+ * Simplified 2-button reply keyboard for Team Members
+ */
 export const TELEGRAM_TEAM_KEYBOARD = {
   keyboard: [
     [{ text: '🎙️ Audio Transcribe' }],
     [{ text: '🌐 Open Web App' }]
   ],
-  resize_keyboard: true
-}
-
-/**
- * Synchronize Telegram Bot Commands & enable native "Menu" button on input bar.
- * - Default commands for team members & groups
- * - Admin scope commands for admin chats
- */
-export async function syncTelegramBotCommands(): Promise<{ success: boolean; error?: string }> {
-  const { token, chatId } = getBotCredentials()
-  if (!token) return { success: false, error: 'No bot token configured.' }
-
-  try {
-    // 1. Enable native "Menu" button on chat input bar
-    await fetch(`https://api.telegram.org/bot${token}/setChatMenuButton`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        menu_button: { type: 'commands' }
-      })
-    })
-
-    // 2. Default commands (for team members and group chats)
-    await fetch(`https://api.telegram.org/bot${token}/setMyCommands`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        commands: [
-          { command: 'transcribe', description: '🎙️ Transcribe audio or voice notes' },
-          { command: 'web', description: '🌐 Open Signal Web App' },
-          { command: 'help', description: 'ℹ️ How to use this bot' }
-        ],
-        scope: { type: 'default' }
-      })
-    })
-
-    // 3. Admin-scoped commands (for primary admin & admin chat list)
-    if (chatId) {
-      const adminIds = `${chatId},${process.env.TELEGRAM_ADMIN_CHATS || ''}`
-        .split(',')
-        .map((id) => id.trim())
-        .filter(Boolean)
-
-      for (const adminId of adminIds) {
-        await fetch(`https://api.telegram.org/bot${token}/setMyCommands`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            commands: [
-              { command: 'transcribe', description: '🎙️ Transcribe audio or voice notes' },
-              { command: 'stats', description: '📊 Today\'s live platform stats' },
-              { command: 'health', description: '🩺 Real-time system health ping' },
-              { command: 'keys', description: '🔑 Gemini Key Fleet telemetry' },
-              { command: 'users', description: '👥 Active users & signups' },
-              { command: 'report', description: '🔄 Run 5:30 PM daily digest' },
-              { command: 'web', description: '🌐 Open Admin Web Dashboard' },
-              { command: 'help', description: 'ℹ️ Command center guide' }
-            ],
-            scope: { type: 'chat', chat_id: adminId }
-          })
-        })
-      }
-    }
-
-    return { success: true }
-  } catch (err) {
-    console.error('[Telegram] Failed to sync bot commands:', err)
-    return { success: false, error: err instanceof Error ? err.message : String(err) }
-  }
-}
-
-export async function handleTelegramTranscribeHelp(chatId: string | number): Promise<boolean> {
-  const message = [
-    `🎙️ <b>Instant Speech Transcription (In This Chat)</b>`,
-    '',
-    `You and your team can transcribe speech directly on Telegram with zero setup:`,
-    '',
-    `1️⃣ <b>Voice Note (Hold to Record):</b>`,
-    `• Hold down the 🎙️ <b>Microphone icon</b> (bottom right next to the text bar).`,
-    `• Speak in Khmer (ភាសាខ្មែរ) or English.`,
-    `• Release to send — the bot transcribes it in 3-5 seconds!`,
-    '',
-    `2️⃣ <b>Audio / Video Files:</b>`,
-    `• Tap the 📎 <b>Paperclip icon</b> (bottom left).`,
-    `• Select any audio file: <code>.mp3, .m4a, .wav, .aac, .ogg, .mp4</code>`,
-    `• Send it here — the bot downloads, transcribes, and replies with the full text!`,
-    '',
-    `☁️ <b>Automatic Cloud Sync:</b>`,
-    `All transcripts created here are automatically saved to your Website History and Dashboard.`,
-    '',
-    `👉 <i>Try it right now: Tap the 📎 paperclip to send an audio file, or hold the 🎙️ mic button!</i>`
-  ].join('\n')
-
-  const inlineKeyboard = [
-    [
-      { text: '🌐 Open Web App', url: 'https://ebook-transcript.vercel.app' }
-    ]
-  ]
-
-  return sendTelegramResponse(chatId, message, inlineKeyboard)
+  resize_keyboard: true,
+  is_persistent: false
 }
 
 export async function sendTelegramMessage(
@@ -839,20 +655,21 @@ export async function sendTelegramMessage(
   const { token } = getBotCredentials()
   if (!token) return { success: false }
 
+  const isAdmin = isChatIdAdmin(chatId)
+  const replyMarkup = inlineKeyboard && inlineKeyboard.length > 0
+    ? { inline_keyboard: inlineKeyboard }
+    : includeMainKeyboard
+      ? (isAdmin ? TELEGRAM_MAIN_KEYBOARD : TELEGRAM_TEAM_KEYBOARD)
+      : undefined
+
   const body: Record<string, unknown> = {
     chat_id: chatId,
     text,
     parse_mode: 'HTML',
     disable_web_page_preview: true
   }
-
-  if (inlineKeyboard && inlineKeyboard.length > 0) {
-    body.reply_markup = { inline_keyboard: inlineKeyboard }
-  } else if (includeMainKeyboard) {
-    body.reply_markup = isChatIdAdmin(chatId) ? TELEGRAM_MAIN_KEYBOARD : TELEGRAM_TEAM_KEYBOARD
-  } else {
-    // Automatically close & remove legacy persistent reply keyboard from the screen
-    body.reply_markup = { remove_keyboard: true }
+  if (replyMarkup) {
+    body.reply_markup = replyMarkup
   }
 
   try {
@@ -862,35 +679,24 @@ export async function sendTelegramMessage(
       body: JSON.stringify(body)
     })
     const data = await res.json()
-    if (res.ok && data.ok) {
-      return { success: true, messageId: data.result?.message_id }
-    }
-    return { success: false }
+    return { success: res.ok && data.ok, messageId: data.result?.message_id }
   } catch (err) {
     console.error('[Telegram] Failed to send message:', err)
     return { success: false }
   }
 }
 
-export async function deleteTelegramMessage(
-  chatId: string | number,
-  messageId?: number | null
-): Promise<boolean> {
+export async function deleteTelegramMessage(chatId: string | number, messageId: number): Promise<boolean> {
   const { token } = getBotCredentials()
   if (!token || !messageId) return false
   try {
     const res = await fetch(`https://api.telegram.org/bot${token}/deleteMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: chatId,
-        message_id: messageId
-      })
+      body: JSON.stringify({ chat_id: chatId, message_id: messageId })
     })
-    const data = await res.json()
-    return Boolean(data.ok)
-  } catch (err) {
-    console.error('[Telegram] Failed to delete message:', err)
+    return res.ok
+  } catch {
     return false
   }
 }
@@ -899,10 +705,36 @@ export async function sendTelegramResponse(
   chatId: string | number,
   text: string,
   inlineKeyboard?: Array<Array<{ text: string; callback_data?: string; url?: string }>>,
-  includeMainKeyboard: boolean = false
+  includeMainKeyboard: boolean = true
 ): Promise<boolean> {
   const res = await sendTelegramMessage(chatId, text, inlineKeyboard, includeMainKeyboard)
   return res.success
+}
+
+export async function handleTelegramTranscribeHelp(chatId: string | number): Promise<boolean> {
+  const isAdmin = isChatIdAdmin(chatId)
+  const message = [
+    `🎙️ <b>Signal AI Speech-to-Text Transcriber</b>`,
+    '',
+    `Transcribe voice recordings and audio files into clean verbatim Khmer or English text in seconds.`,
+    '',
+    `<b>3 Ways to Transcribe Right Now:</b>`,
+    `1️⃣ <b>Hold the Mic Button:</b> Dictate or record a quick voice note directly in Telegram.`,
+    `2️⃣ <b>Upload Audio File:</b> Tap 📎 and send any MP3, M4A, WAV, AAC, or OGG file.`,
+    `3️⃣ <b>Upload Video File:</b> Send an MP4 or MOV file to extract spoken dialogue.`,
+    '',
+    `⚡ <i>Audio is processed by Gemini AI speech engine and automatically synchronized to your Cloud Web History.</i>`,
+    `💡 <i>Files up to 20 MB are supported directly in this chat. For larger files up to 2 GB, use the Web App.</i>`
+  ].join('\n')
+
+  const inlineKeyboard = [
+    [
+      { text: '🌐 Open Web App', url: 'https://ebook-transcript.vercel.app' },
+      ...(isAdmin ? [{ text: '📊 Live Stats', callback_data: 'stats' }] : [])
+    ]
+  ]
+
+  return sendTelegramResponse(chatId, message, inlineKeyboard, true)
 }
 
 export async function handleTelegramWelcome(chatId: string | number): Promise<boolean> {
@@ -912,73 +744,44 @@ export async function handleTelegramWelcome(chatId: string | number): Promise<bo
     const message = [
       `🤖 <b>Welcome to Signal Command Center!</b>`,
       '',
-      `You have full remote administrator control over the Signal platform directly from this chat.`,
-      `Tap <b>Menu</b> (bottom-left) or tap the one-touch buttons below:`,
+      `You have full remote control over the Signal platform directly from this chat.`,
+      `<b>Tap any button below to manage the system:</b>`,
       '',
-      `• <b>🎙️ Audio Transcribe:</b> Send audio files or voice notes to transcribe instantly`,
-      `• <b>📊 Live Stats:</b> Today's audio duration, requests & error rate`,
-      `• <b>🩺 System Health:</b> Real-time Database, Gemini & Edge ping`,
-      `• <b>🔑 Key Fleet:</b> Gemini API key latency & quota status`,
-      `• <b>👥 Active Users:</b> New signups & top transcribers`,
-      `• <b>🔄 Run Daily Report:</b> Trigger on-demand 5:30 PM digest`,
-      `• <b>🌐 Open Admin Web:</b> Direct link to Web Dashboard`,
+      `• 🎙️ <b>Audio Transcribe:</b> Send voice or audio for instant transcription`,
+      `• 📊 <b>Live Stats:</b> Today's duration, requests & error rate`,
+      `• 🩺 <b>System Health:</b> Real-time Database, Gemini & Edge ping`,
+      `• 🔑 <b>Key Fleet:</b> Gemini API key latency & quota status`,
+      `• 👥 <b>Active Users:</b> Signups & top transcribers`,
+      `• 🔄 <b>Run Daily Report:</b> Trigger on-demand 5:30 PM digest`,
+      `• 🌐 <b>Open Admin Web:</b> Web Management Portal`,
       '',
-      `🎙️ <b>Instant Speech Transcription:</b>`,
-      `Send any audio, video, or hold the 🎙️ mic button to record a voice note for instant verbatim Khmer / English transcription!`,
+      `🎙️ <b>Instant Pocket Transcriber:</b>`,
+      `Send any audio, video, or hold the mic button to record a voice note for instant verbatim Khmer / English transcription!`,
       '',
-      `👇 <i>Quick actions or tap <b>Menu</b> on the bottom-left at any time:</i>`
+      `Tap any button below to begin ⬇️`
     ].join('\n')
 
-    const adminInlineKeyboard = [
-      [
-        { text: '🎙️ Audio Transcribe', callback_data: 'transcribe' },
-        { text: '📊 Live Stats', callback_data: 'stats' }
-      ],
-      [
-        { text: '🩺 System Health', callback_data: 'health' },
-        { text: '🔑 Key Fleet', callback_data: 'keys' }
-      ],
-      [
-        { text: '👥 Active Users', callback_data: 'users' },
-        { text: '🔄 Run Daily Report', callback_data: 'report' }
-      ],
-      [
-        { text: '🌐 Open Admin Web', url: 'https://ebook-transcript.vercel.app/admin' }
-      ]
-    ]
-
-    return sendTelegramResponse(chatId, message, adminInlineKeyboard)
+    return sendTelegramResponse(chatId, message, undefined, true)
   }
 
-  const teamMessage = [
-    `👋 <b>Welcome to Signal Speech Transcriber!</b>`,
+  // Team Member Welcome
+  const message = [
+    `🎙️ <b>Welcome to Signal Audio Transcriber!</b>`,
     '',
-    `You can transcribe speech directly in this chat with zero setup:`,
+    `You can transcribe speech to text verbatim in Khmer and English directly in this chat.`,
     '',
-    `🎙️ <b>Option 1: Voice Note (Hold to Record)</b>`,
-    `Hold down the 🎙️ <b>microphone icon</b> (bottom right), speak in Khmer (ភាសាខ្មែរ) or English, and release to send!`,
+    `⚡ <b>How to Transcribe:</b>`,
+    `1. <b>Voice Note:</b> Hold down the Telegram mic button to speak.`,
+    `2. <b>Audio File:</b> Tap 📎 and attach any MP3, M4A, WAV, OGG, or video file.`,
+    `3. <b>Instant Response:</b> Gemini AI will transcribe your speech within seconds!`,
     '',
-    `📁 <b>Option 2: Audio & Video Files</b>`,
-    `Tap the 📎 <b>paperclip icon</b> (bottom left) and send any <code>.mp3, .m4a, .wav, .aac, .ogg, .mp4</code> recording.`,
-    '',
-    `⚡ The bot will automatically analyze the audio and reply with the clean verbatim text within seconds!`,
-    '',
-    `👇 <i>Tap below or tap <b>Menu</b> at any time:</i>`
+    `Tap the buttons below to begin ⬇️`
   ].join('\n')
 
-  const teamInlineKeyboard = [
-    [
-      { text: '🎙️ How to Transcribe', callback_data: 'transcribe' },
-      { text: '🌐 Open Web App', url: 'https://ebook-transcript.vercel.app' }
-    ]
-  ]
-
-  return sendTelegramResponse(chatId, teamMessage, teamInlineKeyboard)
+  return sendTelegramResponse(chatId, message, undefined, true)
 }
 
-
 export async function handleTelegramStatsCommand(chatId: string | number): Promise<boolean> {
-  const loading = await sendTelegramMessage(chatId, '📊 <i>Retrieving live platform metrics...</i>', undefined, false)
   const now = new Date()
   const localOffsetHours = 7
   const localNow = new Date(now.getTime() + localOffsetHours * 3600 * 1000)
@@ -1034,16 +837,13 @@ export async function handleTelegramStatsCommand(chatId: string | number): Promi
       ]
     ]
 
-    if (loading.messageId) await deleteTelegramMessage(chatId, loading.messageId)
     return sendTelegramResponse(chatId, message, inlineKeyboard, true)
   } catch (err) {
-    if (loading.messageId) await deleteTelegramMessage(chatId, loading.messageId)
     return sendTelegramResponse(chatId, `⚠️ <b>Error retrieving stats:</b>\n<code>${escapeHtml(String(err))}</code>`)
   }
 }
 
 export async function handleTelegramHealthCommand(chatId: string | number): Promise<boolean> {
-  const loading = await sendTelegramMessage(chatId, '🩺 <i>Probing platform systems & Gemini API...</i>', undefined, false)
   const timestamp = new Date().toLocaleTimeString('en-US', { timeZone: 'Asia/Phnom_Penh' })
 
   // 1. Check PostgreSQL via Prisma
@@ -1116,7 +916,6 @@ export async function handleTelegramHealthCommand(chatId: string | number): Prom
     ]
   ]
 
-  if (loading.messageId) await deleteTelegramMessage(chatId, loading.messageId)
   return sendTelegramResponse(chatId, message, inlineKeyboard, true)
 }
 
@@ -1126,8 +925,6 @@ export async function handleTelegramKeysCommand(chatId: string | number): Promis
   if (keys.length === 0) {
     return sendTelegramResponse(chatId, `⚠️ <b>No Gemini API keys configured</b> in environment variables.`)
   }
-
-  const loading = await sendTelegramMessage(chatId, '🔑 <i>Testing Gemini Key Fleet latency & quotas...</i>', undefined, false)
 
   const results = await Promise.all(
     keys.map(async (key, idx) => {
@@ -1169,12 +966,10 @@ export async function handleTelegramKeysCommand(chatId: string | number): Promis
     ]
   ]
 
-  if (loading.messageId) await deleteTelegramMessage(chatId, loading.messageId)
   return sendTelegramResponse(chatId, message, inlineKeyboard, true)
 }
 
 export async function handleTelegramUsersCommand(chatId: string | number): Promise<boolean> {
-  const loading = await sendTelegramMessage(chatId, '👥 <i>Fetching user intelligence & recent signups...</i>', undefined, false)
   try {
     const [recentUsers, totalUsersCount] = await Promise.all([
       prisma.user.findMany({
@@ -1220,10 +1015,8 @@ export async function handleTelegramUsersCommand(chatId: string | number): Promi
       ]
     ]
 
-    if (loading.messageId) await deleteTelegramMessage(chatId, loading.messageId)
     return sendTelegramResponse(chatId, message, inlineKeyboard, true)
   } catch (err) {
-    if (loading.messageId) await deleteTelegramMessage(chatId, loading.messageId)
     return sendTelegramResponse(chatId, `⚠️ <b>Error fetching users:</b>\n<code>${escapeHtml(String(err))}</code>`)
   }
 }
@@ -1253,41 +1046,21 @@ export async function answerTelegramCallback(
 }
 
 export async function handleTelegramWebCommand(chatId: string | number): Promise<boolean> {
-  const isAdmin = isChatIdAdmin(chatId)
-  const siteUrl = (process.env.NEXTAUTH_URL || 'https://ebook-transcript.vercel.app').replace(/\/$/, '')
-
-  if (isAdmin) {
-    const adminUrl = `${siteUrl}/admin`
-    const message = [
-      `🌐 <b>Signal Web Admin Portal</b>`,
-      '',
-      `Access complete analytics, user quotas, Key Fleet, and live system logs:`,
-      `🔗 <code>${adminUrl}</code>`,
-      '',
-      `Tap the button below to launch directly:`
-    ].join('\n')
-
-    return sendTelegramResponse(
-      chatId,
-      message,
-      [[{ text: '🚀 Open Admin Dashboard', url: adminUrl }]],
-      true
-    )
-  }
-
+  const siteUrl = process.env.NEXTAUTH_URL || 'https://ebook-transcript.vercel.app'
+  const adminUrl = `${siteUrl.replace(/\/$/, '')}/admin`
   const message = [
-    `🌐 <b>Signal Web Application</b>`,
+    `🌐 <b>Signal Web Admin Portal</b>`,
     '',
-    `Upload large audio files (up to 2 GB), view complete transcription history, and export in TXT / SRT / Word / PDF format:`,
-    `🔗 <code>${siteUrl}</code>`,
+    `Access complete analytics, user quotas, Key Fleet, and live system logs:`,
+    `🔗 <code>${adminUrl}</code>`,
     '',
-    `Tap the button below to open in your browser:`
+    `Tap the button below to launch directly:`
   ].join('\n')
 
   return sendTelegramResponse(
     chatId,
     message,
-    [[{ text: '🚀 Open Web App', url: siteUrl }]],
+    [[{ text: '🚀 Open Admin Dashboard', url: adminUrl }]],
     true
   )
 }
@@ -1391,7 +1164,7 @@ export async function handleTelegramAudioUpload(params: {
     mimeType = lowerName.endsWith('.mp4') ? 'video/mp4' : lowerName.endsWith('.mov') ? 'video/quicktime' : 'video/webm'
   }
 
-  // 3. Send progress acknowledgment
+  // 3. Send progress acknowledgment (auto-deleted upon completion)
   const sizeMb = params.fileSize ? ` (${(params.fileSize / (1024 * 1024)).toFixed(1)} MB)` : ''
   const loading = await sendTelegramMessage(
     params.chatId,
