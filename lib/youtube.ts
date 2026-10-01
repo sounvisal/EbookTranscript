@@ -7,6 +7,7 @@ import os from 'node:os'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { MAX_MEDIA_UPLOAD_BYTES } from '@/lib/uploadLimits'
+import { normalizeTranscriptSegments, type TranscriptSegment } from './transcript'
 
 export type ExtractedYouTubeMedia = {
   buffer: Buffer
@@ -14,6 +15,25 @@ export type ExtractedYouTubeMedia = {
   displayName: string
   sourceName: string
   durationSeconds?: number
+}
+
+export type YouTubeTranscriptResult = {
+  text: string
+  segments: TranscriptSegment[]
+  language: string
+  duration: number
+  sourceName: string
+  displayName: string
+}
+
+function getFfmpegPath(): string | undefined {
+  try {
+    const ffmpegStatic = require('ffmpeg-static')
+    if (typeof ffmpegStatic === 'string' && existsSync(ffmpegStatic)) {
+      return ffmpegStatic
+    }
+  } catch {}
+  return undefined
 }
 
 function sanitizeBaseTitle(title: string, fallback = 'youtube-media'): string {
@@ -207,10 +227,11 @@ async function extractWithYtdlCore(urlValue: string, maxBytes: number): Promise<
 async function extractWithYtDlp(urlValue: string, maxBytes: number): Promise<ExtractedYouTubeMedia> {
   const binPath = await ensureBinaryPath()
   const ytDl = youtubedl.create(binPath)
+  const ffmpegLoc = getFfmpegPath()
 
   const CLIENT_COMBINATIONS = [
-    'android,ios,mweb,tv',
     'android',
+    'android,ios,mweb,tv',
     'ios',
     'mweb',
     'tv',
@@ -223,14 +244,19 @@ async function extractWithYtDlp(urlValue: string, maxBytes: number): Promise<Ext
     try {
       console.log(`[YouTube Extractor] Requesting metadata using ${clientCombo} (binary: ${binPath})...`)
 
-      const metadata: any = await (ytDl as any)(urlValue, {
+      const dlpOptions: any = {
         dumpSingleJson: true,
         noCheckCertificates: true,
         noWarnings: true,
         noPlaylist: true,
         geoBypass: true,
         extractorArgs: `youtube:player_client=${clientCombo}`
-      })
+      }
+      if (ffmpegLoc) dlpOptions.ffmpegLocation = ffmpegLoc
+      if (process.env.YOUTUBE_COOKIES) dlpOptions.cookies = process.env.YOUTUBE_COOKIES
+      if (process.env.YOUTUBE_PROXY) dlpOptions.proxy = process.env.YOUTUBE_PROXY
+
+      const metadata: any = await (ytDl as any)(urlValue, dlpOptions)
 
       if (metadata?.is_live) {
         throw new Error('Live streams cannot be transcribed until the broadcast concludes.')
@@ -274,14 +300,14 @@ async function extractWithYtDlp(urlValue: string, maxBytes: number): Promise<Ext
         }
       }
 
-      // Strategy B: Native file download via yt-dlp without invoking ffmpeg
+      // Strategy B: Native file download via yt-dlp
       console.log(`[YouTube Extractor] Downloading stream via yt-dlp native downloader (${clientCombo})...`)
       const tempDir = os.tmpdir()
       const uniqueId = `yt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
       const outputTemplate = path.join(tempDir, `${uniqueId}.%(ext)s`)
 
       try {
-        await (ytDl as any)(urlValue, {
+        const downloadOptions: any = {
           format: '140/18/ba/b/best',
           output: outputTemplate,
           noCheckCertificates: true,
@@ -289,7 +315,12 @@ async function extractWithYtDlp(urlValue: string, maxBytes: number): Promise<Ext
           noPlaylist: true,
           geoBypass: true,
           extractorArgs: `youtube:player_client=${clientCombo}`
-        })
+        }
+        if (ffmpegLoc) downloadOptions.ffmpegLocation = ffmpegLoc
+        if (process.env.YOUTUBE_COOKIES) downloadOptions.cookies = process.env.YOUTUBE_COOKIES
+        if (process.env.YOUTUBE_PROXY) downloadOptions.proxy = process.env.YOUTUBE_PROXY
+
+        await (ytDl as any)(urlValue, downloadOptions)
 
         const files = await fs.readdir(tempDir)
         const targetFile = files.find((f) => f.startsWith(uniqueId))
@@ -327,6 +358,168 @@ async function extractWithYtDlp(urlValue: string, maxBytes: number): Promise<Ext
   }
 
   throw lastError || new Error('YouTube extraction failed across all player clients.')
+}
+
+/**
+ * Fast direct subtitle/automatic-caption extractor.
+ * Queries YouTube video metadata for official json3 timedtext tracks.
+ * Bypasses raw media downloads and returns structured verbatim transcript with timestamps in < 3s.
+ * Returns null if no captions/subtitles are found, allowing graceful fallback to media extraction.
+ */
+export async function extractYouTubeTranscript(
+  urlValue: string,
+  languagePreference: string = 'auto'
+): Promise<YouTubeTranscriptResult | null> {
+  const binPath = await ensureBinaryPath()
+  const ytDl = youtubedl.create(binPath)
+  const ffmpegLoc = getFfmpegPath()
+
+  const CLIENT_COMBINATIONS = ['android', 'ios', 'mweb', 'web']
+
+  for (const clientCombo of CLIENT_COMBINATIONS) {
+    try {
+      console.log(`[YouTube Subtitles] Probing caption tracks using ${clientCombo}...`)
+      const options: any = {
+        dumpSingleJson: true,
+        noCheckCertificates: true,
+        noWarnings: true,
+        noPlaylist: true,
+        geoBypass: true,
+        extractorArgs: `youtube:player_client=${clientCombo}`
+      }
+      if (ffmpegLoc) options.ffmpegLocation = ffmpegLoc
+      if (process.env.YOUTUBE_COOKIES) options.cookies = process.env.YOUTUBE_COOKIES
+      if (process.env.YOUTUBE_PROXY) options.proxy = process.env.YOUTUBE_PROXY
+
+      const meta: any = await (ytDl as any)(urlValue, options)
+
+      if (meta?.is_live) {
+        throw new Error('Live streams cannot be transcribed until the broadcast concludes.')
+      }
+
+      const duration = Number(meta?.duration) || 0
+      const videoTitle = sanitizeBaseTitle(meta?.title || 'youtube-media')
+      const subtitles = meta?.subtitles || {}
+      const autoCaptions = meta?.automatic_captions || {}
+
+      const findCaptionTrack = (tracks: any) => {
+        if (!tracks || typeof tracks !== 'object') return null
+        const langKeys = Object.keys(tracks)
+        if (!langKeys.length) return null
+
+        let targetLang: string | undefined
+        if (languagePreference === 'khmer') {
+          targetLang = langKeys.find((l) => l.startsWith('km') || l.startsWith('kh'))
+        } else if (languagePreference === 'english') {
+          targetLang = langKeys.find((l) => l.startsWith('en'))
+        }
+
+        if (!targetLang) {
+          targetLang =
+            langKeys.find((l) => l.startsWith('km')) ||
+            langKeys.find((l) => l.startsWith('en')) ||
+            langKeys[0]
+        }
+
+        const formats = tracks[targetLang]
+        if (!Array.isArray(formats) || !formats.length) return null
+
+        const json3 = formats.find((f: any) => f.ext === 'json3')
+        const selectedFormat = json3 || formats[0]
+
+        return {
+          lang: targetLang,
+          url: selectedFormat?.url
+        }
+      }
+
+      // Check manual subtitles first (creator provided, highest quality), then automatic ASR captions
+      const selected = findCaptionTrack(subtitles) || findCaptionTrack(autoCaptions)
+      if (!selected || !selected.url) {
+        continue // Try next client combination if captions dictionary was missing
+      }
+
+      let fetchUrl = selected.url
+      if (!fetchUrl.includes('fmt=json3') && !fetchUrl.includes('.json3')) {
+        fetchUrl += (fetchUrl.includes('?') ? '&' : '?') + 'fmt=json3'
+      }
+
+      console.log(`[YouTube Subtitles] Fetching timedtext (${selected.lang})...`)
+      const captionRes = await fetch(fetchUrl, {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+      })
+
+      if (!captionRes.ok) {
+        console.warn(`[YouTube Subtitles] Failed to fetch timedtext: HTTP ${captionRes.status}`)
+        continue
+      }
+
+      const data = await captionRes.json()
+      const rawEvents = Array.isArray(data.events) ? data.events : []
+      const rawSegments: Array<{ start: number; end: number; text: string }> = []
+      const textPieces: string[] = []
+
+      for (const ev of rawEvents) {
+        if (!ev.segs || !Array.isArray(ev.segs)) continue
+
+        const segText = ev.segs
+          .map((s: any) => s.utf8 || '')
+          .join('')
+          .replace(/[\u200B-\u200D\uFEFF]/g, '')
+          .replace(/^>>\s*/, '')
+          .replace(/\n+/g, ' ')
+          .trim()
+
+        if (!segText || segText === '\n') continue
+
+        const start = Math.round(((ev.tStartMs || 0) / 1000) * 100) / 100
+        const dur = Math.round(((ev.dDurationMs || 0) / 1000) * 100) / 100
+        const end = Math.round((start + dur) * 100) / 100
+
+        rawSegments.push({ start, end, text: segText })
+        textPieces.push(segText)
+      }
+
+      if (!rawSegments.length) {
+        continue
+      }
+
+      const segments = normalizeTranscriptSegments(rawSegments)
+      const fullText = textPieces.join(' ').replace(/\s{2,}/g, ' ').trim()
+      const normalizedLang = selected.lang.startsWith('km')
+        ? 'khmer'
+        : selected.lang.startsWith('en')
+          ? 'english'
+          : selected.lang.split('-')[0]
+
+      const finalDuration =
+        duration > 0
+          ? duration
+          : segments.length > 0 && typeof segments[segments.length - 1].end === 'number'
+            ? (segments[segments.length - 1].end as number)
+            : 0
+
+      console.log(`[YouTube Subtitles] Successfully extracted ${segments.length} segments for "${videoTitle}"`)
+
+      return {
+        text: fullText,
+        segments,
+        language: normalizedLang,
+        duration: finalDuration,
+        sourceName: videoTitle,
+        displayName: `${videoTitle}.txt`
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? (err as any).stderr || err.message : String(err)
+      console.warn(`[YouTube Subtitles] Client ${clientCombo} probe warning:`, errorMsg.split('\n')[0])
+    }
+  }
+
+  console.log('[YouTube Subtitles] No subtitles or captions found across all clients. Falling back to media extraction.')
+  return null
 }
 
 /**

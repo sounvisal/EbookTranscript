@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createHash } from 'node:crypto'
 import { isIP } from 'node:net'
-import { extractYouTubeMedia } from '@/lib/youtube'
+import { extractYouTubeMedia, extractYouTubeTranscript } from '@/lib/youtube'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { extractSpeechAudio, splitAudioIntoChunks } from '@/lib/audio'
@@ -19,7 +19,8 @@ import {
   getPlainTranscriptText,
   normalizeTranscriptSegments,
   parseStructuredTranscriptText,
-  parseTimestampToSeconds
+  parseTimestampToSeconds,
+  type TranscriptSegment
 } from '@/lib/transcript'
 import { MAX_MEDIA_UPLOAD_BYTES } from '@/lib/uploadLimits'
 import { trackUsage, trackError } from '@/lib/telemetry'
@@ -66,6 +67,14 @@ export type TranscribeOptions = {
   highSensitivity?: boolean
 }
 
+export type TranscriptResultPayload = {
+  text: string
+  segments: TranscriptSegment[]
+  language: string
+  duration: number
+  source: string
+}
+
 type MediaInput = {
   buffer?: Buffer
   fileUri?: string
@@ -75,6 +84,7 @@ type MediaInput = {
   durationSeconds?: number
   keyIndex?: number
   options?: TranscribeOptions
+  directTranscript?: TranscriptResultPayload
 }
 
 type GeminiTranscriptPayload = {
@@ -270,7 +280,32 @@ async function readResponseWithinLimit(response: Response, maxBytes: number) {
   return Buffer.concat(chunks)
 }
 
-async function getMediaInputFromYouTubeUrl(urlValue: string): Promise<MediaInput> {
+async function getMediaInputFromYouTubeUrl(urlValue: string, options?: TranscribeOptions): Promise<MediaInput> {
+  // Tier 1: Fast direct subtitle / auto-caption extraction (< 3s, zero audio downloads, zero Gemini quota)
+  try {
+    const directResult = await extractYouTubeTranscript(urlValue, options?.languagePreference)
+    if (directResult && directResult.text) {
+      console.log(`[Transcribe API] Using direct YouTube transcript for "${directResult.sourceName}" (${directResult.segments.length} segments)`)
+      return {
+        mimeType: 'text/plain',
+        displayName: directResult.displayName,
+        sourceName: directResult.sourceName,
+        durationSeconds: directResult.duration,
+        options,
+        directTranscript: {
+          text: directResult.text,
+          segments: directResult.segments,
+          language: directResult.language,
+          duration: directResult.duration,
+          source: directResult.sourceName
+        }
+      }
+    }
+  } catch (directErr) {
+    console.warn('[Transcribe API] Direct YouTube subtitle extraction failed, proceeding to media extraction:', directErr)
+  }
+
+  // Tier 2: Stream/audio media download + Gemini transcription
   const extracted = await extractYouTubeMedia(urlValue, MAX_REMOTE_FILE_BYTES)
 
   return {
@@ -278,11 +313,12 @@ async function getMediaInputFromYouTubeUrl(urlValue: string): Promise<MediaInput
     mimeType: extracted.mimeType,
     displayName: extracted.displayName,
     sourceName: extracted.sourceName,
-    durationSeconds: extracted.durationSeconds
+    durationSeconds: extracted.durationSeconds,
+    options
   }
 }
 
-async function getMediaInputFromUrl(urlValue: string): Promise<MediaInput> {
+async function getMediaInputFromUrl(urlValue: string, options?: TranscribeOptions): Promise<MediaInput> {
   let url: URL
 
   try {
@@ -302,7 +338,7 @@ async function getMediaInputFromUrl(urlValue: string): Promise<MediaInput> {
   const normalizedHostname = url.hostname.trim().toLowerCase()
 
   if (isYouTubeHostname(normalizedHostname)) {
-    return getMediaInputFromYouTubeUrl(urlValue)
+    return getMediaInputFromYouTubeUrl(urlValue, options)
   }
 
   const fetchUrl = url.toString()
@@ -387,7 +423,7 @@ async function getMediaInputFromRequest(req: Request): Promise<MediaInput> {
       throw new Error('No media provided.')
     }
 
-    const media = await getMediaInputFromUrl(urlValue)
+    const media = await getMediaInputFromUrl(urlValue, body?.options)
     return { ...media, options: body?.options }
   }
 
@@ -424,7 +460,7 @@ async function getMediaInputFromRequest(req: Request): Promise<MediaInput> {
   }
 
   if (urlValue) {
-    const media = await getMediaInputFromUrl(urlValue)
+    const media = await getMediaInputFromUrl(urlValue, options)
     return { ...media, options }
   }
 
@@ -576,14 +612,6 @@ function buildTranscriptionPrompt(options?: TranscribeOptions): string {
 }
 
 const TRANSCRIPTION_PROMPT = BASE_TRANSCRIPTION_PROMPT
-
-type TranscriptResultPayload = {
-  text: string
-  segments: ReturnType<typeof parseGeminiTranscriptResponse>['segments']
-  language: string
-  duration: number
-  source: string
-}
 
 type ProgressEvent =
   | { type: 'status'; phase: 'uploading' | 'processing'; duration?: number; message?: string }
@@ -1010,6 +1038,16 @@ async function runTranscriptionPipeline(
   keys: string[],
   emit: (event: ProgressEvent) => void
 ): Promise<TranscriptResultPayload> {
+  emit({ type: 'status', phase: 'uploading' })
+  const mediaInput = await getMediaInputFromRequest(req)
+
+  // Fast direct path for YouTube videos with official captions/subtitles
+  if (mediaInput.directTranscript) {
+    emit({ type: 'status', phase: 'processing', duration: mediaInput.directTranscript.duration })
+    emit({ type: 'progress', progress: 100 })
+    return mediaInput.directTranscript
+  }
+
   if (!keys.length) {
     // No API key configured: return a mock transcript with staged progress.
     emit({ type: 'status', phase: 'processing', duration: 12.5 })
@@ -1022,8 +1060,6 @@ async function runTranscriptionPipeline(
     return buildMockResult()
   }
 
-  emit({ type: 'status', phase: 'uploading' })
-  const mediaInput = await getMediaInputFromRequest(req)
   const models = getGeminiModels()
   const promptText = buildTranscriptionPrompt(mediaInput.options)
 

@@ -11,6 +11,7 @@ import {
   handleTelegramUsersCommand,
   handleTelegramWebCommand,
   handleTelegramAudioUpload,
+  handleTelegramYouTubeLink,
   sendTelegramDailyReport,
   sendTelegramResponse,
   sendTelegramMessage,
@@ -261,8 +262,19 @@ export async function POST(req: Request) {
     }
   }
 
-  // Handle Standard Message (Text or Persistent Bottom Reply Keyboard Button)
-  const text = (msg?.text || '').trim()
+  // Handle Standard Message (Text, Caption, or Persistent Bottom Reply Keyboard Button)
+  const text = (msg?.text || msg?.caption || '').trim()
+
+  // Match YouTube URLs (e.g. https://youtu.be/..., https://www.youtube.com/watch?v=..., https://youtube.com/shorts/...)
+  const ytMatch = text.match(/(https?:\/\/(?:www\.)?(?:youtube\.com|youtu\.be)\/[^\s]+)/i)
+  if (ytMatch) {
+    await handleTelegramYouTubeLink({
+      chatId: incomingChatId,
+      url: ytMatch[1],
+      sender
+    })
+    return NextResponse.json({ ok: true, type: 'youtube_url' })
+  }
 
   // Match normalized commands
   const cleanCmd = text.toLowerCase().replace(/^\//, '').split('@')[0].trim()

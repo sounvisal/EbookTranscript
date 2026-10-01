@@ -7,6 +7,7 @@
 
 import { prisma } from './prisma'
 import { transcribeAudioBufferWithGemini } from './gemini'
+import { extractYouTubeMedia, extractYouTubeTranscript } from './youtube'
 
 
 type TelegramAlertParams = {
@@ -716,14 +717,15 @@ export async function handleTelegramTranscribeHelp(chatId: string | number): Pro
   const message = [
     `🎙️ <b>Signal AI Speech-to-Text Transcriber</b>`,
     '',
-    `Transcribe voice recordings and audio files into clean verbatim Khmer or English text in seconds.`,
+    `Transcribe voice recordings, audio files, and YouTube videos into clean verbatim Khmer or English text in seconds.`,
     '',
-    `<b>3 Ways to Transcribe Right Now:</b>`,
+    `<b>4 Ways to Transcribe Right Now:</b>`,
     `1️⃣ <b>Hold the Mic Button:</b> Dictate or record a quick voice note directly in Telegram.`,
     `2️⃣ <b>Upload Audio File:</b> Tap 📎 and send any MP3, M4A, WAV, AAC, or OGG file.`,
     `3️⃣ <b>Upload Video File:</b> Send an MP4 or MOV file to extract spoken dialogue.`,
+    `4️⃣ <b>Paste YouTube Link:</b> Send any YouTube or Shorts URL for instant transcript extraction.`,
     '',
-    `⚡ <i>Audio is processed by Gemini AI speech engine and automatically synchronized to your Cloud Web History.</i>`,
+    `⚡ <i>Audio & video are processed by Signal AI speech engine and automatically synchronized to your Cloud Web History.</i>`,
     `💡 <i>Files up to 20 MB are supported directly in this chat. For larger files up to 2 GB, use the Web App.</i>`
   ].join('\n')
 
@@ -747,7 +749,7 @@ export async function handleTelegramWelcome(chatId: string | number): Promise<bo
       `You have full remote control over the Signal platform directly from this chat.`,
       `<b>Tap any button below to manage the system:</b>`,
       '',
-      `• 🎙️ <b>Audio Transcribe:</b> Send voice or audio for instant transcription`,
+      `• 🎙️ <b>Audio Transcribe:</b> Send voice, audio, or YouTube link for instant transcription`,
       `• 📊 <b>Live Stats:</b> Today's duration, requests & error rate`,
       `• 🩺 <b>System Health:</b> Real-time Database, Gemini & Edge ping`,
       `• 🔑 <b>Key Fleet:</b> Gemini API key latency & quota status`,
@@ -756,7 +758,7 @@ export async function handleTelegramWelcome(chatId: string | number): Promise<bo
       `• 🌐 <b>Open Admin Web:</b> Web Management Portal`,
       '',
       `🎙️ <b>Instant Pocket Transcriber:</b>`,
-      `Send any audio, video, or hold the mic button to record a voice note for instant verbatim Khmer / English transcription!`,
+      `Send any audio, video, YouTube link, or hold the mic button to record a voice note for instant verbatim Khmer / English transcription!`,
       '',
       `Tap any button below to begin ⬇️`
     ].join('\n')
@@ -773,7 +775,8 @@ export async function handleTelegramWelcome(chatId: string | number): Promise<bo
     `⚡ <b>How to Transcribe:</b>`,
     `1. <b>Voice Note:</b> Hold down the Telegram mic button to speak.`,
     `2. <b>Audio File:</b> Tap 📎 and attach any MP3, M4A, WAV, OGG, or video file.`,
-    `3. <b>Instant Response:</b> Gemini AI will transcribe your speech within seconds!`,
+    `3. <b>YouTube Link:</b> Paste any YouTube video or Shorts link directly into chat.`,
+    `4. <b>Instant Response:</b> Verbatim transcript with timestamps within seconds!`,
     '',
     `Tap the buttons below to begin ⬇️`
   ].join('\n')
@@ -1315,6 +1318,185 @@ export async function handleTelegramAudioUpload(params: {
     return false
   }
 }
+
+export async function handleTelegramYouTubeLink(params: {
+  chatId: string | number
+  url: string
+  sender?: TelegramSenderInfo
+}): Promise<boolean> {
+  const { token } = getBotCredentials()
+  if (!token) return false
+
+  const cleanUrl = params.url.trim()
+
+  // 1. Send progress acknowledgment (auto-deleted upon completion)
+  const loading = await sendTelegramMessage(
+    params.chatId,
+    [
+      `🎬 <b>Signal AI YouTube Transcriber</b>`,
+      `🔗 <code>${escapeHtml(cleanUrl.slice(0, 65))}</code>`,
+      '',
+      `⏳ <i>Extracting verbatim transcript in Khmer / English...</i>`,
+      `Please wait a few seconds ⚡`
+    ].join('\n'),
+    undefined,
+    false
+  )
+  const loadingMsgId = loading.messageId
+  await sendTelegramChatAction(params.chatId, 'typing')
+
+  try {
+    let text = ''
+    let language = 'auto'
+    let model = 'YouTube Subtitles (Direct)'
+    let fileName = 'youtube_video'
+    let durationSeconds = 0
+
+    // Strategy 1: Fast direct subtitle / caption extraction (< 3s, zero audio downloads, zero Gemini quota)
+    try {
+      const direct = await extractYouTubeTranscript(cleanUrl)
+      if (direct && direct.text) {
+        text = direct.text
+        language = direct.language || 'auto'
+        fileName = direct.sourceName || 'youtube_video'
+        durationSeconds = direct.duration || 0
+      }
+    } catch (directErr) {
+      console.warn('[Telegram YouTube Handler] Direct transcript failed, proceeding to media fallback:', directErr)
+    }
+
+    // Strategy 2: Full audio download + Gemini model transcription
+    if (!text) {
+      console.log(`[Telegram YouTube Handler] Downloading YouTube media for ${cleanUrl}...`)
+      const extracted = await extractYouTubeMedia(cleanUrl)
+      fileName = extracted.sourceName || 'youtube_video'
+      durationSeconds = extracted.durationSeconds || 0
+
+      const geminiResult = await transcribeAudioBufferWithGemini(
+        extracted.buffer,
+        extracted.mimeType,
+        extracted.displayName
+      )
+      text = geminiResult.text
+      language = geminiResult.language
+      model = geminiResult.model
+    }
+
+    if (!text || !text.trim()) {
+      if (loadingMsgId) await deleteTelegramMessage(params.chatId, loadingMsgId)
+      await sendTelegramResponse(
+        params.chatId,
+        `⚠️ <b>No audible speech or subtitles detected:</b> The YouTube video appears to have no distinguishable speech or captions.`
+      )
+      return true
+    }
+
+    // Calculate metrics and save to Database (Full Cloud Sync with User Persistence)
+    const wordCount = text.trim().split(/\s+/).filter(Boolean).length
+    if (!durationSeconds) {
+      durationSeconds = Math.max(1, Math.round(wordCount / 2.5))
+    }
+
+    // Resolve or create user in database
+    const dbUser = await getOrCreateTelegramUser(params.sender || { id: params.chatId }).catch((err) => {
+      console.error('[Telegram YouTube Handler] Failed to get/create user:', err)
+      return null
+    })
+
+    // Save to prisma.transcript (accessible in Web History and User Directory)
+    await prisma.transcript.create({
+      data: {
+        text,
+        source: 'telegram-bot',
+        filename: `${fileName}.txt`,
+        duration: durationSeconds,
+        wordCount,
+        language,
+        userId: dbUser?.id || null
+      }
+    }).catch((e) => console.error('[Telegram DB Sync] Transcript save error:', e))
+
+    // Save to prisma.usageMetric (telemetry & per-user quota calculation)
+    await prisma.usageMetric.create({
+      data: {
+        userId: dbUser?.id || null,
+        model,
+        inputType: 'youtube',
+        fileFormat: 'youtube',
+        fileSizeBytes: 0,
+        durationSeconds,
+        wordCount,
+        status: 'success'
+      }
+    }).catch((e) => console.error('[Telegram DB Sync] Usage metric save error:', e))
+
+    // Auto-delete the loading message so only the clean final transcript shows in chat
+    if (loadingMsgId) {
+      await deleteTelegramMessage(params.chatId, loadingMsgId)
+    }
+
+    // Deliver final transcript back to chat
+    const mins = Math.floor(durationSeconds / 60)
+    const secs = Math.round(durationSeconds % 60)
+    const durationStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`
+
+    const header = [
+      `✅ <b>TRANSCRIPTION COMPLETE</b>`,
+      `🎬 <b>Title:</b> <code>${escapeHtml(fileName)}</code>`,
+      `🌐 <b>Language:</b> <code>${escapeHtml(language)}</code>`,
+      `⏱ <b>Duration:</b> <code>${durationStr}</code> • <b>Words:</b> <code>${wordCount.toLocaleString()}</code>`,
+      `🤖 <b>Engine:</b> <code>${escapeHtml(model)}</code>`,
+      '',
+      '━━━━━━━━━━━━━━━━━━━━━',
+      ''
+    ].join('\n')
+
+    const inlineKeyboard = [
+      [
+        { text: '🌐 View in Web History', url: 'https://ebook-transcript.vercel.app/history' },
+        ...(isChatIdAdmin(params.chatId) ? [{ text: '📊 Live Stats', callback_data: 'stats' }] : [])
+      ]
+    ]
+
+    // If text fits in Telegram's 4096 char limit
+    if (text.length <= 3200) {
+      const fullMessage = `${header}${escapeHtml(text)}\n\n⚡ <i>Synced to your Web History & Dashboard.</i>`
+      await sendTelegramResponse(params.chatId, fullMessage, inlineKeyboard, true)
+    } else {
+      // Long transcript: send preview + full document attachment
+      const previewText = text.slice(0, 2600) + '...\n\n<i>[Full transcript continues in the document attachment below ⬇️]</i>'
+      await sendTelegramResponse(params.chatId, `${header}${escapeHtml(previewText)}`, inlineKeyboard, true)
+
+      const docName = `${fileName.replace(/[<>:"/\\|?*]/g, '').trim() || 'transcript'}_transcript.txt`
+      await sendTelegramDocument(
+        params.chatId,
+        docName,
+        text,
+        `📄 <b>Full Transcript Attachment:</b> <code>${escapeHtml(docName)}</code> (${wordCount.toLocaleString()} words)`
+      )
+    }
+
+    return true
+  } catch (err) {
+    if (loadingMsgId) {
+      await deleteTelegramMessage(params.chatId, loadingMsgId)
+    }
+    console.error('[Telegram YouTube Handler] Failed:', err)
+    const errText = err instanceof Error ? err.message : String(err)
+    await sendTelegramResponse(
+      params.chatId,
+      [
+        `❌ <b>YouTube Transcription Failed:</b>`,
+        `<code>${escapeHtml(errText.slice(0, 400))}</code>`,
+        '',
+        `💡 <i>You can also paste this YouTube link on the Web Dashboard:</i>`,
+        `🌐 https://ebook-transcript.vercel.app`
+      ].join('\n')
+    )
+    return false
+  }
+}
+
 
 
 
