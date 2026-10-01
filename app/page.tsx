@@ -38,7 +38,7 @@ export default function Home() {
           transition={{ delay: 0.1 }}
           className="mt-4 text-base leading-relaxed text-slate-600 dark:text-slate-400 sm:text-lg"
         >
-          Upload audio, video, or paste a link. Powered by advanced multilingual AI with automatic language detection & timestamping.
+          Upload audio or video files. Powered by advanced multilingual AI with automatic language detection & timestamping.
         </motion.p>
 
         {/* Feature Badges */}

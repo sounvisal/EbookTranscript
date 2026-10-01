@@ -187,16 +187,16 @@ export default function TranscriptPanel() {
     })
   }, [currentTime, liveSegments])
 
-  // Auto-scroll active word into view smoothly
+  // Auto-scroll active word into view smoothly when active segment changes
   useEffect(() => {
-    if (activeWordRef.current) {
+    if (wordSyncEnabled && activeSegmentIndex !== -1 && activeWordRef.current) {
       activeWordRef.current.scrollIntoView({
         behavior: 'smooth',
         block: 'nearest',
         inline: 'nearest'
       })
     }
-  }, [currentTime])
+  }, [activeSegmentIndex, wordSyncEnabled])
 
   // Check if transcript was loaded from history or was already saved
   const isAlreadySaved = Boolean(transcript?.alreadySaved || transcript?.id)

@@ -28,30 +28,41 @@ body {
   min-height: 100vh;
   overflow-x: hidden;
   color: #0f172a;
+  background-color: #f8fafc;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
   background: 
     radial-gradient(circle at 50% 0%, rgba(224, 242, 254, 0.75) 0%, transparent 40rem),
     radial-gradient(circle at 100% 20%, rgba(238, 242, 255, 0.7) 0%, transparent 30rem),
-    radial-gradient(circle at 0% 80%, rgba(243, 232, 255, 0.4) 0%, transparent 35rem),
-    #f8fafc;
-  background-attachment: fixed;
+    radial-gradient(circle at 0% 80%, rgba(243, 232, 255, 0.4) 0%, transparent 35rem);
+  transform: translateZ(0);
 }
 
 .dark body,
 html.dark body {
   color: #f8fafc;
+  background-color: #090a0f;
+}
+
+.dark body::before,
+html.dark body::before {
   background: 
     radial-gradient(circle at 50% 0%, rgba(14, 165, 233, 0.08) 0%, transparent 45rem),
     radial-gradient(circle at 90% 25%, rgba(99, 102, 241, 0.09) 0%, transparent 35rem),
-    radial-gradient(circle at 10% 75%, rgba(168, 85, 247, 0.06) 0%, transparent 40rem),
-    #090a0f;
-  background-attachment: fixed;
+    radial-gradient(circle at 10% 75%, rgba(168, 85, 247, 0.06) 0%, transparent 40rem);
 }
 
-/* Apple Liquid Glass Material */
+/* Apple Liquid Glass Material - GPU Optimized */
 .apple-glass {
-  background: rgba(255, 255, 255, 0.82);
-  backdrop-filter: blur(24px) saturate(190%);
-  -webkit-backdrop-filter: blur(24px) saturate(190%);
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   border: 1px solid rgba(255, 255, 255, 0.8);
   box-shadow: 
     0 10px 30px -5px rgba(0, 0, 0, 0.04),
@@ -61,51 +72,51 @@ html.dark body {
 
 .dark .apple-glass,
 html.dark .apple-glass {
-  background: rgba(18, 20, 29, 0.76);
-  backdrop-filter: blur(28px) saturate(190%);
-  -webkit-backdrop-filter: blur(28px) saturate(190%);
+  background: rgba(18, 20, 29, 0.82);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   border: 1px solid rgba(255, 255, 255, 0.09);
   box-shadow: 
-    0 20px 50px -10px rgba(0, 0, 0, 0.6),
-    0 30px 60px -15px rgba(0, 0, 0, 0.7),
+    0 20px 40px -10px rgba(0, 0, 0, 0.5),
+    0 25px 50px -15px rgba(0, 0, 0, 0.6),
     inset 0 1px 0 0 rgba(255, 255, 255, 0.12);
 }
 
 .apple-glass-card {
-  background: rgba(255, 255, 255, 0.88);
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   border: 1px solid rgba(226, 232, 240, 0.75);
   box-shadow: 
-    0 4px 20px -2px rgba(15, 23, 42, 0.04),
-    0 12px 35px -4px rgba(15, 23, 42, 0.03),
+    0 4px 16px -2px rgba(15, 23, 42, 0.03),
+    0 8px 25px -4px rgba(15, 23, 42, 0.02),
     inset 0 1px 0 0 rgba(255, 255, 255, 0.95);
 }
 
 .dark .apple-glass-card,
 html.dark .apple-glass-card {
-  background: rgba(24, 27, 38, 0.7);
-  backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  background: rgba(24, 27, 38, 0.78);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: 
-    0 8px 25px -3px rgba(0, 0, 0, 0.5),
-    0 16px 40px -5px rgba(0, 0, 0, 0.6),
+    0 8px 20px -3px rgba(0, 0, 0, 0.4),
+    0 12px 30px -5px rgba(0, 0, 0, 0.5),
     inset 0 1px 0 0 rgba(255, 255, 255, 0.1);
 }
 
 .apple-glass-subtle {
-  background: rgba(248, 250, 252, 0.72);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  background: rgba(248, 250, 252, 0.82);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   border: 1px solid rgba(226, 232, 240, 0.6);
 }
 
 .dark .apple-glass-subtle,
 html.dark .apple-glass-subtle {
-  background: rgba(20, 22, 32, 0.55);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  background: rgba(20, 22, 32, 0.7);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
