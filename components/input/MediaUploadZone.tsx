@@ -1,8 +1,8 @@
 'use client'
 
-import { useCallback, useState } from 'react'
+import { useCallback } from 'react'
 import { useDropzone } from 'react-dropzone'
-import { FileAudio, AlertCircle, Link2, Sparkles, X, ArrowRight, Music, Film, CheckCircle2, RefreshCw } from 'lucide-react'
+import { FileAudio, AlertCircle, Sparkles, X, Music, Film, CheckCircle2, RefreshCw } from 'lucide-react'
 import { useTranscriptStore } from '@/store/transcriptStore'
 import { motion, AnimatePresence } from 'framer-motion'
 import { MAX_MEDIA_UPLOAD_BYTES, MAX_MEDIA_UPLOAD_MB } from '@/lib/uploadLimits'
@@ -23,7 +23,6 @@ export default function MediaUploadZone() {
     setErrorMessage,
     advancedOptions
   } = useTranscriptStore()
-  const [sourceUrl, setSourceUrl] = useState('')
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     if (acceptedFiles?.length) {
@@ -110,7 +109,6 @@ export default function MediaUploadZone() {
               onClick={() => {
                 setStatus('idle')
                 if (file) submitRequest({ file })
-                else if (sourceUrl.trim()) submitRequest({ url: sourceUrl.trim() })
               }}
               className="flex items-center gap-1.5 rounded-xl bg-amber-600 dark:bg-amber-500 px-3.5 py-2 text-xs font-bold text-white shadow-xs transition-all hover:bg-amber-700 active:scale-95 cursor-pointer"
             >
@@ -121,7 +119,6 @@ export default function MediaUploadZone() {
               type="button"
               onClick={() => {
                 setFile(null)
-                setSourceUrl('')
                 setStatus('idle')
                 setErrorMessage(null)
               }}
@@ -169,47 +166,6 @@ export default function MediaUploadZone() {
                 <span className="rounded-md bg-slate-100/90 dark:bg-slate-800 px-2 py-0.5 text-slate-600 dark:text-slate-300">MOV</span>
                 <span className="text-slate-400 dark:text-slate-500">· up to {MAX_MEDIA_UPLOAD_MB} MB</span>
               </div>
-            </div>
-
-            {/* Divider */}
-            <div className="flex items-center gap-4 text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
-              <div className="h-px flex-1 bg-slate-200/80 dark:bg-slate-800" />
-              <span>or paste media link</span>
-              <div className="h-px flex-1 bg-slate-200/80 dark:bg-slate-800" />
-            </div>
-
-            {/* Apple Card: Link Input */}
-            <div className="apple-glass-card rounded-2xl p-4 sm:p-5">
-              <label htmlFor="media-url" className="mb-2.5 flex items-center gap-2 text-xs sm:text-sm font-semibold text-slate-800 dark:text-slate-200">
-                <Link2 className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-                <span>Web link or YouTube video URL</span>
-              </label>
-              <div className="flex flex-col gap-2.5 sm:flex-row">
-                <input
-                  id="media-url"
-                  type="url"
-                  value={sourceUrl}
-                  onChange={(event) => {
-                    setSourceUrl(event.target.value)
-                    setErrorMessage(null)
-                    if (status === 'error') setStatus('idle')
-                  }}
-                  placeholder="https://example.com/audio.mp3 or YouTube link"
-                  className="min-w-0 flex-1 rounded-xl border border-slate-200/80 dark:border-slate-700 bg-white/90 dark:bg-slate-900/90 px-4 py-3 text-sm text-slate-900 dark:text-white outline-none transition-all placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:border-blue-500 focus:ring-4 focus:ring-blue-100/80 dark:focus:ring-blue-900/40"
-                />
-                <button
-                  type="button"
-                  onClick={() => submitRequest({ url: sourceUrl.trim() })}
-                  disabled={!sourceUrl.trim()}
-                  className="apple-btn-primary flex items-center justify-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold text-white transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-                >
-                  <span>Transcribe Link</span>
-                  <ArrowRight className="h-4 w-4" />
-                </button>
-              </div>
-              <p className="mt-2 text-[11px] leading-relaxed text-slate-400 dark:text-slate-500">
-                Supports direct video/audio URLs, TikTok, Twitter/X, Instagram, and YouTube.
-              </p>
             </div>
 
             {/* Advanced Options Drawer (Custom Vocabulary, Speaker Diarization, Language) */}

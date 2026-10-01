@@ -346,14 +346,8 @@ export async function transcribeWithProgress(
         options
       })
     }
-  } else if (input.url) {
-    requestInit = {
-      method: 'POST',
-      headers: { 'x-stream': '1', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: input.url, options })
-    }
   } else {
-    throw new Error('Choose a file or paste a media link first.')
+    throw new Error('Please select an audio or video file to transcribe.')
   }
 
   const res = await fetch('/api/transcribe', requestInit)

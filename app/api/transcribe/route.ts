@@ -1,7 +1,5 @@
 import { NextResponse } from 'next/server'
 import { createHash } from 'node:crypto'
-import { isIP } from 'node:net'
-import { extractYouTubeMedia, extractYouTubeTranscript } from '@/lib/youtube'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { extractSpeechAudio, splitAudioIntoChunks } from '@/lib/audio'
@@ -30,7 +28,6 @@ export const dynamic = 'force-dynamic'
 export const maxDuration = 300
 
 const MAX_LOCAL_FILE_BYTES = MAX_MEDIA_UPLOAD_BYTES
-const MAX_REMOTE_FILE_BYTES = MAX_MEDIA_UPLOAD_BYTES
 // Flash-Lite has the highest free-tier limits (15 RPM / 1000 RPD vs Flash's
 // 10 RPM / 250 RPD), which is why it's the default. Override with GEMINI_MODEL.
 const MODEL_NAME = process.env.GEMINI_MODEL || 'gemini-3.6-flash'
@@ -46,19 +43,6 @@ const INLINE_AUDIO_LIMIT_BYTES = 8 * 1024 * 1024
 const CHUNK_THRESHOLD_SECONDS = 150
 const CHUNK_DURATION_SECONDS = 120
 const MAX_PARALLEL_CHUNKS = 3
-const OCTET_STREAM_MIME_TYPES = new Set(['application/octet-stream', 'binary/octet-stream'])
-const SOCIAL_MEDIA_HOSTS = [
-  'facebook.com',
-  'fb.watch',
-  'instagram.com',
-  'soundcloud.com',
-  'tiktok.com',
-  'twitter.com',
-  'vimeo.com',
-  'x.com',
-  'youtube.com',
-  'youtu.be'
-]
 
 export type TranscribeOptions = {
   customVocabulary?: string[]
@@ -84,7 +68,6 @@ type MediaInput = {
   durationSeconds?: number
   keyIndex?: number
   options?: TranscribeOptions
-  directTranscript?: TranscriptResultPayload
 }
 
 type GeminiTranscriptPayload = {
@@ -136,64 +119,6 @@ function sanitizeFileName(value: string, fallback: string) {
     .trim()
 
   return sanitizedValue || fallback
-}
-
-function hostnameMatches(hostname: string, candidate: string) {
-  return hostname === candidate || hostname.endsWith(`.${candidate}`)
-}
-
-function isYouTubeHostname(hostname: string) {
-  return hostnameMatches(hostname, 'youtube.com') || hostname === 'youtu.be'
-}
-
-function isSocialMediaHostname(hostname: string) {
-  return SOCIAL_MEDIA_HOSTS.some((candidate) => hostnameMatches(hostname, candidate))
-}
-
-function getHtmlPageErrorMessage(hostname: string) {
-  if (isYouTubeHostname(hostname)) {
-    return 'Unable to extract media from this YouTube link right now. Try another public video, upload the file directly, or paste a direct audio/video URL.'
-  }
-
-  if (isSocialMediaHostname(hostname)) {
-    return 'This link resolves to a web page instead of a media file. Upload the audio or video file directly, or paste a direct media file URL.'
-  }
-
-  return 'The link must point directly to an audio or video file, not a web page.'
-}
-
-
-function isBlockedHostname(hostname: string) {
-  const normalizedHost = hostname.trim().toLowerCase()
-  const ipVersion = isIP(normalizedHost)
-
-  if (normalizedHost === 'localhost' || normalizedHost.endsWith('.local')) {
-    return true
-  }
-
-  if (ipVersion === 4) {
-    const [firstOctet, secondOctet] = normalizedHost.split('.').map(Number)
-
-    return (
-      firstOctet === 10 ||
-      firstOctet === 127 ||
-      firstOctet === 0 ||
-      (firstOctet === 169 && secondOctet === 254) ||
-      (firstOctet === 172 && secondOctet >= 16 && secondOctet <= 31) ||
-      (firstOctet === 192 && secondOctet === 168)
-    )
-  }
-
-  if (ipVersion === 6) {
-    return (
-      normalizedHost === '::1' ||
-      normalizedHost.startsWith('fc') ||
-      normalizedHost.startsWith('fd') ||
-      normalizedHost.startsWith('fe80')
-    )
-  }
-
-  return normalizedHost.endsWith('.internal')
 }
 
 function parseDurationSeconds(durationText?: string) {
@@ -250,138 +175,6 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-async function readResponseWithinLimit(response: Response, maxBytes: number) {
-  if (!response.body) {
-    const buffer = Buffer.from(await response.arrayBuffer())
-    if (buffer.byteLength > maxBytes) {
-      throw new Error(`Remote media exceeds the ${Math.round(maxBytes / 1024 / 1024)}MB limit.`)
-    }
-    return buffer
-  }
-
-  const reader = response.body.getReader()
-  const chunks: Buffer[] = []
-  let totalBytes = 0
-
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    if (!value) continue
-
-    totalBytes += value.byteLength
-    if (totalBytes > maxBytes) {
-      await reader.cancel()
-      throw new Error(`Remote media exceeds the ${Math.round(maxBytes / 1024 / 1024)}MB limit.`)
-    }
-
-    chunks.push(Buffer.from(value))
-  }
-
-  return Buffer.concat(chunks)
-}
-
-async function getMediaInputFromYouTubeUrl(urlValue: string, options?: TranscribeOptions): Promise<MediaInput> {
-  // Tier 1: Fast direct subtitle / auto-caption extraction (< 3s, zero audio downloads, zero Gemini quota)
-  try {
-    const directResult = await extractYouTubeTranscript(urlValue, options?.languagePreference)
-    if (directResult && directResult.text) {
-      console.log(`[Transcribe API] Using direct YouTube transcript for "${directResult.sourceName}" (${directResult.segments.length} segments)`)
-      return {
-        mimeType: 'text/plain',
-        displayName: directResult.displayName,
-        sourceName: directResult.sourceName,
-        durationSeconds: directResult.duration,
-        options,
-        directTranscript: {
-          text: directResult.text,
-          segments: directResult.segments,
-          language: directResult.language,
-          duration: directResult.duration,
-          source: directResult.sourceName
-        }
-      }
-    }
-  } catch (directErr) {
-    console.warn('[Transcribe API] Direct YouTube subtitle extraction failed, proceeding to media extraction:', directErr)
-  }
-
-  // Tier 2: Stream/audio media download + Gemini transcription
-  const extracted = await extractYouTubeMedia(urlValue, MAX_REMOTE_FILE_BYTES)
-
-  return {
-    buffer: extracted.buffer,
-    mimeType: extracted.mimeType,
-    displayName: extracted.displayName,
-    sourceName: extracted.sourceName,
-    durationSeconds: extracted.durationSeconds,
-    options
-  }
-}
-
-async function getMediaInputFromUrl(urlValue: string, options?: TranscribeOptions): Promise<MediaInput> {
-  let url: URL
-
-  try {
-    url = new URL(urlValue)
-  } catch {
-    throw new Error('Please provide a valid media URL.')
-  }
-
-  if (!['http:', 'https:'].includes(url.protocol)) {
-    throw new Error('Only HTTP and HTTPS media URLs are supported.')
-  }
-
-  if (isBlockedHostname(url.hostname)) {
-    throw new Error('That media host is not allowed.')
-  }
-
-  const normalizedHostname = url.hostname.trim().toLowerCase()
-
-  if (isYouTubeHostname(normalizedHostname)) {
-    return getMediaInputFromYouTubeUrl(urlValue, options)
-  }
-
-  const fetchUrl = url.toString()
-  const fetchHeaders: Record<string, string> = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
-  let sourceName = sanitizeFileName(decodeURIComponent(url.pathname.split('/').pop() || 'remote-media'), 'remote-media')
-
-  const response = await fetch(fetchUrl, { redirect: 'follow', headers: fetchHeaders })
-  if (!response.ok) {
-    throw new Error(`Unable to fetch media from link (${response.status}).`)
-  }
-
-  const contentLength = Number(response.headers.get('content-length') || '0')
-  if (contentLength > MAX_REMOTE_FILE_BYTES) {
-    throw new Error(`Remote media exceeds the ${Math.round(MAX_REMOTE_FILE_BYTES / 1024 / 1024)}MB limit.`)
-  }
-
-  const responseMimeType = normalizeMimeType(response.headers.get('content-type'))
-  let inferredMimeType = isSupportedMimeType(responseMimeType)
-    ? responseMimeType
-    : inferMimeTypeFromName(sourceName)
-
-  if (responseMimeType.includes('text/html')) {
-    throw new Error(getHtmlPageErrorMessage(normalizedHostname))
-  }
-
-  if (responseMimeType && !isSupportedMimeType(responseMimeType) && !OCTET_STREAM_MIME_TYPES.has(responseMimeType)) {
-    throw new Error(`The link returned ${responseMimeType}, not an audio or video file.`)
-  }
-
-  if (!isSupportedMimeType(inferredMimeType)) {
-    inferredMimeType = 'audio/mpeg'
-  }
-
-  const buffer = await readResponseWithinLimit(response, MAX_REMOTE_FILE_BYTES)
-
-  return {
-    buffer,
-    mimeType: inferredMimeType,
-    displayName: sourceName,
-    sourceName: sourceName || url.hostname
-  }
-}
-
 async function getMediaInputFromRequest(req: Request): Promise<MediaInput> {
   const contentType = req.headers.get('content-type') || ''
 
@@ -417,19 +210,22 @@ async function getMediaInputFromRequest(req: Request): Promise<MediaInput> {
         options: body?.options
       }
     }
-    const urlValue = typeof body?.url === 'string' ? body.url.trim() : ''
 
-    if (!urlValue) {
-      throw new Error('No media provided.')
+    if (body?.url) {
+      throw new Error('Link transcription is disabled. Please upload an audio or video file directly.')
     }
 
-    const media = await getMediaInputFromUrl(urlValue, body?.options)
-    return { ...media, options: body?.options }
+    throw new Error('No media file provided.')
   }
 
   const formData = await req.formData()
   const file = formData.get('file') as File | null
   const urlValue = typeof formData.get('url') === 'string' ? String(formData.get('url')).trim() : ''
+
+  if (urlValue) {
+    throw new Error('Link transcription is disabled. Please upload an audio or video file directly.')
+  }
+
   let options: TranscribeOptions | undefined
   const optionsRaw = formData.get('options')
   if (typeof optionsRaw === 'string' && optionsRaw.trim()) {
@@ -459,12 +255,7 @@ async function getMediaInputFromRequest(req: Request): Promise<MediaInput> {
     }
   }
 
-  if (urlValue) {
-    const media = await getMediaInputFromUrl(urlValue, options)
-    return { ...media, options }
-  }
-
-  throw new Error('No file or media URL provided.')
+  throw new Error('Please select an audio or video file to transcribe.')
 }
 
 function isRateLimitError(error: unknown) {
@@ -1038,16 +829,6 @@ async function runTranscriptionPipeline(
   keys: string[],
   emit: (event: ProgressEvent) => void
 ): Promise<TranscriptResultPayload> {
-  emit({ type: 'status', phase: 'uploading' })
-  const mediaInput = await getMediaInputFromRequest(req)
-
-  // Fast direct path for YouTube videos with official captions/subtitles
-  if (mediaInput.directTranscript) {
-    emit({ type: 'status', phase: 'processing', duration: mediaInput.directTranscript.duration })
-    emit({ type: 'progress', progress: 100 })
-    return mediaInput.directTranscript
-  }
-
   if (!keys.length) {
     // No API key configured: return a mock transcript with staged progress.
     emit({ type: 'status', phase: 'processing', duration: 12.5 })
@@ -1060,6 +841,8 @@ async function runTranscriptionPipeline(
     return buildMockResult()
   }
 
+  emit({ type: 'status', phase: 'uploading' })
+  const mediaInput = await getMediaInputFromRequest(req)
   const models = getGeminiModels()
   const promptText = buildTranscriptionPrompt(mediaInput.options)
 

@@ -48,7 +48,7 @@ export default function InputTabs() {
               }`}
             >
               <Upload className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-              <span>Single File / Link</span>
+              <span>Single File</span>
             </button>
 
             <button
