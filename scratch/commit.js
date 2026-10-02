@@ -3,7 +3,6 @@ const fs = require('fs')
 
 async function commit(message) {
   const dir = '.'
-  await git.add({ fs, dir, filepath: 'app/api/transcribe/route.ts' })
   await git.add({ fs, dir, filepath: 'lib/telegram.ts' })
   
   const sha = await git.commit({
@@ -18,4 +17,4 @@ async function commit(message) {
   console.log('Committed:', sha)
 }
 
-commit('fix(telemetry): await trackUsage in stream and use Math.max of transcripts/metrics in Daily Recap')
+commit('feat(telegram): upgrade Daily Executive Digest with rich throughput, languages, media formats, and user breakdown')
