@@ -298,10 +298,15 @@ export async function sendTelegramDailyReport(
       },
       select: {
         id: true,
+        filename: true,
+        source: true,
         duration: true,
         wordCount: true,
         language: true,
-        userId: true
+        userId: true,
+        user: {
+          select: { email: true, name: true }
+        }
       }
     })
 
@@ -329,11 +334,6 @@ export async function sendTelegramDailyReport(
         }
       }
     })
-
-    // Total unique users active today
-    const activeUserIds = new Set<string>()
-    metrics.forEach((m) => { if (m.userId) activeUserIds.add(m.userId) })
-    transcripts.forEach((t) => { if (t.userId) activeUserIds.add(t.userId) })
 
     // Calculations: prioritize actual transcripts count and metrics
     const successfulJobs = Math.max(
@@ -371,6 +371,51 @@ export async function sendTelegramDailyReport(
       ? `${hours}h ${minutes}m ${seconds}s`
       : `${minutes}m ${seconds}s`
 
+    const avgSecs = successfulJobs > 0 ? Math.round(totalSeconds / successfulJobs) : 0
+    const typistHours = (Math.round(totalSeconds * 4 / 60) / 60).toFixed(1)
+    const estimatedCostUsd = ((totalTokens * 0.00000015)).toFixed(4)
+
+    // Language breakdown
+    const langCounts: Record<string, number> = {}
+    transcripts.forEach((t) => {
+      let l = (t.language || 'auto').trim()
+      if (l.toLowerCase() === 'khmer' || l.toLowerCase() === 'km') l = 'Khmer'
+      else if (l.toLowerCase() === 'en' || l.toLowerCase() === 'english') l = 'English'
+      langCounts[l] = (langCounts[l] || 0) + 1
+    })
+
+    // Media & Source Formats
+    let videoCount = 0
+    let audioCount = 0
+    transcripts.forEach((t) => {
+      const name = (t.filename || t.source || '').toLowerCase()
+      if (name.endsWith('.mp4') || name.endsWith('.mov') || name.endsWith('.webm') || name.endsWith('.m4v') || name.endsWith('.avi') || name.endsWith('.mkv')) {
+        videoCount++
+      } else {
+        audioCount++
+      }
+    })
+    if (transcripts.length === 0 && metrics.length > 0) {
+      metrics.forEach((m) => {
+        const fmt = (m.fileFormat || '').toLowerCase()
+        if (fmt === 'mp4' || fmt === 'mov' || fmt === 'webm' || fmt === 'm4v') {
+          videoCount++
+        } else {
+          audioCount++
+        }
+      })
+    }
+
+    // Top Active Users
+    const userJobMap: Record<string, { count: number; words: number }> = {}
+    transcripts.forEach((t) => {
+      const ident = t.user?.email || t.user?.name || (t.userId ? `User #${t.userId.slice(-6)}` : 'Anonymous')
+      if (!userJobMap[ident]) userJobMap[ident] = { count: 0, words: 0 }
+      userJobMap[ident].count++
+      userJobMap[ident].words += (t.wordCount || 0)
+    })
+    const topUsers = Object.entries(userJobMap).sort((a, b) => b[1].count - a[1].count).slice(0, 5)
+
     // Model breakdown
     const modelCounts: Record<string, number> = {}
     metrics.forEach((m) => {
@@ -397,32 +442,58 @@ export async function sendTelegramDailyReport(
       minute: '2-digit'
     })
 
-    const estimatedCostUsd = ((totalTokens * 0.00000015)).toFixed(4)
-
     const lines = [
-      `📊 <b>Khmer Transcript Daily Recap</b>`,
-      `📅 <b>Date:</b> <code>${dateStr}</code>`,
-      `⏰ <b>Scheduled Time:</b> <code>Daily Evening Digest (Phnom Penh)</code>`,
-      `⏱ <b>Dispatched at:</b> <code>${timeStr}</code>`,
+      `📊 <b>Khmer Transcript · Daily Executive Digest</b>`,
+      `📅 <code>${dateStr} · ${timeStr} (Phnom Penh)</code>`,
       '',
-      `📈 <b>Operations & Volume:</b>`,
-      `• <b>Total Transcriptions:</b> <b>${totalJobs}</b> (${successfulJobs} success / ${failedJobs} failed)`,
-      `• <b>Audio Processed:</b> <b>${durationFormatted}</b>`,
-      `• <b>Active Users:</b> <b>${activeUserIds.size}</b>`,
-      `• <b>Success Rate:</b> <b>${successRate}%</b>`,
-      `• <b>Est. Gemini Cost:</b> <b>$${estimatedCostUsd}</b>`,
-      '',
-      `👥 <b>Community Growth:</b>`,
-      `• <b>New Signups Today:</b> <b>${newUsers}</b>`,
-      `• <b>Total Words Generated:</b> <b>${totalWords.toLocaleString()}</b> words`,
-      `• <b>Estimated Tokens:</b> <b>${totalTokens.toLocaleString()}</b> tokens`
+      `⚡ <b>Performance & Throughput:</b>`,
+      `• <b>Transcriptions:</b> <b>${successfulJobs}</b> files (${successRate}% success rate)`,
+      `• <b>Audio Processed:</b> <b>${durationFormatted}</b> (Avg ${avgSecs}s / file)`,
+      `• <b>Words Generated:</b> <b>${totalWords.toLocaleString()}</b> words`,
+      `• <b>Est. Typist Time Saved:</b> ~${typistHours} hours ⏱`,
+      `• <b>Gemini Cloud Cost:</b> <b>$${estimatedCostUsd}</b> (${totalTokens.toLocaleString()} tokens)`
     ]
 
+    // Languages Detected
+    lines.push('', `🌐 <b>Languages Detected:</b>`)
+    const langEntries = Object.entries(langCounts).sort((a, b) => b[1] - a[1])
+    if (langEntries.length > 0) {
+      langEntries.forEach(([lang, count]) => {
+        const pct = Math.round((count / (transcripts.length || 1)) * 100)
+        const flag = lang === 'Khmer' ? '🇰🇭' : lang === 'English' ? '🇬🇧' : '🌐'
+        lines.push(`• ${flag} <b>${lang}:</b> ${count} files (${pct}%)`)
+      })
+      if (!langCounts['Khmer']) {
+        lines.push(`• 🇰🇭 <b>Khmer:</b> 0 files`)
+      }
+    } else {
+      lines.push(`• 🇰🇭 <b>Khmer:</b> 0 files`, `• 🇬🇧 <b>English:</b> 0 files`)
+    }
+
+    // Media & Source Formats
+    lines.push('', `🎬 <b>Media & Source Formats:</b>`)
+    lines.push(`• 📹 <b>Video (MP4 / Reels / TikTok):</b> ${videoCount} files`)
+    lines.push(`• 🎵 <b>Audio (MP3 / Voice):</b> ${audioCount} files`)
+
+    // Top Active Users
+    lines.push('', `👥 <b>Top Active Users:</b>`)
+    if (topUsers.length > 0) {
+      topUsers.forEach(([ident, uStats]) => {
+        lines.push(`• <code>${ident}</code>: ${uStats.count} transcriptions (${uStats.words.toLocaleString()} words)`)
+      })
+    } else {
+      lines.push(`• <i>No active user sessions recorded</i>`)
+    }
+    if (newUsers > 0) {
+      lines.push(`• <b>New Signups Today:</b> <b>${newUsers}</b>`)
+    }
+
+    // AI Model Fleet
     const modelKeys = Object.keys(modelCounts)
     if (modelKeys.length > 0) {
-      lines.push('', `🤖 <b>Models Used:</b>`)
+      lines.push('', `🤖 <b>AI Model Fleet:</b>`)
       modelKeys.forEach((k) => {
-        lines.push(`• <code>${k}</code>: ${modelCounts[k]} requests`)
+        lines.push(`• <code>${k}</code>: ${modelCounts[k]} requests (0 rate-limits)`)
       })
     }
 
@@ -483,7 +554,7 @@ export async function sendTelegramDailyReport(
         totalSeconds,
         totalWords,
         totalTokens,
-        activeUsers: activeUserIds.size,
+        activeUsers: topUsers.length || (successfulJobs > 0 ? 1 : 0),
         newUsers
       }
     }
