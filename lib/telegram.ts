@@ -335,23 +335,31 @@ export async function sendTelegramDailyReport(
     metrics.forEach((m) => { if (m.userId) activeUserIds.add(m.userId) })
     transcripts.forEach((t) => { if (t.userId) activeUserIds.add(t.userId) })
 
-    // Calculations
-    const successfulJobs = metrics.filter((m) => m.status === 'success').length || transcripts.length
+    // Calculations: prioritize actual transcripts count and metrics
+    const successfulJobs = Math.max(
+      transcripts.length,
+      metrics.filter((m) => m.status === 'success').length
+    )
     const failedJobs = metrics.filter((m) => m.status === 'error').length + errors.filter(e => e.errorType !== 'USER_REPORTED_ISSUE').length
     const totalJobs = successfulJobs + failedJobs
 
-    const totalWords = transcripts.reduce((acc, t) => acc + (t.wordCount || 0), 0) ||
+    const totalWords = Math.max(
+      transcripts.reduce((acc, t) => acc + (t.wordCount || 0), 0),
       metrics.reduce((acc, m) => acc + (m.wordCount || 0), 0)
+    )
 
-    let totalSeconds = transcripts.reduce((acc, t) => acc + (t.duration || 0), 0) ||
+    let totalSeconds = Math.max(
+      transcripts.reduce((acc, t) => acc + (t.duration || 0), 0),
       metrics.reduce((acc, m) => acc + (m.durationSeconds || 0), 0)
+    )
 
     if (!totalSeconds && totalWords > 0) {
       totalSeconds = Math.round(totalWords / 2.3)
     }
 
-    const totalTokens = metrics.reduce((acc, m) => acc + (m.totalTokens || 0), 0) ||
-      Math.round(totalSeconds * 25 + totalWords * 1.3)
+    const calculatedTokens = Math.round(totalSeconds * 25 + totalWords * 1.3)
+    const metricsTokens = metrics.reduce((acc, m) => acc + (m.totalTokens || 0), 0)
+    const totalTokens = Math.max(metricsTokens, calculatedTokens)
 
     const successRate = totalJobs > 0 ? ((successfulJobs / totalJobs) * 100).toFixed(1) : '100.0'
 
@@ -368,6 +376,12 @@ export async function sendTelegramDailyReport(
     metrics.forEach((m) => {
       modelCounts[m.model] = (modelCounts[m.model] || 0) + 1
     })
+
+    const trackedModelRequests = Object.values(modelCounts).reduce((a, b) => a + b, 0)
+    if (successfulJobs > trackedModelRequests) {
+      const defaultModel = process.env.GEMINI_MODEL || 'gemini-3.6-flash'
+      modelCounts[defaultModel] = (modelCounts[defaultModel] || 0) + (successfulJobs - trackedModelRequests)
+    }
 
     const dateStr = now.toLocaleDateString('en-US', {
       timeZone: 'Asia/Phnom_Penh',
@@ -794,7 +808,15 @@ export async function handleTelegramStatsCommand(chatId: string | number): Promi
   const timeStr = localNow.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })
 
   try {
-    const [metricsCount, sumData, errorsCount, activeUsersGroup] = await Promise.all([
+    const [
+      metricsCount,
+      sumData,
+      errorsCount,
+      activeMetricUsersGroup,
+      transcriptsCount,
+      transcriptsSum,
+      activeTranscriptUsersGroup
+    ] = await Promise.all([
       prisma.usageMetric.count({ where: { createdAt: { gte: startOfDayUtc } } }),
       prisma.usageMetric.aggregate({
         _sum: { durationSeconds: true, wordCount: true },
@@ -804,17 +826,32 @@ export async function handleTelegramStatsCommand(chatId: string | number): Promi
       prisma.usageMetric.groupBy({
         by: ['userId'],
         where: { createdAt: { gte: startOfDayUtc }, userId: { not: null } }
+      }),
+      prisma.transcript.count({ where: { createdAt: { gte: startOfDayUtc } } }),
+      prisma.transcript.aggregate({
+        _sum: { duration: true, wordCount: true },
+        where: { createdAt: { gte: startOfDayUtc } }
+      }),
+      prisma.transcript.groupBy({
+        by: ['userId'],
+        where: { createdAt: { gte: startOfDayUtc }, userId: { not: null } }
       })
     ])
 
-    const totalSeconds = sumData._sum.durationSeconds || 0
-    const totalWords = sumData._sum.wordCount || 0
-    const activeUsers = activeUsersGroup.length
+    const totalSeconds = Math.max(transcriptsSum._sum.duration || 0, sumData._sum.durationSeconds || 0)
+    const totalWords = Math.max(transcriptsSum._sum.wordCount || 0, sumData._sum.wordCount || 0)
+    const successfulRuns = Math.max(transcriptsCount, metricsCount)
+
+    const uniqueUsers = new Set<string>()
+    activeMetricUsersGroup.forEach((u) => { if (u.userId) uniqueUsers.add(u.userId) })
+    activeTranscriptUsersGroup.forEach((u) => { if (u.userId) uniqueUsers.add(u.userId) })
+    const activeUsers = uniqueUsers.size || (successfulRuns > 0 ? 1 : 0)
+
     const hours = Math.floor(totalSeconds / 3600)
     const minutes = Math.floor((totalSeconds % 3600) / 60)
     const durationFormatted = hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m ${Math.floor(totalSeconds % 60)}s`
 
-    const totalRuns = metricsCount + errorsCount
+    const totalRuns = successfulRuns + errorsCount
     const errorRate = totalRuns > 0 ? ((errorsCount / totalRuns) * 100).toFixed(1) : '0.0'
 
     const message = [
@@ -823,7 +860,7 @@ export async function handleTelegramStatsCommand(chatId: string | number): Promi
       '',
       `🎧 <b>Audio Transcribed:</b> <code>${durationFormatted}</code>`,
       `📝 <b>Words Generated:</b> <code>${totalWords.toLocaleString()} words</code>`,
-      `⚡ <b>Successful Runs:</b> <code>${metricsCount.toLocaleString()}</code>`,
+      `⚡ <b>Successful Runs:</b> <code>${successfulRuns.toLocaleString()}</code>`,
       `👥 <b>Active Users Today:</b> <code>${activeUsers} user${activeUsers === 1 ? '' : 's'}</code>`,
       `🚨 <b>Errors Encountered:</b> <code>${errorsCount} (${errorRate}% error rate)</code>`,
       '',

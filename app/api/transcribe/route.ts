@@ -1049,28 +1049,36 @@ export async function POST(req: Request) {
             : (maxSegEnd > 0 ? Math.round(maxSegEnd * 10) / 10 : Math.max(1, Math.round(wordCount / 2.3)))
 
           // Log privacy-safe metrics for admin dashboard (no transcript text saved)
-          trackUsage({
-            userId: session.user?.id || null,
-            model: MODEL_NAME,
-            inputType: 'file',
-            durationSeconds: durationSecs,
-            wordCount,
-            status: 'success'
-          }).catch(() => {})
+          try {
+            await trackUsage({
+              userId: session.user?.id || null,
+              model: MODEL_NAME,
+              inputType: 'file',
+              durationSeconds: durationSecs,
+              wordCount,
+              status: 'success'
+            })
+          } catch (metricErr) {
+            console.error('Failed to trackUsage in stream:', metricErr)
+          }
         } catch (error) {
           console.error('Transcription error:', error)
           const classified = classifyTranscriptionError(error)
           emit({ type: 'error', error: classified.message })
           
           // Log error report for admin debugging
-          trackError({
-            userId: session.user?.id || null,
-            userEmail: session.user?.email || null,
-            endpoint: '/api/transcribe',
-            errorMessage: error instanceof Error ? error.message : 'Transcription failed',
-            errorType: classified.message,
-            model: MODEL_NAME
-          }).catch(() => {})
+          try {
+            await trackError({
+              userId: session.user?.id || null,
+              userEmail: session.user?.email || null,
+              endpoint: '/api/transcribe',
+              errorMessage: error instanceof Error ? error.message : 'Transcription failed',
+              errorType: classified.message,
+              model: MODEL_NAME
+            })
+          } catch (errReport) {
+            console.error('Failed to trackError in stream:', errReport)
+          }
         } finally {
           await sleep(50)
           controller.close()
@@ -1100,26 +1108,34 @@ export async function POST(req: Request) {
       ? result.duration
       : (maxSegEnd > 0 ? Math.round(maxSegEnd * 10) / 10 : Math.max(1, Math.round(wordCount / 2.3)))
 
-    trackUsage({
-      userId: session.user?.id || null,
-      model: MODEL_NAME,
-      inputType: 'file',
-      durationSeconds: durationSecs,
-      wordCount,
-      status: 'success'
-    }).catch(() => {})
+    try {
+      await trackUsage({
+        userId: session.user?.id || null,
+        model: MODEL_NAME,
+        inputType: 'file',
+        durationSeconds: durationSecs,
+        wordCount,
+        status: 'success'
+      })
+    } catch (metricErr) {
+      console.error('Failed to trackUsage in non-stream:', metricErr)
+    }
     return NextResponse.json(result, { status: 200 })
   } catch (error) {
     console.error('Transcription error:', error)
     const { message, status } = classifyTranscriptionError(error)
-    trackError({
-      userId: session.user?.id || null,
-      userEmail: session.user?.email || null,
-      endpoint: '/api/transcribe',
-      errorMessage: error instanceof Error ? error.message : 'Transcription failed',
-      errorType: message,
-      model: MODEL_NAME
-    }).catch(() => {})
+    try {
+      await trackError({
+        userId: session.user?.id || null,
+        userEmail: session.user?.email || null,
+        endpoint: '/api/transcribe',
+        errorMessage: error instanceof Error ? error.message : 'Transcription failed',
+        errorType: message,
+        model: MODEL_NAME
+      })
+    } catch (errReport) {
+      console.error('Failed to trackError in non-stream:', errReport)
+    }
     return NextResponse.json({ error: message }, { status })
   }
 }
