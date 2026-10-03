@@ -347,6 +347,7 @@ const BASE_TRANSCRIPTION_PROMPT = [
   '3. HIGH-SENSITIVITY ACOUSTIC EXTRACTION: Listen with maximum sensitivity to all audio channels. Even if the voice is quiet, muffled, whispered, speaking fast, singing, chanting, talking over an intro, or partially masked by background music, sound effects, beats, or ambient noise, you MUST detect and transcribe all spoken words verbatim.',
   '4. COMPLETE RECORDING CONTINUITY: Transcribe the entire duration verbatim from start to finish without stopping. Audio recordings often start with corporate advertisements, sponsor intros, or theme music followed by music interludes or pauses before the main content begins. You MUST continue listening and transcribing past any music breaks, interludes, or pauses from 0:00 all the way to the absolute end of the media.',
   '5. NUMERIC SECONDS TIMESTAMPS: Every start and end timestamp in "segments" must be a raw number in seconds (e.g. 0.0, 4.5, 38.2, 145.6). Do NOT use formatted colon strings like "2:30".',
+  '6. QUOTATION MARKS: Inside transcript text strings, use single quotes (\'quote\') or properly escaped quotes (\\"quote\\") for spoken dialogue so that JSON formatting is strictly valid.',
   'Format strictly as JSON with this exact shape:',
   '{"language":"Khmer","text":"Full continuous transcript text here","segments":[{"start":0.0,"end":4.5,"text":"phrase"}]}',
   'Ensure "text" contains the complete continuous transcript, and "segments" contains all timestamped phrases.',
@@ -398,6 +399,7 @@ function buildTranscriptionPrompt(options?: TranscribeOptions): string {
   }
 
   promptParts.push(
+    '8. QUOTATION MARKS: Inside transcript text strings, use single quotes (\'quote\') or properly escaped quotes (\\"quote\\") for spoken dialogue so that JSON formatting is strictly valid.',
     'Format strictly as JSON with this exact shape:',
     '{"language":"Khmer","text":"Full continuous transcript text here","segments":[{"start":0.0,"end":4.5,"text":"phrase"}]}',
     'Ensure "text" contains the complete continuous transcript, and "segments" contains all timestamped phrases.',
@@ -625,14 +627,14 @@ async function transcribeWithKey(
 
     let totalDuration = audioInput.durationSeconds || metadataDuration
 
-    // If total duration is unknown but we have a fileUri on Gemini, probe duration quickly
-    if (totalDuration <= 0 && fileUri) {
+    // If total duration is unknown, probe duration quickly
+    if (totalDuration <= 0 && (fileUri || audioInput.buffer)) {
       try {
         const probeRes = await streamGeminiTranscript(apiKey, {
           modelName: 'gemini-2.5-flash',
           prompt: 'What is the total duration of this audio file in seconds? Return strictly JSON: {"duration": 123.4}',
           mimeType: mediaMimeType,
-          fileUri
+          ...(fileUri ? { fileUri } : { inlineData: audioInput.buffer })
         })
         const match = probeRes.match(/"duration"\s*:\s*([0-9.]+)/i)
         if (match) {
@@ -653,12 +655,16 @@ async function transcribeWithKey(
 
     for (let modelIndex = 0; modelIndex < models.length; modelIndex += 1) {
       const modelName = models[modelIndex]
+      const effectivePrompt = totalDuration > 0
+        ? `${promptText} CRITICAL FULL-DURATION REQUIREMENT: Total recording duration is exactly ${Math.round(totalDuration)} seconds. Spoken dialogue occurs across the full recording. You MUST transcribe all spoken dialogue from 0.0s all the way to ${Math.round(totalDuration)}s without stopping. Do NOT stop after introductory phrases or musical pauses.`
+        : promptText
+
       try {
         const responseText = await withGeminiRetry(
           () =>
             streamGeminiTranscript(apiKey, {
               modelName,
-              prompt: promptText,
+              prompt: effectivePrompt,
               mimeType: mediaMimeType,
               ...(fileUri ? { fileUri } : { inlineData: audioInput.buffer }),
               onText: (accumulated) => {
@@ -684,20 +690,21 @@ async function transcribeWithKey(
         }, 0)
 
         // AUTOMATIC CONTINUATION LOOP:
-        // If the media is longer than 50 seconds and the model stopped early (e.g. at an intro ad,
-        // musical pause, or token limit) before the end of the recording, automatically issue
-        // continuation requests from the last detected timestamp to capture all remaining speech.
+        // If the media has known duration (>= 15s) and the transcribed speech stopped early
+        // (e.g. at an intro pause, sound effect, musical break, or token pause),
+        // automatically issue continuation requests from the last detected timestamp to capture all remaining speech.
         let continuationPass = 0
         const MAX_CONTINUATION_PASSES = 4
 
         while (
-          totalDuration > 50 &&
-          currentMaxEnd > 0 &&
-          currentMaxEnd < totalDuration - 20 &&
+          totalDuration >= 15 &&
+          currentMaxEnd < totalDuration - 6 &&
           continuationPass < MAX_CONTINUATION_PASSES
         ) {
           continuationPass++
-          const startOffset = Math.floor(currentMaxEnd)
+          const startOffset = Math.max(0, Math.floor(currentMaxEnd))
+          const lastWords = accumulatedSegments.slice(-2).map((s) => s.text).join(' ').slice(-100).trim()
+
           emit({
             type: 'status',
             phase: 'processing',
@@ -705,14 +712,15 @@ async function transcribeWithKey(
           })
 
           const contPrompt = [
-            `You are continuing the transcription of this audio media. Total media duration is ${Math.round(totalDuration)} seconds.`,
-            `Dialogue from 0:00 up to ${startOffset} seconds has already been transcribed.`,
-            `Now listen carefully and transcribe ALL remaining spoken dialogue and speech from ${startOffset} seconds to the very end (${Math.round(totalDuration)} seconds).`,
-            'Do not stop at music interludes, sound effects, or pauses. Transcribe all remaining speech verbatim.',
+            `CRITICAL RECORDING CONTINUATION: You are continuing the verbatim transcription of this media recording (total duration: ${Math.round(totalDuration)} seconds).`,
+            `Speech from 0:00 up to ${startOffset} seconds has already been transcribed.`,
+            lastWords ? `The transcribed speech so far ended around ${startOffset}s with: "...${lastWords}".` : '',
+            `Now listen carefully to all audio from ${startOffset}s to the absolute end (${Math.round(totalDuration)}s) and transcribe ALL remaining spoken dialogue verbatim into the native script.`,
+            'Do NOT stop at music breaks, sound effects, or pauses. Transcribe every remaining word until the end.',
             'Format strictly as JSON with this exact shape:',
-            `{"language":"${parsedTranscript.language || 'auto'}","segments":[{"start":${startOffset},"end":${startOffset + 5},"text":"phrase"}]}`,
-            'Crucial: start and end must be raw numeric seconds (e.g. 75.4), NOT formatted strings with colons.'
-          ].join(' ')
+            `{"language":"${parsedTranscript.language || 'auto'}","text":"Remaining continuous transcript text here","segments":[{"start":${startOffset},"end":${startOffset + 5},"text":"phrase"}]}`,
+            `Crucial: Start timestamps must continue from ${startOffset}s (or provide numeric timestamps for each phrase).`
+          ].filter(Boolean).join(' ')
 
           try {
             const contResponseText = await withGeminiRetry(
@@ -737,22 +745,44 @@ async function transcribeWithKey(
             )
 
             const contParsed = parseGeminiTranscriptResponse(contResponseText)
-            const newSegments = contParsed.segments?.filter((s) => s.start >= currentMaxEnd - 2) || []
+            let rawContSegments = contParsed.segments || []
 
-            if (newSegments.length === 0) {
-              break
+            // Detect if model emitted relative timestamps (starting near 0 instead of startOffset)
+            const minStart = rawContSegments.length > 0 ? Math.min(...rawContSegments.map((s) => s.start)) : 0
+            if (startOffset > 5 && rawContSegments.length > 0 && minStart < (startOffset / 2)) {
+              rawContSegments = rawContSegments.map((s) => ({
+                ...s,
+                start: Math.round((s.start + startOffset) * 10) / 10,
+                ...(typeof s.end === 'number' ? { end: Math.round((s.end + startOffset) * 10) / 10 } : {})
+              }))
             }
 
-            accumulatedSegments.push(...newSegments)
-            const newMaxEnd = accumulatedSegments.reduce((max, s) => {
-              const end = typeof s.end === 'number' && Number.isFinite(s.end) ? s.end : s.start
-              return Math.max(max, end)
-            }, currentMaxEnd)
+            const newSegments = rawContSegments.filter((s) => s.start >= currentMaxEnd - 2)
 
-            if (newMaxEnd <= currentMaxEnd) {
+            if (newSegments.length > 0) {
+              accumulatedSegments.push(...newSegments)
+              const newMaxEnd = accumulatedSegments.reduce((max, s) => {
+                const end = typeof s.end === 'number' && Number.isFinite(s.end) ? s.end : s.start
+                return Math.max(max, end)
+              }, currentMaxEnd)
+
+              if (newMaxEnd <= currentMaxEnd) {
+                break
+              }
+              currentMaxEnd = newMaxEnd
+            } else if (contParsed.text && contParsed.text.trim()) {
+              // Model returned remaining text without structured timestamps:
+              const newText = contParsed.text.trim()
+              accumulatedSegments.push({
+                start: startOffset,
+                end: totalDuration,
+                text: newText
+              })
+              currentMaxEnd = totalDuration
+              break
+            } else {
               break
             }
-            currentMaxEnd = newMaxEnd
           } catch (contErr) {
             console.warn(`Continuation pass ${continuationPass} failed; returning gathered segments:`, contErr)
             break

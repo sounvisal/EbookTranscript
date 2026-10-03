@@ -124,6 +124,29 @@ function getPlainTextValue(payload: StructuredTranscriptPayload) {
   return ''
 }
 
+function extractLooseTextFromBlock(block: string): string {
+  // 1. Try standard JSON string match where closing quote is followed by comma, brace, or end
+  const standardMatch = block.match(/"text"\s*:\s*"((?:\\.|[^"\\])*)"(?:\s*,\s*"|\s*\}|\s*$)/s)
+  if (standardMatch) {
+    return decodeLooseJsonString(standardMatch[1]).trim()
+  }
+
+  // 2. Handle unescaped internal quotes: match up to the end of the text property before next field or brace
+  const keyMatch = block.match(/"text"\s*:\s*"([\s\S]*)"\s*(?:,\s*"[a-zA-Z_]+"|\s*\}\s*$|\s*$)/)
+  if (keyMatch) {
+    return decodeLooseJsonString(keyMatch[1]).trim()
+  }
+
+  // 3. Fallback: match any text content after "text": "
+  const fallbackMatch = block.match(/"text"\s*:\s*"([\s\S]*)/)
+  if (fallbackMatch) {
+    const raw = fallbackMatch[1].replace(/"\s*\}\s*$/, '').replace(/"\s*,\s*"[a-zA-Z_]+".*$/, '')
+    return decodeLooseJsonString(raw).trim()
+  }
+
+  return ''
+}
+
 function parseLooseStructuredTranscript(value: string): StructuredTranscriptPayload | null {
   const languageMatch = value.match(/"language"\s*:\s*"([^"]+)"/i)
   const segments: TranscriptSegmentInput[] = []
@@ -134,10 +157,7 @@ function parseLooseStructuredTranscript(value: string): StructuredTranscriptPayl
 
   while ((match = objectBlockPattern.exec(value)) !== null) {
     const block = match[1]
-    const textMatch = block.match(/"text"\s*:\s*"((?:\\.|[^"\\])*)"/i)
-    if (!textMatch) continue
-
-    const text = decodeLooseJsonString(textMatch[1]).trim()
+    const text = extractLooseTextFromBlock(block)
     if (!text) continue
 
     const startMatch = block.match(/"(?:start|start_time|startTime)"\s*:\s*("([^"]+)"|([0-9.:]+))/i)
@@ -155,13 +175,10 @@ function parseLooseStructuredTranscript(value: string): StructuredTranscriptPayl
 
   // 2. If no object blocks matched, try unclosed segment
   if (segments.length === 0) {
-    const unclosedPattern = /\{\s*(?:[^{}]*?"text"\s*:\s*"((?:\\.|[^"\\])*)"[^{}]*?)/gi
+    const unclosedPattern = /\{\s*(?:[^{}]*?"text"\s*:\s*"([\s\S]*?)"[^{}]*?)/gi
     while ((match = unclosedPattern.exec(value)) !== null) {
       const block = match[0]
-      const textMatch = block.match(/"text"\s*:\s*"((?:\\.|[^"\\])*)"/i)
-      if (!textMatch) continue
-
-      const text = decodeLooseJsonString(textMatch[1]).trim()
+      const text = extractLooseTextFromBlock(block)
       if (!text) continue
 
       const startMatch = block.match(/"(?:start|start_time|startTime)"\s*:\s*("([^"]+)"|([0-9.:]+))/i)
@@ -178,7 +195,9 @@ function parseLooseStructuredTranscript(value: string): StructuredTranscriptPayl
   // 3. If still empty, check for standalone "text" or "transcript" string field
   let topLevelText = ''
   if (segments.length === 0) {
-    const topLevelTextMatch = value.match(/"(?:text|transcript)"\s*:\s*"((?:\\.|[^"\\])*)"/i)
+    const topLevelTextMatch =
+      value.match(/"(?:text|transcript)"\s*:\s*"([\s\S]*?)"\s*(?:,\s*"(?:segments|language|duration)"|\s*\}\s*$)/i) ||
+      value.match(/"(?:text|transcript)"\s*:\s*"((?:\\.|[^"\\])*)"/i)
     if (topLevelTextMatch) {
       topLevelText = decodeLooseJsonString(topLevelTextMatch[1]).trim()
     }
@@ -431,9 +450,15 @@ export function parseStructuredTranscriptText(text: string): ParsedStructuredTra
     return null
   }
 
+  const textFromSegments = segments.map((segment) => segment.text).join('\n\n')
+  const plainText = (typeof loosePayload.text === 'string' && loosePayload.text) ? loosePayload.text : ''
+  const fullText = (segments.length > 0 && textFromSegments.length >= plainText.length)
+    ? textFromSegments
+    : (plainText || textFromSegments)
+
   return {
     language: typeof loosePayload.language === 'string' ? loosePayload.language : undefined,
-    text: (typeof loosePayload.text === 'string' && loosePayload.text) ? loosePayload.text : segments.map((segment) => segment.text).join('\n\n'),
+    text: fullText,
     segments
   }
 }
@@ -512,8 +537,12 @@ export function formatCleanArticle(textOrSegments: string | TranscriptSegmentInp
       wordCountInParagraph >= 70
     ) {
       let finalPara = currentParagraphText.trim()
-      if (!/[.!?។。…"')\]]$/.test(finalPara) && !/[\u1780-\u17FF\u4E00-\u9FFF]/.test(finalPara.slice(-5))) {
-        finalPara += '.'
+      if (finalPara) {
+        if (/[,;:\-]+$/.test(finalPara)) {
+          finalPara = finalPara.replace(/[,;:\-]+$/, '.')
+        } else if (!/[.!?។。…"')\]]$/.test(finalPara) && !/[\u1780-\u17FF\u4E00-\u9FFF]/.test(finalPara.slice(-5))) {
+          finalPara += '.'
+        }
       }
       paragraphs.push(finalPara)
       currentParagraphText = ''
@@ -524,8 +553,12 @@ export function formatCleanArticle(textOrSegments: string | TranscriptSegmentInp
 
   if (currentParagraphText.trim()) {
     let finalPara = currentParagraphText.trim()
-    if (!/[.!?។。…"')\]]$/.test(finalPara) && !/[\u1780-\u17FF\u4E00-\u9FFF]/.test(finalPara.slice(-5))) {
-      finalPara += '.'
+    if (finalPara) {
+      if (/[,;:\-]+$/.test(finalPara)) {
+        finalPara = finalPara.replace(/[,;:\-]+$/, '.')
+      } else if (!/[.!?។。…"')\]]$/.test(finalPara) && !/[\u1780-\u17FF\u4E00-\u9FFF]/.test(finalPara.slice(-5))) {
+        finalPara += '.'
+      }
     }
     paragraphs.push(finalPara)
   }
