@@ -21,7 +21,7 @@ export async function POST(req: Request) {
   const uploadOffset = req.headers.get('x-upload-offset') || '0'
   const uploadCommand = req.headers.get('x-upload-command') || 'upload, finalize'
 
-  if (!uploadUrl || !uploadUrl.startsWith('https://generativelanguage.googleapis.com/')) {
+  if (!uploadUrl || !uploadUrl.startsWith('https://generativelanguage.googleapis.com/upload/v1beta/files')) {
     return NextResponse.json({ error: 'Invalid or missing upload session URL' }, { status: 400 })
   }
 

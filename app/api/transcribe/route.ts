@@ -182,6 +182,11 @@ async function getMediaInputFromRequest(req: Request): Promise<MediaInput> {
     const body = await req.json()
     // Direct Gemini File URI support (for files uploaded directly from browser to Gemini)
     if (typeof body?.fileUri === 'string' && body.fileUri.trim()) {
+      const rawUri = body.fileUri.trim()
+      if (!rawUri.startsWith('https://generativelanguage.googleapis.com/') && !/^files\/[a-z0-9_-]+$/i.test(rawUri)) {
+        throw new Error('Invalid Gemini File URI.')
+      }
+
       let mimeType = body.mimeType || 'video/mp4'
       if (!mimeType || mimeType === 'application/octet-stream') {
         const ext = body.displayName?.split('.').pop()?.toLowerCase()

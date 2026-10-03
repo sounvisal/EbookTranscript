@@ -12,11 +12,11 @@ export async function POST(req: Request) {
 }
 
 async function handleDailyReport(req: Request) {
-  // Security check: if CRON_SECRET is set in Vercel, strictly verify authorization header
+  // Security check: strictly verify CRON_SECRET authorization header
   const authHeader = req.headers.get('authorization')
   const cronSecret = process.env.CRON_SECRET
 
-  if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+  if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
     return NextResponse.json(
       { error: 'Unauthorized. Invalid or missing CRON_SECRET header.' },
       { status: 401 }

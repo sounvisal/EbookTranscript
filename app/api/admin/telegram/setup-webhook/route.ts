@@ -57,9 +57,19 @@ export async function POST(req: Request) {
   let customUrl: string | undefined
   try {
     const body = await req.json()
-    if (body.url) customUrl = body.url
+    if (typeof body.url === 'string' && body.url.trim()) {
+      const parsed = new URL(body.url.trim())
+      if (
+        parsed.protocol === 'https:' &&
+        parsed.hostname !== 'localhost' &&
+        parsed.hostname !== '127.0.0.1' &&
+        !parsed.hostname.endsWith('.internal')
+      ) {
+        customUrl = parsed.toString()
+      }
+    }
   } catch {
-    // Body optional
+    // Body optional or invalid URL
   }
 
   // Always target the public production URL to avoid Vercel preview branch 401 authentication gates
@@ -76,7 +86,8 @@ export async function POST(req: Request) {
       body: JSON.stringify({
         url: webhookUrl,
         allowed_updates: ['message', 'callback_query'],
-        drop_pending_updates: false
+        drop_pending_updates: false,
+        ...(process.env.TELEGRAM_WEBHOOK_SECRET ? { secret_token: process.env.TELEGRAM_WEBHOOK_SECRET } : {})
       })
     })
 

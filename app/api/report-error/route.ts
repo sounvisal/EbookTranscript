@@ -4,8 +4,20 @@ import { authOptions } from '@/lib/auth'
 import { trackError } from '@/lib/telemetry'
 import { sendTelegramErrorAlert } from '@/lib/telegram'
 
+import { checkRateLimit, getClientIp } from '@/lib/rateLimit'
+
 export async function POST(req: Request) {
   try {
+    // Rate limit: max 10 error reports per 15 minutes per IP to prevent notification flooding
+    const clientIp = getClientIp(req)
+    const rateCheck = checkRateLimit(`report_err_${clientIp}`, 10, 15 * 60 * 1000)
+    if (!rateCheck.allowed) {
+      return NextResponse.json(
+        { error: 'Too many error reports submitted. Please wait a few minutes before reporting again.' },
+        { status: 429 }
+      )
+    }
+
     const session = await getServerSession(authOptions)
     const body = await req.json().catch(() => ({}))
 

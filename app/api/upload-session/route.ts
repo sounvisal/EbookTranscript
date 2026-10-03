@@ -129,7 +129,6 @@ export async function POST(req: Request) {
   }
 
   return NextResponse.json({
-    apiKey: assignedKey,
     keyIndex: assignedIndex,
     host,
     uploadUrl,

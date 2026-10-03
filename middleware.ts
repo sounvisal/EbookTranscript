@@ -7,7 +7,18 @@ export async function middleware(req: NextRequest) {
 
   // Protect Admin Dashboard and Admin APIs
   if (pathname.startsWith('/admin') || pathname.startsWith('/api/admin')) {
-    // 1. Check for session cookie presence (both HTTPS and local development)
+    const isApiAdmin = pathname.startsWith('/api/admin')
+
+    const rejectUnauthorized = (status: number, message: string) => {
+      if (isApiAdmin) {
+        return NextResponse.json({ error: message }, { status })
+      }
+      const loginUrl = new URL('/login', req.url)
+      loginUrl.searchParams.set('callbackUrl', pathname)
+      return NextResponse.redirect(loginUrl)
+    }
+
+    // 1. Check for session cookie presence
     const hasSessionCookie =
       req.cookies.has('__Secure-next-auth.session-token') ||
       req.cookies.has('next-auth.session-token') ||
@@ -15,49 +26,45 @@ export async function middleware(req: NextRequest) {
       req.cookies.has('next-auth.session-token.0')
 
     if (!hasSessionCookie) {
-      if (pathname.startsWith('/api/admin')) {
-        return NextResponse.json(
-          { error: 'Forbidden. Admin credentials required.' },
-          { status: 403 }
-        )
-      }
-      const loginUrl = new URL('/login', req.url)
-      loginUrl.searchParams.set('callbackUrl', pathname)
-      return NextResponse.redirect(loginUrl)
+      return rejectUnauthorized(401, 'Authentication required.')
     }
 
-    // 2. Verify token role if NEXTAUTH_SECRET is available
-    if (process.env.NEXTAUTH_SECRET) {
-      try {
-        const token = await getToken({
-          req,
-          secret: process.env.NEXTAUTH_SECRET
-        })
+    // 2. Decode and cryptographically verify session token
+    const secret = process.env.NEXTAUTH_SECRET
+    if (!secret) {
+      console.error('[Middleware] Critical: NEXTAUTH_SECRET is not configured.')
+      return rejectUnauthorized(500, 'Server security configuration error.')
+    }
 
-        if (token) {
-          const adminEmails = (process.env.ADMIN_EMAILS || process.env.ADMIN_EMAIL || '')
-            .split(',')
-            .map((e) => e.trim().toLowerCase())
-            .filter(Boolean)
+    let token = null
+    try {
+      token = await getToken({
+        req,
+        secret
+      })
+    } catch (err) {
+      console.warn('[Middleware] Failed to decode session token:', err)
+      token = null
+    }
 
-          const userEmail = (token?.email as string)?.toLowerCase()
-          const userRole = (token?.role as string)?.toLowerCase()
+    // STRICT FAIL-CLOSED: If token cannot be decoded or is invalid, deny access
+    if (!token) {
+      return rejectUnauthorized(401, 'Invalid or expired session. Please sign in again.')
+    }
 
-          const isAdmin = userRole === 'admin' || (userEmail && adminEmails.includes(userEmail))
+    // 3. Verify admin privilege
+    const adminEmails = (process.env.ADMIN_EMAILS || process.env.ADMIN_EMAIL || '')
+      .split(',')
+      .map((e) => e.trim().toLowerCase())
+      .filter(Boolean)
 
-          if (!isAdmin) {
-            if (pathname.startsWith('/api/admin')) {
-              return NextResponse.json(
-                { error: 'Forbidden. Admin access required.' },
-                { status: 403 }
-              )
-            }
-            return NextResponse.redirect(new URL('/login?callbackUrl=/admin', req.url))
-          }
-        }
-      } catch {
-        // Allow request to proceed to route handler where getServerSession will perform strict DB check
-      }
+    const userEmail = (token?.email as string)?.toLowerCase()
+    const userRole = (token?.role as string)?.toLowerCase()
+
+    const isAdmin = userRole === 'admin' || (userEmail && adminEmails.includes(userEmail))
+
+    if (!isAdmin) {
+      return rejectUnauthorized(403, 'Forbidden. Admin credentials required.')
     }
   }
 
@@ -70,4 +77,3 @@ export const config = {
     '/api/admin/:path*'
   ]
 }
-

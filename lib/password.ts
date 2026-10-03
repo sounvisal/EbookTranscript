@@ -11,14 +11,21 @@ export function hashPassword(password: string) {
 }
 
 export function verifyPassword(password: string, storedHash: string) {
-  const [salt, hash] = storedHash.split(':')
+  try {
+    const [salt, hash] = storedHash.split(':')
 
-  if (!salt || !hash) {
+    if (!salt || !hash || hash.length !== KEY_LENGTH * 2) {
+      return false
+    }
+
+    const storedHashBuffer = Buffer.from(hash, 'hex')
+    if (storedHashBuffer.length !== KEY_LENGTH) {
+      return false
+    }
+
+    const derivedKeyBuffer = scryptSync(password, salt, KEY_LENGTH)
+    return timingSafeEqual(storedHashBuffer, derivedKeyBuffer)
+  } catch {
     return false
   }
-
-  const storedHashBuffer = Buffer.from(hash, 'hex')
-  const derivedKeyBuffer = scryptSync(password, salt, storedHashBuffer.length)
-
-  return timingSafeEqual(storedHashBuffer, derivedKeyBuffer)
 }

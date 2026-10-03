@@ -623,14 +623,18 @@ function escapeHtml(text: string): string {
  * Admin authorization check for Telegram commands and keyboards
  */
 export function isChatIdAdmin(chatId: string | number): boolean {
-  const configuredAdminChatId = (process.env.TELEGRAM_CHAT_ID || '5859388585').trim()
-  const configuredAdminIds = (process.env.ADMIN_CHAT_IDS || '5859388585')
+  const configuredAdminChatId = (process.env.TELEGRAM_CHAT_ID || '').trim()
+  const configuredAdminIds = (process.env.ADMIN_CHAT_IDS || '')
     .split(',')
     .map((id) => id.trim())
     .filter(Boolean)
 
+  if (!configuredAdminChatId && configuredAdminIds.length === 0) {
+    return false
+  }
+
   const incomingStr = String(chatId).trim()
-  return incomingStr === configuredAdminChatId || configuredAdminIds.includes(incomingStr) || incomingStr === '5859388585'
+  return (configuredAdminChatId !== '' && incomingStr === configuredAdminChatId) || configuredAdminIds.includes(incomingStr)
 }
 
 export interface TelegramSenderInfo {

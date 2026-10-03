@@ -58,78 +58,6 @@ function inferMimeType(file: File): string {
   }
 }
 
-/**
- * Uploads a file directly to Gemini Files API from the browser.
- * This bypasses Vercel Serverless 4.5MB request body limits completely (supporting files up to 2GB).
- */
-async function directUploadToGemini(
-  file: File,
-  apiKey: string,
-  host: string,
-  onProgress?: (percent: number) => void
-): Promise<{ uri: string; name: string; mimeType: string }> {
-  const mimeType = inferMimeType(file)
-  const boundary = '----GeminiBoundary' + Math.random().toString(16).slice(2)
-  const metadata = JSON.stringify({
-    file: {
-      mimeType,
-      displayName: file.name
-    }
-  })
-
-  const preamble = `--${boundary}\r\nContent-Type: application/json; charset=utf-8\r\n\r\n${metadata}\r\n--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n`
-  const epilogue = `\r\n--${boundary}--`
-
-  const bodyBlob = new Blob([preamble, file, epilogue], {
-    type: `multipart/related; boundary=${boundary}`
-  })
-
-  // Route through /gemini-proxy so requests originate from Vercel's US/EU edge (bypassing client geo-restrictions)
-  const isBrowser = typeof window !== 'undefined'
-  const uploadUrl = isBrowser ? '/gemini-proxy/upload/v1beta/files' : `https://${host}/upload/v1beta/files`
-
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest()
-    xhr.open('POST', uploadUrl, true)
-    xhr.setRequestHeader('x-goog-api-client', 'transcript-client/1.0')
-    xhr.setRequestHeader('x-goog-api-key', apiKey)
-    xhr.setRequestHeader('X-Goog-Upload-Protocol', 'multipart')
-    xhr.setRequestHeader('Content-Type', `multipart/related; boundary=${boundary}`)
-
-    if (xhr.upload && onProgress) {
-      xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable) {
-          const percent = Math.min(99, Math.round((e.loaded / e.total) * 100))
-          onProgress(percent)
-        }
-      }
-    }
-
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        try {
-          const res = JSON.parse(xhr.responseText)
-          if (res.file) {
-            resolve(res.file)
-            return
-          }
-        } catch {}
-      }
-      try {
-        const res = JSON.parse(xhr.responseText)
-        reject(new Error(res.error?.message || `Upload failed with status ${xhr.status}`))
-      } catch {
-        reject(new Error(`Upload failed with status ${xhr.status}`))
-      }
-    }
-
-    xhr.onerror = () => {
-      reject(new Error('Network error during file upload.'))
-    }
-
-    xhr.send(bodyBlob)
-  })
-}
 
 /**
  * Directly streams a media file to Google's authorized Resumable Upload URL.
@@ -267,14 +195,13 @@ export async function transcribeWithProgress(
       }
 
       return (await sessionRes.json()) as {
-        apiKey: string
         keyIndex: number
         host: string
         uploadUrl?: string
       }
     }
 
-    let { apiKey, keyIndex, host, uploadUrl } = await requestSession()
+    let { keyIndex, host, uploadUrl } = await requestSession()
 
     // 2. Upload file: prioritize direct resumable upload (supports up to 2GB, 0 Vercel limits, no 8MB chunk error)
     let uploadedFile: { uri: string; name: string; mimeType: string } | null = null
@@ -285,43 +212,34 @@ export async function transcribeWithProgress(
           onEvent?.({ type: 'progress', progress })
         })
       } catch (directErr: any) {
-        console.warn('Direct resumable upload attempt 1 failed:', directErr)
-        // If file is within Vercel body limit (<= 4MB), fallback to same-origin /gemini-proxy multipart upload
-        if (fileToUpload.size <= 4 * 1024 * 1024) {
-          try {
-            uploadedFile = await directUploadToGemini(fileToUpload, apiKey, host, (progress) => {
-              onEvent?.({ type: 'progress', progress })
-            })
-          } catch {
-            throw directErr
-          }
-        } else {
-          // For large files (> 4MB), request a fresh session (rotates key and avoids terminated uploadUrl)
+        console.warn('Direct resumable upload attempt failed; falling back to authenticated server proxy...', directErr)
+        try {
+          uploadedFile = await uploadViaServerProxy(uploadUrl, fileToUpload, (progress) => {
+            onEvent?.({ type: 'progress', progress })
+          })
+        } catch (proxyErr) {
+          // Retry with a fresh upload session if needed
           try {
             console.log('Retrying large file upload with fresh upload session...')
             const retrySession = await requestSession()
-            apiKey = retrySession.apiKey
             keyIndex = retrySession.keyIndex
             host = retrySession.host
             uploadUrl = retrySession.uploadUrl
 
             if (uploadUrl) {
-              uploadedFile = await uploadToResumableUrl(uploadUrl, fileToUpload, (progress) => {
+              uploadedFile = await uploadViaServerProxy(uploadUrl, fileToUpload, (progress) => {
                 onEvent?.({ type: 'progress', progress })
               })
             } else {
-              throw directErr
+              throw proxyErr || directErr
             }
           } catch (retryErr) {
-            throw retryErr || directErr
+            throw retryErr || proxyErr || directErr
           }
         }
       }
     } else {
-      // Fallback: direct multipart upload
-      uploadedFile = await directUploadToGemini(fileToUpload, apiKey, host, (progress) => {
-        onEvent?.({ type: 'progress', progress })
-      })
+      throw new Error('Upload session URL not available. Please try again.')
     }
 
     if (!uploadedFile?.uri) {

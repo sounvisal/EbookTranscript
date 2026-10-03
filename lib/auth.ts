@@ -82,14 +82,12 @@ if (process.env.RESEND_API_KEY || (process.env.EMAIL_SERVER_HOST && process.env.
     EmailProvider({
       from: process.env.EMAIL_FROM || 'Signal <onboarding@resend.dev>',
       sendVerificationRequest: async ({ identifier: email, url, provider }) => {
-        // Cache the direct link so the user can open it in a new tab immediately
-        global.__lastMagicLinks = global.__lastMagicLinks || {}
-        global.__lastMagicLinks[email.toLowerCase().trim()] = { url, time: Date.now() }
-
-        console.log('\n=========================================')
-        console.log(`⚡ DIRECT SIGN-IN LINK FOR ${email}:`)
-        console.log(url)
-        console.log('=========================================\n')
+        // Cache the direct link only in local development for testing
+        if (process.env.NODE_ENV !== 'production' && process.env.ENABLE_DEV_MAGIC_LINK === 'true') {
+          global.__lastMagicLinks = global.__lastMagicLinks || {}
+          global.__lastMagicLinks[email.toLowerCase().trim()] = { url, time: Date.now() }
+          console.log(`[Dev] DIRECT SIGN-IN LINK FOR ${email}: ${url}`)
+        }
 
         if (process.env.RESEND_API_KEY) {
           try {

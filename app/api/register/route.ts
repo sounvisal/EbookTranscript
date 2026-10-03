@@ -12,8 +12,20 @@ function isValidEmail(email: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
 }
 
+import { checkRateLimit, getClientIp } from '@/lib/rateLimit'
+
 export async function POST(req: Request) {
   try {
+    // Rate limit: max 5 registration attempts per 15 minutes per IP
+    const clientIp = getClientIp(req)
+    const rateCheck = checkRateLimit(`register_${clientIp}`, 5, 15 * 60 * 1000)
+    if (!rateCheck.allowed) {
+      return NextResponse.json(
+        { error: `Too many registration attempts. Please wait ${rateCheck.retryAfterSeconds}s before trying again.` },
+        { status: 429 }
+      )
+    }
+
     const body = await req.json()
     const name = typeof body.name === 'string' ? body.name.trim() : ''
     const email = typeof body.email === 'string' ? normalizeEmail(body.email) : ''
@@ -31,7 +43,6 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Password must be at least 8 characters long.' }, { status: 400 })
     }
 
-    const passwordHash = hashPassword(password)
     const existingUser = await prisma.user.findUnique({
       where: { email },
       select: {
@@ -40,41 +51,32 @@ export async function POST(req: Request) {
       },
     })
 
-    if (existingUser?.passwordHash) {
-      return NextResponse.json({ error: 'An account with that email already exists.' }, { status: 409 })
+    // STRICT DEFENSE: Reject if user already exists (whether password or Google OAuth).
+    // Prevents hijacking OAuth accounts via credential registration.
+    if (existingUser) {
+      return NextResponse.json(
+        { error: 'An account with that email already exists. Please sign in.' },
+        { status: 409 }
+      )
     }
 
+    const passwordHash = hashPassword(password)
     const isAdmin = isUserAdmin(email)
 
-    const user = existingUser
-      ? await prisma.user.update({
-          where: { id: existingUser.id },
-          data: {
-            name: name || undefined,
-            passwordHash,
-            role: isAdmin ? 'admin' : 'user'
-          },
-          select: {
-            id: true,
-            email: true,
-            name: true,
-            role: true
-          },
-        })
-      : await prisma.user.create({
-          data: {
-            name: name || email.split('@')[0],
-            email,
-            passwordHash,
-            role: isAdmin ? 'admin' : 'user'
-          },
-          select: {
-            id: true,
-            email: true,
-            name: true,
-            role: true
-          },
-        })
+    const user = await prisma.user.create({
+      data: {
+        name: name || email.split('@')[0],
+        email,
+        passwordHash,
+        role: isAdmin ? 'admin' : 'user'
+      },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        role: true
+      },
+    })
 
     // Non-blocking notification to Telegram admin
     if (!existingUser && user.email) {
@@ -86,7 +88,7 @@ export async function POST(req: Request) {
       }).catch((err) => console.error('Registration Telegram alert error:', err))
     }
 
-    return NextResponse.json({ user }, { status: existingUser ? 200 : 201 })
+    return NextResponse.json({ user }, { status: 201 })
   } catch (error) {
     console.error('Registration error:', error)
     return NextResponse.json({ error: 'Unable to create account right now.' }, { status: 500 })

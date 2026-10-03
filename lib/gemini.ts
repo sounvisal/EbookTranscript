@@ -125,7 +125,8 @@ async function geminiRequest<T>(
 }
 
 function parseFileId(fileId: string) {
-  return fileId.startsWith('files/') ? fileId.slice('files/'.length) : fileId
+  const stripped = fileId.startsWith('files/') ? fileId.slice('files/'.length) : fileId
+  return stripped.replace(/[^a-zA-Z0-9_-]/g, '')
 }
 
 export async function uploadGeminiFile(apiKey: string, file: { buffer: Buffer; mimeType: string; displayName: string }) {

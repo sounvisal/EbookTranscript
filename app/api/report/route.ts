@@ -242,11 +242,18 @@ function buildMockSummaryReport(fileName?: string) {
   ].join('\n')
 }
 
+import { checkUserQuota } from '@/lib/quota'
+
 export async function POST(req: Request) {
   try {
     const session = await getServerSession(authOptions)
-    if (!session) {
-      return NextResponse.json({ error: 'Unauthorized access' }, { status: 401 })
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Please sign in to generate reports.' }, { status: 401 })
+    }
+
+    const quota = await checkUserQuota(session.user.id, session.user.email, session.user.role)
+    if (!quota.allowed) {
+      return NextResponse.json({ error: quota.error || 'Daily usage quota reached.' }, { status: 429 })
     }
 
     const keys = getGeminiApiKeys()

@@ -1424,7 +1424,7 @@ export default function AdminDashboardPage() {
                   <span>Configured Gemini API Keys & Rotation Fleet</span>
                 </h2>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Rotated across incoming transcription jobs to balance rate limits. Click "Ping All Keys" to check live latency and 429 status.
+                  Rotated across incoming transcription jobs to balance rate limits. Click &quot;Ping All Keys&quot; to check live latency and 429 status.
                 </p>
               </div>
 
@@ -1528,7 +1528,7 @@ export default function AdminDashboardPage() {
                     {/* Per-Key Load Balancing Meter */}
                     <div className="flex flex-col gap-1 border-t border-slate-200/60 dark:border-slate-800/80 pt-2.5">
                       <div className="flex justify-between text-[11px]">
-                        <span className="text-slate-500">Today's Traffic Share:</span>
+                        <span className="text-slate-500">Today&apos;s Traffic Share:</span>
                         <span className="font-bold text-blue-600 dark:text-blue-400 font-mono">
                           ~{k.loadSharePercent || 33}% ({k.routedRequestsToday || 0} reqs)
                         </span>
@@ -1651,7 +1651,7 @@ export default function AdminDashboardPage() {
                 ${stats.tokens.estimatedCostRangeUSD}
               </p>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Today's Cost: ${stats.tokens.estimatedCostTodayUSD} USD (Free tier quota provides 1,500 daily requests per key).
+                Today&apos;s Cost: ${stats.tokens.estimatedCostTodayUSD} USD (Free tier quota provides 1,500 daily requests per key).
               </p>
             </div>
           </div>
@@ -1707,7 +1707,7 @@ export default function AdminDashboardPage() {
                       <div className="flex flex-col gap-1 border-t border-slate-200/60 dark:border-slate-800 pt-2">
                         <span className="text-[10px] uppercase text-slate-400 font-semibold">Latest Incident Excerpt:</span>
                         <p className="text-[11px] font-mono text-slate-700 dark:text-slate-300 truncate">
-                          "{cluster.sampleErrors[0].message}"
+                          &quot;{cluster.sampleErrors[0].message}&quot;
                         </p>
                       </div>
                     )}
@@ -1847,7 +1847,7 @@ export default function AdminDashboardPage() {
                     <div className="flex items-center justify-between">
                       <span className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
                         <Gauge className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-                        Today's Audio Quota
+                        Today&apos;s Audio Quota
                       </span>
                       <span className="font-mono font-bold text-blue-700 dark:text-blue-300">
                         {userDossier.quota.isAdmin
@@ -2140,7 +2140,7 @@ export default function AdminDashboardPage() {
                     <div className="flex justify-between font-mono">
                       <span>Authorized Admin Chat:</span>
                       <span className="font-bold text-slate-800 dark:text-slate-200">
-                        {stats?.telegram.chatId || '5859388585'}
+                        {stats?.telegram.chatId || 'Not Configured'}
                       </span>
                     </div>
                     {telegramSetup?.webhook?.url && (
@@ -2207,7 +2207,7 @@ export default function AdminDashboardPage() {
                         📊 Live Stats
                       </span>
                       <span className="text-[10px] text-slate-400">
-                        Today's audio duration, words, request volume & error rate
+                        Today&apos;s audio duration, words, request volume & error rate
                       </span>
                     </div>
 

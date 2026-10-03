@@ -360,6 +360,27 @@ async function extractWithYtDlp(urlValue: string, maxBytes: number): Promise<Ext
   throw lastError || new Error('YouTube extraction failed across all player clients.')
 }
 
+export function isValidYouTubeUrl(urlStr: string): boolean {
+  if (typeof urlStr !== 'string' || !urlStr.trim()) return false
+  const trimmed = urlStr.trim()
+  if (trimmed.startsWith('-')) return false // Prevent CLI option injection
+
+  try {
+    const parsed = new URL(trimmed)
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return false
+    const host = parsed.hostname.toLowerCase()
+    return (
+      host === 'youtube.com' ||
+      host === 'www.youtube.com' ||
+      host === 'm.youtube.com' ||
+      host === 'music.youtube.com' ||
+      host === 'youtu.be'
+    )
+  } catch {
+    return false
+  }
+}
+
 /**
  * Fast direct subtitle/automatic-caption extractor.
  * Queries YouTube video metadata for official json3 timedtext tracks.
@@ -370,6 +391,10 @@ export async function extractYouTubeTranscript(
   urlValue: string,
   languagePreference: string = 'auto'
 ): Promise<YouTubeTranscriptResult | null> {
+  if (!isValidYouTubeUrl(urlValue)) {
+    throw new Error('Invalid YouTube video URL.')
+  }
+
   const binPath = await ensureBinaryPath()
   const ytDl = youtubedl.create(binPath)
   const ffmpegLoc = getFfmpegPath()
@@ -531,6 +556,10 @@ export async function extractYouTubeMedia(
   urlValue: string,
   maxBytes: number = MAX_MEDIA_UPLOAD_BYTES
 ): Promise<ExtractedYouTubeMedia> {
+  if (!isValidYouTubeUrl(urlValue)) {
+    throw new Error('Invalid YouTube video URL.')
+  }
+
   try {
     return await extractWithYtDlp(urlValue, maxBytes)
   } catch (ytDlpError) {
