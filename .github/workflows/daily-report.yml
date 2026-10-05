@@ -5,6 +5,15 @@ on:
     # 10:30 UTC = 17:30 (5:30 PM) Cambodia Time (UTC+7)
     - cron: '30 10 * * *'
   workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force dispatch (bypass today duplicate check)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
 
 jobs:
   trigger-report:
@@ -14,4 +23,29 @@ jobs:
       - name: Trigger Daily Report Endpoint
         run: |
           echo "Triggering 5:30 PM Daily Report endpoint..."
-          curl -s -X GET "https://ebook-transcript.vercel.app/api/cron/daily-report" || true
+          CRON_KEY="${{ secrets.CRON_SECRET }}"
+          if [ -z "$CRON_KEY" ]; then
+            CRON_KEY="signal-cron-daily-report-secure-key"
+          fi
+
+          QUERY=""
+          if [ "${{ inputs.force }}" = "true" ]; then
+            QUERY="?force=true"
+          fi
+
+          RESPONSE_FILE=$(mktemp)
+          HTTP_STATUS=$(curl -s -o "$RESPONSE_FILE" -w "%{http_code}" -X POST "https://ebook-transcript.vercel.app/api/cron/daily-report$QUERY" \
+            -H "Authorization: Bearer $CRON_KEY" \
+            -H "x-signal-cron: daily-digest" \
+            -H "Content-Type: application/json")
+
+          echo "HTTP Response Status: $HTTP_STATUS"
+          cat "$RESPONSE_FILE"
+          echo ""
+
+          if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
+            echo "✅ Daily report triggered successfully."
+          else
+            echo "❌ Failed to trigger daily report (HTTP $HTTP_STATUS)."
+            exit 1
+          fi

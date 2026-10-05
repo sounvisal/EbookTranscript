@@ -40,6 +40,7 @@ const providers: NextAuthOptions["providers"] = [
           id: true,
           email: true,
           name: true,
+          role: true,
           passwordHash: true,
         },
       })
@@ -58,6 +59,7 @@ const providers: NextAuthOptions["providers"] = [
         id: user.id,
         email: user.email,
         name: user.name,
+        role: user.role,
       }
     }
   })
@@ -176,6 +178,11 @@ export const authOptions: NextAuthOptions = {
       if (user) {
         token.id = user.id
         token.role = (user as any).role || (isUserAdmin(user.email) ? 'admin' : 'user')
+      } else {
+        // Keep token.role synchronized if user email is recognized as admin
+        if (token.email && isUserAdmin(token.email as string, token.role as string)) {
+          token.role = 'admin'
+        }
       }
       return token
     },

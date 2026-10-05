@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import Image from 'next/image'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { signIn, getProviders } from 'next-auth/react'
+import { signIn, signOut, getProviders, useSession } from 'next-auth/react'
 import { Mail, Lock, User, Eye, EyeOff, Sparkles, ArrowRight, CheckCircle2, AlertCircle, KeyRound } from 'lucide-react'
 
 type AuthMode = 'login' | 'register'
@@ -60,6 +60,14 @@ export default function AuthDialog() {
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [directLinkUrl, setDirectLinkUrl] = useState<string | null>(null)
+
+  const { data: session, status } = useSession()
+
+  useEffect(() => {
+    if (status === 'authenticated' && session?.user && callbackUrl && callbackUrl !== '/login') {
+      router.push(callbackUrl)
+    }
+  }, [status, session, callbackUrl, router])
 
   const hasGoogleProvider = Boolean(providers?.google)
 
@@ -236,7 +244,41 @@ export default function AuthDialog() {
           </p>
         </div>
 
-        {/* Mode Switcher Tabs */}
+        {status === 'authenticated' && session?.user ? (
+          <div className="space-y-4 text-center">
+            <div className="rounded-2xl border border-blue-200/80 bg-blue-50/60 p-4 text-slate-800">
+              <div className="mx-auto mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-blue-600 text-white shadow-sm">
+                <CheckCircle2 className="h-5 w-5" />
+              </div>
+              <p className="text-xs text-slate-500">Currently signed in as</p>
+              <p className="text-sm font-semibold text-slate-900 truncate">{session.user.email}</p>
+              <span className="mt-1 inline-block rounded-full bg-blue-100 px-2.5 py-0.5 text-[11px] font-semibold text-blue-700">
+                {session.user.role === 'admin' ? '🛡️ Administrator' : 'User'}
+              </span>
+            </div>
+
+            <div className="flex flex-col gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => router.push(callbackUrl)}
+                className="apple-btn-primary flex w-full items-center justify-center gap-2 rounded-xl py-3 text-sm font-bold text-white shadow-md shadow-blue-500/20"
+              >
+                <span>Continue to {callbackUrl.startsWith('/admin') ? 'Admin Panel' : 'Workspace'}</span>
+                <ArrowRight className="h-4 w-4" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => signOut({ callbackUrl: '/login' })}
+                className="w-full rounded-xl border border-slate-200 bg-white py-2.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900"
+              >
+                Sign in with another account
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* Mode Switcher Tabs */}
         <div className="mb-6 grid grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1">
           <button
             type="button"
@@ -444,6 +486,8 @@ export default function AuthDialog() {
             <span>{authMethod === 'password' ? 'Use 1-Click Magic Link instead' : 'Use Password Sign-In instead'}</span>
           </button>
         </div>
+          </>
+        )}
       </div>
     </div>
   )

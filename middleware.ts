@@ -18,12 +18,16 @@ export async function middleware(req: NextRequest) {
       return NextResponse.redirect(loginUrl)
     }
 
-    // 1. Check for session cookie presence
-    const hasSessionCookie =
+    // 1. Check for session cookie presence (both HTTPS __Secure- prefix and standard names, including chunks)
+    const isSecureCookie =
       req.cookies.has('__Secure-next-auth.session-token') ||
+      req.cookies.has('__Secure-next-auth.session-token.0')
+
+    const hasPlainCookie =
       req.cookies.has('next-auth.session-token') ||
-      req.cookies.has('__Secure-next-auth.session-token.0') ||
       req.cookies.has('next-auth.session-token.0')
+
+    const hasSessionCookie = isSecureCookie || hasPlainCookie
 
     if (!hasSessionCookie) {
       return rejectUnauthorized(401, 'Authentication required.')
@@ -38,10 +42,37 @@ export async function middleware(req: NextRequest) {
 
     let token = null
     try {
+      // Primary attempt: dynamically match the cookie variant present on the incoming request
       token = await getToken({
         req,
-        secret
+        secret,
+        secureCookie: isSecureCookie,
+        cookieName: isSecureCookie ? '__Secure-next-auth.session-token' : 'next-auth.session-token'
       })
+
+      // Fallback attempt: if null, attempt alternative cookie format (resolves reverse proxy / protocol mismatches)
+      if (!token && hasPlainCookie) {
+        token = await getToken({
+          req,
+          secret,
+          secureCookie: false,
+          cookieName: 'next-auth.session-token'
+        })
+      }
+
+      if (!token && isSecureCookie) {
+        token = await getToken({
+          req,
+          secret,
+          secureCookie: true,
+          cookieName: '__Secure-next-auth.session-token'
+        })
+      }
+
+      // Final fallback: standard NextAuth resolution
+      if (!token) {
+        token = await getToken({ req, secret })
+      }
     } catch (err) {
       console.warn('[Middleware] Failed to decode session token:', err)
       token = null
@@ -58,10 +89,10 @@ export async function middleware(req: NextRequest) {
       .map((e) => e.trim().toLowerCase())
       .filter(Boolean)
 
-    const userEmail = (token?.email as string)?.toLowerCase()
-    const userRole = (token?.role as string)?.toLowerCase()
+    const userEmail = (token?.email as string)?.trim().toLowerCase()
+    const userRole = (token?.role as string)?.trim().toLowerCase()
 
-    const isAdmin = userRole === 'admin' || (userEmail && adminEmails.includes(userEmail))
+    const isAdmin = userRole === 'admin' || (Boolean(userEmail) && adminEmails.includes(userEmail))
 
     if (!isAdmin) {
       return rejectUnauthorized(403, 'Forbidden. Admin credentials required.')
