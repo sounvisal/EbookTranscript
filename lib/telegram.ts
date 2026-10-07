@@ -254,6 +254,18 @@ export async function sendTelegramDailyReport(
 
   // Automated deduplication guard: prevent sending multiple reports on the same day unless forced
   if (!force && !customRange) {
+    // 1. Off-hours protection: The automated daily digest is strictly meant for evening dispatch (17:00 - 23:59 ICT)
+    // If a queued cloud runner (e.g. GitHub Actions queue backlog) wakes up at an odd hour like 2:00 AM or morning, discard it immediately.
+    const currentHourIct = localNow.getUTCHours()
+    if (currentHourIct < 17 || currentHourIct >= 24) {
+      console.warn(`[Telegram] Daily report triggered at off-hours (${currentHourIct}:${String(localNow.getUTCMinutes()).padStart(2, '0')} ICT). Discarding delayed/stale automated run.`)
+      return {
+        success: true,
+        skipped: true,
+        error: `Skipped automated run: current time is ${currentHourIct}:${String(localNow.getUTCMinutes()).padStart(2, '0')} ICT. Automated daily digest is only accepted between 17:00 and 23:59 ICT.`
+      }
+    }
+
     try {
       const alreadySent = await prisma.verificationToken.findFirst({
         where: {
