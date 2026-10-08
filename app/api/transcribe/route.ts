@@ -345,7 +345,7 @@ const BASE_TRANSCRIPTION_PROMPT = [
   '1. AUTOMATIC LANGUAGE DETECTION: Automatically detect the spoken language. If the audio is in Khmer, set language to "Khmer". If in English, set language to "English". If bilingual mixed speech, set language to "Khmer / English".',
   '2. VERBATIM SPEECH ACCURACY: Transcribe every spoken word accurately in the native script. For Khmer speech, output clean Khmer script (អក្សរខ្មែរ) with proper spacing and spelling. For English speech, output English.',
   '3. HIGH-SENSITIVITY ACOUSTIC EXTRACTION: Listen with maximum sensitivity to all audio channels. Even if the voice is quiet, muffled, whispered, speaking fast, singing, chanting, talking over an intro, or partially masked by background music, sound effects, beats, or ambient noise, you MUST detect and transcribe all spoken words verbatim.',
-  '4. COMPLETE RECORDING CONTINUITY: Transcribe the entire duration verbatim from start to finish without stopping. Audio recordings often start with corporate advertisements, sponsor intros, or theme music followed by music interludes or pauses before the main content begins. You MUST continue listening and transcribing past any music breaks, interludes, or pauses from 0:00 all the way to the absolute end of the media.',
+  '4. COMPLETE RECORDING CONTINUITY & MID-VIDEO SOUND EFFECTS: Transcribe the entire duration verbatim from start to finish without stopping. Viral social media clips (TikTok, Facebook, Reels) frequently feature dramatic mid-video sound effects (crashes, laughter, music stingers) and action pauses between scenes. You MUST continue listening past any mid-video sound effects or pauses all the way to the absolute end of the media. Dialogue resumes after scene transitions. Do NOT stop after introductory phrases, sound effects, or musical pauses.',
   '5. NUMERIC SECONDS TIMESTAMPS: Every start and end timestamp in "segments" must be a raw number in seconds (e.g. 0.0, 4.5, 38.2, 145.6). Do NOT use formatted colon strings like "2:30".',
   '6. QUOTATION MARKS: Inside transcript text strings, use single quotes (\'quote\') or properly escaped quotes (\\"quote\\") for spoken dialogue so that JSON formatting is strictly valid.',
   'Format strictly as JSON with this exact shape:',
@@ -376,7 +376,7 @@ function buildTranscriptionPrompt(options?: TranscribeOptions): string {
     langInstruction,
     '2. VERBATIM SPEECH ACCURACY: Transcribe every spoken word accurately in the native script. For Khmer speech, output clean Khmer script (អក្សរខ្មែរ) with proper spacing and spelling. For English speech, output English.',
     '3. HIGH-SENSITIVITY ACOUSTIC EXTRACTION: Listen with maximum sensitivity to all audio channels. Even if the voice is quiet, muffled, whispered, speaking fast, singing, chanting, talking over an intro, or partially masked by background music, sound effects, beats, or ambient noise, you MUST detect and transcribe all spoken words verbatim.',
-    '4. COMPLETE RECORDING CONTINUITY: Transcribe the entire duration verbatim from start to finish without stopping. Audio recordings often start with corporate advertisements, sponsor intros, or theme music followed by music interludes or pauses before the main content begins. You MUST continue listening and transcribing past any music breaks, interludes, or pauses from 0:00 all the way to the absolute end of the media.',
+    '4. COMPLETE RECORDING CONTINUITY & MID-VIDEO SOUND EFFECTS: Transcribe the entire duration verbatim from start to finish without stopping. Viral social media clips (TikTok, Facebook, Reels) frequently feature dramatic mid-video sound effects (crashes, laughter, music stingers) and action pauses between scenes. You MUST continue listening past any mid-video sound effects or pauses all the way to the absolute end of the media. Dialogue resumes after scene transitions. Do NOT stop after introductory phrases, sound effects, or musical pauses.',
     '5. NUMERIC SECONDS TIMESTAMPS: Every start and end timestamp in "segments" must be a raw number in seconds (e.g. 0.0, 4.5, 38.2, 145.6). Do NOT use formatted colon strings like "2:30".'
   ]
 
@@ -655,8 +655,9 @@ async function transcribeWithKey(
 
     for (let modelIndex = 0; modelIndex < models.length; modelIndex += 1) {
       const modelName = models[modelIndex]
+      const roundedDuration = Math.round(totalDuration)
       const effectivePrompt = totalDuration > 0
-        ? `${promptText} CRITICAL FULL-DURATION REQUIREMENT: Total recording duration is exactly ${Math.round(totalDuration)} seconds. Spoken dialogue occurs across the full recording. You MUST transcribe all spoken dialogue from 0.0s all the way to ${Math.round(totalDuration)}s without stopping. Do NOT stop after introductory phrases or musical pauses.`
+        ? `${promptText} CRITICAL FULL-DURATION REQUIREMENT: Total recording duration is exactly ${roundedDuration} seconds. Spoken dialogue occurs across the full recording. Viral social media clips (TikTok, Facebook, Reels) frequently feature dramatic mid-video sound effects (crashes, laughter, music stingers) and action pauses between scenes. You MUST continue listening past any mid-video sound effects or pauses all the way to ${roundedDuration}s. Dialogue resumes after scene transitions. You MUST transcribe all spoken dialogue from 0.0s all the way to ${roundedDuration}s without stopping. Do NOT stop after introductory phrases, sound effects, or musical pauses.`
         : promptText
 
       try {
@@ -704,23 +705,28 @@ async function transcribeWithKey(
           continuationPass++
           const startOffset = Math.max(0, Math.floor(currentMaxEnd))
           const lastWords = accumulatedSegments.slice(-2).map((s) => s.text).join(' ').slice(-100).trim()
+          const roundedTotal = Math.round(totalDuration)
 
           emit({
             type: 'status',
             phase: 'processing',
-            message: `Continuing transcription past pause (${Math.round(currentMaxEnd)}s / ${Math.round(totalDuration)}s)...`
+            message: `Continuing transcription past pause (${Math.round(currentMaxEnd)}s / ${roundedTotal}s)...`
           })
 
           const contPrompt = [
-            `CRITICAL RECORDING CONTINUATION: You are continuing the verbatim transcription of this media recording (total duration: ${Math.round(totalDuration)} seconds).`,
+            `CRITICAL RECORDING CONTINUATION: You are continuing the verbatim transcription of this media recording (total duration: ${roundedTotal} seconds).`,
             `Speech from 0:00 up to ${startOffset} seconds has already been transcribed.`,
             lastWords ? `The transcribed speech so far ended around ${startOffset}s with: "...${lastWords}".` : '',
-            `Now listen carefully to all audio from ${startOffset}s to the absolute end (${Math.round(totalDuration)}s) and transcribe ALL remaining spoken dialogue verbatim into the native script.`,
+            `Viral social media clips (TikTok, Facebook, Reels) frequently feature dramatic mid-video sound effects (crashes, laughter, music stingers) and action pauses between scenes. You MUST continue listening past any mid-video sound effects or pauses all the way to ${roundedTotal}s. Dialogue resumes after scene transitions.`,
+            `Now listen carefully to all audio from ${startOffset}s to the absolute end (${roundedTotal}s) and transcribe ALL remaining spoken dialogue verbatim into the native script.`,
             'Do NOT stop at music breaks, sound effects, or pauses. Transcribe every remaining word until the end.',
             'Format strictly as JSON with this exact shape:',
             `{"language":"${parsedTranscript.language || 'auto'}","text":"Remaining continuous transcript text here","segments":[{"start":${startOffset},"end":${startOffset + 5},"text":"phrase"}]}`,
             `Crucial: Start timestamps must continue from ${startOffset}s (or provide numeric timestamps for each phrase).`
           ].filter(Boolean).join(' ')
+
+          let rawContSegments: TranscriptSegment[] = []
+          let contParsedText = ''
 
           try {
             const contResponseText = await withGeminiRetry(
@@ -745,46 +751,109 @@ async function transcribeWithKey(
             )
 
             const contParsed = parseGeminiTranscriptResponse(contResponseText)
-            let rawContSegments = contParsed.segments || []
-
-            // Detect if model emitted relative timestamps (starting near 0 instead of startOffset)
-            const minStart = rawContSegments.length > 0 ? Math.min(...rawContSegments.map((s) => s.start)) : 0
-            if (startOffset > 5 && rawContSegments.length > 0 && minStart < (startOffset / 2)) {
-              rawContSegments = rawContSegments.map((s) => ({
-                ...s,
-                start: Math.round((s.start + startOffset) * 10) / 10,
-                ...(typeof s.end === 'number' ? { end: Math.round((s.end + startOffset) * 10) / 10 } : {})
-              }))
-            }
-
-            const newSegments = rawContSegments.filter((s) => s.start >= currentMaxEnd - 2)
-
-            if (newSegments.length > 0) {
-              accumulatedSegments.push(...newSegments)
-              const newMaxEnd = accumulatedSegments.reduce((max, s) => {
-                const end = typeof s.end === 'number' && Number.isFinite(s.end) ? s.end : s.start
-                return Math.max(max, end)
-              }, currentMaxEnd)
-
-              if (newMaxEnd <= currentMaxEnd) {
-                break
-              }
-              currentMaxEnd = newMaxEnd
-            } else if (contParsed.text && contParsed.text.trim()) {
-              // Model returned remaining text without structured timestamps:
-              const newText = contParsed.text.trim()
-              accumulatedSegments.push({
-                start: startOffset,
-                end: totalDuration,
-                text: newText
-              })
-              currentMaxEnd = totalDuration
-              break
-            } else {
-              break
-            }
+            rawContSegments = (contParsed.segments || []) as TranscriptSegment[]
+            contParsedText = contParsed.text || ''
           } catch (contErr) {
-            console.warn(`Continuation pass ${continuationPass} failed; returning gathered segments:`, contErr)
+            console.warn(`Continuation pass ${continuationPass} failed on ${modelName}:`, contErr)
+          }
+
+          // Detect if model emitted relative timestamps (starting near 0 instead of startOffset)
+          const minStart = rawContSegments.length > 0 ? Math.min(...rawContSegments.map((s) => s.start)) : 0
+          if (startOffset > 5 && rawContSegments.length > 0 && minStart < (startOffset / 2)) {
+            rawContSegments = rawContSegments.map((s) => ({
+              ...s,
+              start: Math.round((s.start + startOffset) * 10) / 10,
+              ...(typeof s.end === 'number' ? { end: Math.round((s.end + startOffset) * 10) / 10 } : {})
+            }))
+          }
+
+          let newSegments = rawContSegments.filter((s) => s.start >= currentMaxEnd - 2)
+
+          // RESILIENT CONTINUATION PASS:
+          // If continuationPass yields no new segments on gemini-3.6-flash (or current model),
+          // automatically retry the continuation pass with gemini-2.5-flash with maximum acoustic sensitivity
+          // instead of breaking prematurely.
+          if (newSegments.length === 0 && !contParsedText.trim() && modelName !== 'gemini-2.5-flash') {
+            console.warn(
+              `Continuation pass ${continuationPass} on ${modelName} yielded no new segments; retrying with gemini-2.5-flash with maximum acoustic sensitivity...`
+            )
+            emit({
+              type: 'status',
+              phase: 'processing',
+              message: `Acoustic sensitivity continuation scan past pause (${Math.round(currentMaxEnd)}s / ${roundedTotal}s)...`
+            })
+
+            const acousticSensitivePrompt = [
+              contPrompt,
+              `MAXIMUM ACOUSTIC SENSITIVITY OVERRIDE: Human speech, dialogue, or voiceover resumes after the sound effect, scene transition, or pause. Isolate vocal channels from background crashes, laughter, music stingers, or ambient noise. Detect and transcribe all remaining utterances verbatim from ${startOffset}s to ${roundedTotal}s.`
+            ].join(' ')
+
+            try {
+              const fallbackResponseText = await withGeminiRetry(
+                () =>
+                  streamGeminiTranscript(apiKey, {
+                    modelName: 'gemini-2.5-flash',
+                    prompt: acousticSensitivePrompt,
+                    mimeType: mediaMimeType,
+                    ...(fileUri ? { fileUri } : { inlineData: audioInput.buffer }),
+                    onText: (accumulated) => {
+                      if (totalDuration <= 0) return
+                      const latestEnd = extractLatestEndSeconds(accumulated)
+                      const effectiveEnd = Math.max(currentMaxEnd, latestEnd)
+                      const percent = Math.min(99, Math.round((effectiveEnd / totalDuration) * 100))
+                      if (percent > lastProgress) {
+                        lastProgress = percent
+                        emit({ type: 'progress', progress: percent })
+                      }
+                    }
+                  }),
+                `transcription continuation fallback pass ${continuationPass} (gemini-2.5-flash)`
+              )
+
+              const fallbackParsed = parseGeminiTranscriptResponse(fallbackResponseText)
+              let fallbackRawSegments = (fallbackParsed.segments || []) as TranscriptSegment[]
+              const fbMinStart = fallbackRawSegments.length > 0 ? Math.min(...fallbackRawSegments.map((s) => s.start)) : 0
+              if (startOffset > 5 && fallbackRawSegments.length > 0 && fbMinStart < (startOffset / 2)) {
+                fallbackRawSegments = fallbackRawSegments.map((s) => ({
+                  ...s,
+                  start: Math.round((s.start + startOffset) * 10) / 10,
+                  ...(typeof s.end === 'number' ? { end: Math.round((s.end + startOffset) * 10) / 10 } : {})
+                }))
+              }
+
+              const fallbackNewSegments = fallbackRawSegments.filter((s) => s.start >= currentMaxEnd - 2)
+              if (fallbackNewSegments.length > 0) {
+                newSegments = fallbackNewSegments
+              } else if (fallbackParsed.text && fallbackParsed.text.trim()) {
+                contParsedText = fallbackParsed.text.trim()
+              }
+            } catch (fallbackErr) {
+              console.warn(`Fallback continuation pass on gemini-2.5-flash failed:`, fallbackErr)
+            }
+          }
+
+          if (newSegments.length > 0) {
+            accumulatedSegments.push(...newSegments)
+            const newMaxEnd = accumulatedSegments.reduce((max, s) => {
+              const end = typeof s.end === 'number' && Number.isFinite(s.end) ? s.end : s.start
+              return Math.max(max, end)
+            }, currentMaxEnd)
+
+            if (newMaxEnd <= currentMaxEnd) {
+              break
+            }
+            currentMaxEnd = newMaxEnd
+          } else if (contParsedText && contParsedText.trim()) {
+            // Model returned remaining text without structured timestamps:
+            const newText = contParsedText.trim()
+            accumulatedSegments.push({
+              start: startOffset,
+              end: totalDuration,
+              text: newText
+            })
+            currentMaxEnd = totalDuration
+            break
+          } else {
             break
           }
         }

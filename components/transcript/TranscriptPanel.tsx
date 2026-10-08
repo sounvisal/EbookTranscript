@@ -560,7 +560,11 @@ export default function TranscriptPanel() {
             errorMessage="User reported inaccurate transcript or quality issue"
             filename={sourceName}
             inputType="file"
-            transcriptSnippet={liveText.slice(0, 300)}
+            transcriptSnippet={
+              liveText.length > 500
+                ? liveText.slice(0, 500).replace(/\s+\S*$/, '') + '...'
+                : liveText
+            }
             detectedLanguage={transcript?.language}
             className="text-slate-600 dark:text-slate-300 border-slate-200/80 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl"
           />

@@ -157,9 +157,13 @@ export async function sendTelegramErrorAlert(params: TelegramAlertParams): Promi
     lines.push(`📍 <b>Endpoint:</b> <code>${escapeHtml(params.endpoint)}</code>`)
   }
 
-  const snippet = params.metadata?.transcriptSnippet as string
+  const snippet = (params.metadata?.transcriptSnippet as string)?.trim()
   if (snippet) {
-    lines.push('', `📝 <b>Transcript Excerpt:</b>`, `<i>${escapeHtml(snippet.slice(0, 300))}...</i>`)
+    let cleanSnippet = snippet
+    if (cleanSnippet.length > 400) {
+      cleanSnippet = cleanSnippet.slice(0, 400).replace(/\s+\S*$/, '') + '...'
+    }
+    lines.push('', `📝 <b>Transcript Excerpt:</b>`, `<i>${escapeHtml(cleanSnippet)}</i>`)
   }
 
   lines.push(`⏱ <b>Time:</b> <code>${timestamp}</code>`)
