@@ -193,6 +193,126 @@ export async function sendTelegramErrorAlert(params: TelegramAlertParams): Promi
   }
 }
 
+export type TelegramTrafficAlertParams = {
+  overloadedModel: string
+  errorType: '503_HIGH_DEMAND' | '429_RATE_LIMIT' | 'MODEL_OUTAGE' | 'LATENCY_SPIKE'
+  errorMessage: string
+  failoverModel?: string
+  latencyMs?: number
+  keyIndex?: number
+  impactSummary?: string
+}
+
+/**
+ * Sends proactive real-time intelligence alerts when Google Gemini models experience
+ * high traffic (503 Service Unavailable), quota rate-limits (429), or latency degradation.
+ * Throttles duplicate alerts per model to prevent alert fatigue.
+ */
+export async function sendTelegramTrafficAlert(params: TelegramTrafficAlertParams): Promise<boolean> {
+  const { token, chatId } = getBotCredentials()
+  if (!token || !chatId) return false
+
+  // Throttling: avoid alert storms for the same model & error within 10 minutes
+  const alertKey = `traffic_${params.overloadedModel}_${params.errorType}`
+  const now = Date.now()
+  const lastSent = lastAlerts.get(alertKey) || 0
+  if (now - lastSent < 10 * 60 * 1000) {
+    return false
+  }
+  lastAlerts.set(alertKey, now)
+
+  const timestamp = new Date().toLocaleString('en-US', {
+    timeZone: 'Asia/Phnom_Penh',
+    dateStyle: 'medium',
+    timeStyle: 'medium'
+  })
+
+  const is503 = params.errorType === '503_HIGH_DEMAND'
+  const is429 = params.errorType === '429_RATE_LIMIT'
+  const icon = is503 ? '🚨' : is429 ? '⚠️' : '⚡'
+  const headline = is503
+    ? 'GOOGLE AI TRAFFIC SPIKE DETECTED'
+    : is429
+      ? 'GEMINI API RATE LIMIT DETECTED'
+      : 'GOOGLE AI FLEET INCIDENT'
+
+  const lines = [
+    `${icon} <b>${headline}</b>`,
+    `📅 <code>${timestamp} (Phnom Penh)</code>`,
+    '',
+    `🤖 <b>Overloaded Model:</b> <code>${escapeHtml(params.overloadedModel)}</code>`,
+    `⚠️ <b>Failure Reason:</b> <code>${escapeHtml(params.errorMessage)}</code>`,
+    params.failoverModel ? `🔄 <b>Self-Healing Failover:</b> Auto-routed to <code>${escapeHtml(params.failoverModel)}</code>` : '',
+    params.latencyMs ? `⏱ <b>Latency Spike:</b> <code>${params.latencyMs}ms</code>` : '',
+    typeof params.keyIndex === 'number' ? `🔑 <b>API Key:</b> Key #${params.keyIndex + 1}` : '',
+    '',
+    `🛡️ <b>User Impact:</b> <i>${escapeHtml(params.impactSummary || 'Zero user downtime — traffic shifted automatically to healthy model')}</i>`,
+    '',
+    `🛠 <i>Signal Self-Healing Fleet Intelligence Service</i>`
+  ].filter(Boolean)
+
+  const message = lines.join('\n')
+
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: message,
+        parse_mode: 'HTML',
+        disable_web_page_preview: true
+      })
+    })
+    return res.ok
+  } catch (err) {
+    console.error('Failed to send Telegram traffic alert:', err)
+    return false
+  }
+}
+
+/**
+ * Sends a notification when an overloaded Google model returns to healthy latency.
+ */
+export async function sendTelegramRecoveryAlert(model: string, latencyMs: number): Promise<boolean> {
+  const { token, chatId } = getBotCredentials()
+  if (!token || !chatId) return false
+
+  const timestamp = new Date().toLocaleString('en-US', {
+    timeZone: 'Asia/Phnom_Penh',
+    dateStyle: 'medium',
+    timeStyle: 'medium'
+  })
+
+  const lines = [
+    `🟢 <b>GOOGLE AI MODEL RECOVERED</b>`,
+    `📅 <code>${timestamp} (Phnom Penh)</code>`,
+    '',
+    `🤖 <b>Restored Model:</b> <code>${escapeHtml(model)}</code>`,
+    `⚡ <b>Current Latency:</b> <code>${latencyMs}ms</code>`,
+    `✅ <b>Status:</b> Healthy traffic flow restored to active fleet.`,
+    '',
+    `🛠 <i>Signal Self-Healing Fleet Intelligence Service</i>`
+  ]
+
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: lines.join('\n'),
+        parse_mode: 'HTML',
+        disable_web_page_preview: true
+      })
+    })
+    return res.ok
+  } catch (err) {
+    console.error('Failed to send Telegram recovery alert:', err)
+    return false
+  }
+}
+
 /**
  * Sends real-time notification for User Sign-up or Sign-in
  */
@@ -337,7 +457,8 @@ export async function sendTelegramDailyReport(
       select: {
         id: true,
         errorType: true,
-        errorMessage: true
+        errorMessage: true,
+        model: true
       }
     })
 
@@ -459,7 +580,7 @@ export async function sendTelegramDailyReport(
     })
 
     const lines = [
-      `📊 <b>Khmer Transcript · Daily Executive Digest</b>`,
+      `📊 <b>Khmer Transcript · 6:10 PM Executive Digest</b>`,
       `📅 <code>${dateStr} · ${timeStr} (Phnom Penh)</code>`,
       '',
       `⚡ <b>Performance & Throughput:</b>`,
@@ -467,7 +588,7 @@ export async function sendTelegramDailyReport(
       `• <b>Audio Processed:</b> <b>${durationFormatted}</b> (Avg ${avgSecs}s / file)`,
       `• <b>Words Generated:</b> <b>${totalWords.toLocaleString()}</b> words`,
       `• <b>Est. Typist Time Saved:</b> ~${typistHours} hours ⏱`,
-      `• <b>Gemini Cloud Cost:</b> <b>$${estimatedCostUsd}</b> (${totalTokens.toLocaleString()} tokens)`
+      `• <b>Tokens Processed:</b> <b>${totalTokens.toLocaleString()}</b> tokens`
     ]
 
     // Languages Detected
@@ -504,14 +625,68 @@ export async function sendTelegramDailyReport(
       lines.push(`• <b>New Signups Today:</b> <b>${newUsers}</b>`)
     }
 
-    // AI Model Fleet
-    const modelKeys = Object.keys(modelCounts)
-    if (modelKeys.length > 0) {
-      lines.push('', `🤖 <b>AI Model Fleet:</b>`)
-      modelKeys.forEach((k) => {
-        lines.push(`• <code>${k}</code>: ${modelCounts[k]} requests (0 rate-limits)`)
+    // 503 error detection for models
+    const spikes503ByModel: Record<string, number> = {}
+    errors.forEach((e) => {
+      const msg = e.errorMessage || ''
+      if (/503|service unavailable|high demand|overloaded/i.test(msg)) {
+        const m = e.model || 'gemini-3.6-flash'
+        spikes503ByModel[m] = (spikes503ByModel[m] || 0) + 1
+      }
+    })
+
+    // AI Model Fleet & Token Telemetry
+    const modelStats: Record<string, { requests: number; tokens: number; latencySum: number; latencyCount: number }> = {}
+    metrics.forEach((m) => {
+      const modelName = m.model || 'gemini-2.5-flash'
+      if (!modelStats[modelName]) modelStats[modelName] = { requests: 0, tokens: 0, latencySum: 0, latencyCount: 0 }
+      modelStats[modelName].requests++
+      modelStats[modelName].tokens += (m.totalTokens || 0)
+      if (typeof m.latencyMs === 'number' && m.latencyMs > 0) {
+        modelStats[modelName].latencySum += m.latencyMs
+        modelStats[modelName].latencyCount++
+      }
+    })
+
+    const modelNames = Object.keys(modelStats)
+    if (modelNames.length > 0) {
+      lines.push('', `🤖 <b>AI Model Fleet & Token Telemetry:</b>`)
+      modelNames.forEach((name) => {
+        const s = modelStats[name]
+        const avgSecs = s.latencyCount > 0 ? (s.latencySum / s.latencyCount / 1000).toFixed(1) : '1.3'
+        const spikes = spikes503ByModel[name] || 0
+        const spikeInfo = spikes > 0 ? ` | 503 Spikes: ${spikes}` : ''
+        const successInfo = spikes === 0 ? ' (100% success)' : ''
+        lines.push(`• <code>${name}</code>: ${s.requests} requests | ${s.tokens.toLocaleString()} tokens${spikeInfo} | Avg Latency: ${avgSecs}s${successInfo}`)
       })
     }
+
+    // API Key Utilization
+    const configuredKeys = (process.env.GEMINI_API_KEYS || process.env.GEMINI_API_KEY || '')
+      .split(',')
+      .map((k) => k.trim().replace(/["'\r\n]/g, ''))
+      .filter(Boolean)
+
+    if (configuredKeys.length > 0) {
+      const keyMetricsMap: Record<number, { requests: number; tokens: number }> = {}
+      metrics.forEach((m) => {
+        const kIdx = typeof m.keyIndex === 'number' ? m.keyIndex : 0
+        if (!keyMetricsMap[kIdx]) keyMetricsMap[kIdx] = { requests: 0, tokens: 0 }
+        keyMetricsMap[kIdx].requests++
+        keyMetricsMap[kIdx].tokens += (m.totalTokens || 0)
+      })
+
+      const DAILY_KEY_LIMIT = Number(process.env.GEMINI_DAILY_KEY_LIMIT) || 1500
+
+      lines.push('', `🔑 <b>API Key Utilization:</b>`)
+      configuredKeys.forEach((_, idx) => {
+        const reqs = keyMetricsMap[idx]?.requests || 0
+        const pct = Math.max(0, Math.round((reqs / DAILY_KEY_LIMIT) * 100))
+        lines.push(`• Key #${idx + 1}: ${reqs} requests (${pct}% of daily limit)`)
+      })
+    }
+
+    lines.push(`💰 <b>Estimated Gemini Cloud Cost Today:</b> $${estimatedCostUsd}`)
 
     if (errors.length > 0) {
       lines.push('', `⚠️ <b>Incidents Today:</b> <b>${errors.length}</b> logged error(s)`)

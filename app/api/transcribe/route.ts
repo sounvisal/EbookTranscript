@@ -22,6 +22,7 @@ import {
 } from '@/lib/transcript'
 import { MAX_MEDIA_UPLOAD_BYTES } from '@/lib/uploadLimits'
 import { trackUsage, trackError } from '@/lib/telemetry'
+import { getOptimalModelOrder, recordModelSuccess, recordModelFailure } from '@/lib/fleet'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -57,6 +58,9 @@ export type TranscriptResultPayload = {
   language: string
   duration: number
   source: string
+  model?: string
+  keyIndex?: number
+  latencyMs?: number
 }
 
 type MediaInput = {
@@ -454,23 +458,11 @@ function getGeminiApiKeys(): string[] {
   return single && single !== 'AIzaSyYourGoogleApiKeyHere' ? [single] : []
 }
 
-// Reads the models to try, in order. Supports GEMINI_MODELS (a comma-separated
-// list rotated when one model is rate-limited / out of quota / 503 high demand)
-// and falls back to the single GEMINI_MODEL, then the default list.
+// Self-Healing Fleet Model Order:
+// Dynamically orders models so that fast, healthy models are prioritized.
+// Quarantines models experiencing 503 high demand or 429 rate limits until their cooldown passes.
 function getGeminiModels(): string[] {
-  const multi = (process.env.GEMINI_MODELS || '')
-    .split(',')
-    .map((model) => model.trim().replace(/["'\r\n]/g, ''))
-    .filter(Boolean)
-  if (multi.length) {
-    return multi
-  }
-  const single = (process.env.GEMINI_MODEL || '').trim().replace(/["'\r\n]/g, '')
-  if (single) {
-    const list = [single, ...DEFAULT_FALLBACK_MODELS.filter((m) => m !== single)]
-    return list
-  }
-  return DEFAULT_FALLBACK_MODELS
+  return getOptimalModelOrder()
 }
 
 function buildMockResult(): TranscriptResultPayload {
@@ -582,7 +574,8 @@ async function transcribeWithKey(
   sourceName: string,
   models: string[],
   emit: (event: ProgressEvent) => void,
-  promptText: string = TRANSCRIPTION_PROMPT
+  promptText: string = TRANSCRIPTION_PROMPT,
+  keyIndex: number = 0
 ): Promise<TranscriptResultPayload> {
   let uploadedFileName = ''
 
@@ -659,6 +652,7 @@ async function transcribeWithKey(
 
     for (let modelIndex = 0; modelIndex < models.length; modelIndex += 1) {
       const modelName = models[modelIndex]
+      const modelCallStart = Date.now()
       const roundedDuration = Math.round(totalDuration)
       const effectivePrompt = totalDuration > 0
         ? `${promptText} CRITICAL FULL-DURATION REQUIREMENT: Total recording duration is exactly ${roundedDuration} seconds. Spoken dialogue occurs across the full recording. Viral social media clips (TikTok, Facebook, Reels) frequently feature dramatic mid-video sound effects (crashes, laughter, music stingers) and action pauses between scenes. You MUST continue listening past any mid-video sound effects or pauses all the way to ${roundedDuration}s. Dialogue resumes after scene transitions. You MUST transcribe all spoken dialogue from 0.0s all the way to ${roundedDuration}s without stopping. Do NOT stop after introductory phrases, sound effects, or musical pauses.`
@@ -892,26 +886,48 @@ async function transcribeWithKey(
             }
           ]
 
+          const latencyMs = Date.now() - modelCallStart
+          recordModelSuccess(modelName, latencyMs)
+
           return {
             text: finalText,
             segments: emptySegments,
             language: parsedTranscript.language || 'auto',
             duration: finalDuration,
-            source: sourceName || modelName
+            source: sourceName || modelName,
+            model: modelName,
+            keyIndex,
+            latencyMs
           }
         }
+
+        const latencyMs = Date.now() - modelCallStart
+        recordModelSuccess(modelName, latencyMs)
 
         return {
           text: finalText,
           segments: finalSegments,
           language: parsedTranscript.language || 'auto',
           duration: finalDuration,
-          source: sourceName || modelName
+          source: sourceName || modelName,
+          model: modelName,
+          keyIndex,
+          latencyMs
         }
       } catch (error) {
         lastError = error
+        const latencyMs = Date.now() - modelCallStart
+        const nextModel = modelIndex < models.length - 1 ? models[modelIndex + 1] : undefined
+        recordModelFailure({
+          model: modelName,
+          error,
+          latencyMs,
+          keyIndex,
+          failoverModel: nextModel
+        })
+
         if (shouldRotate(error) && modelIndex < models.length - 1) {
-          console.warn(`Model "${modelName}" unavailable or rate-limited on this key; trying next model...`)
+          console.warn(`Model "${modelName}" unavailable or rate-limited on Key #${keyIndex + 1}; failover to "${nextModel}"...`)
           continue
         }
         throw error
@@ -970,9 +986,11 @@ async function runTranscriptionPipeline(
 
     let lastError: unknown
     for (let k = 0; k < keyOrder.length; k += 1) {
+      const currentKey = keyOrder[k]
+      const actualKeyIndex = keys.indexOf(currentKey)
       try {
         return await transcribeWithKey(
-          keyOrder[k],
+          currentKey,
           {
             fileUri: mediaInput.fileUri,
             mimeType: mediaInput.mimeType,
@@ -982,7 +1000,8 @@ async function runTranscriptionPipeline(
           mediaInput.sourceName,
           models,
           emit,
-          promptText
+          promptText,
+          actualKeyIndex >= 0 ? actualKeyIndex : 0
         )
       } catch (err) {
         lastError = err
@@ -1031,7 +1050,7 @@ async function runTranscriptionPipeline(
     let lastError: unknown
     for (let index = 0; index < keys.length; index += 1) {
       try {
-        return await transcribeWithKey(keys[index], audio, mediaInput.sourceName, models, onEvent, promptText)
+        return await transcribeWithKey(keys[index], audio, mediaInput.sourceName, models, onEvent, promptText, index)
       } catch (error) {
         lastError = error
         // A key throws only after ALL its models were exhausted (rate-limited or
@@ -1099,7 +1118,10 @@ async function runTranscriptionPipeline(
         segments: normalized,
         language: partials.find(({ result }) => result.language !== 'auto')?.result.language || 'auto',
         duration: finalDuration,
-        source: mediaInput.sourceName || MODEL_NAME
+        source: mediaInput.sourceName || MODEL_NAME,
+        model: partials[0]?.result?.model || MODEL_NAME,
+        keyIndex: partials[0]?.result?.keyIndex ?? 0,
+        latencyMs: partials.reduce((sum, p) => sum + (p.result?.latencyMs || 0), 0)
       }
 
       emit({ type: 'progress', progress: 100 })
@@ -1160,11 +1182,13 @@ export async function POST(req: Request) {
           try {
             await trackUsage({
               userId: session.user?.id || null,
-              model: MODEL_NAME,
+              model: result.model || MODEL_NAME,
               inputType: 'file',
               durationSeconds: durationSecs,
               wordCount,
-              status: 'success'
+              status: 'success',
+              keyIndex: result.keyIndex ?? 0,
+              latencyMs: result.latencyMs
             })
           } catch (metricErr) {
             console.error('Failed to trackUsage in stream:', metricErr)
@@ -1219,11 +1243,13 @@ export async function POST(req: Request) {
     try {
       await trackUsage({
         userId: session.user?.id || null,
-        model: MODEL_NAME,
+        model: result.model || MODEL_NAME,
         inputType: 'file',
         durationSeconds: durationSecs,
         wordCount,
-        status: 'success'
+        status: 'success',
+        keyIndex: result.keyIndex ?? 0,
+        latencyMs: result.latencyMs
       })
     } catch (metricErr) {
       console.error('Failed to trackUsage in non-stream:', metricErr)

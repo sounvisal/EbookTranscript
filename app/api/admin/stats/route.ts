@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions, isUserAdmin } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
+import { getFleetStatusSnapshot } from '@/lib/fleet'
 
 export const dynamic = 'force-dynamic'
 
@@ -144,7 +145,7 @@ export async function GET(req: Request) {
     let inputTokensInRange = 0
     let outputTokensInRange = 0
 
-    const modelUsageMap: Record<string, { requests: number; tokens: number; duration: number }> = {}
+    const modelUsageMap: Record<string, { requests: number; tokens: number; duration: number; latencySum: number; latencyCount: number }> = {}
     const dailyTokenMap: Record<string, { date: string; tokens: number; requests: number; duration: number; errors: number }> = {}
     const inputTypeMap: Record<string, number> = {}
     const formatMap: Record<string, number> = {}
@@ -204,11 +205,15 @@ export async function GET(req: Request) {
       // Model breakdown
       const m = metric.model || 'gemini-2.5-flash'
       if (!modelUsageMap[m]) {
-        modelUsageMap[m] = { requests: 0, tokens: 0, duration: 0 }
+        modelUsageMap[m] = { requests: 0, tokens: 0, duration: 0, latencySum: 0, latencyCount: 0 }
       }
       modelUsageMap[m].requests += 1
       modelUsageMap[m].tokens += metric.totalTokens
       modelUsageMap[m].duration += metricDuration
+      if (typeof metric.latencyMs === 'number' && metric.latencyMs > 0) {
+        modelUsageMap[m].latencySum += metric.latencyMs
+        modelUsageMap[m].latencyCount += 1
+      }
 
       // Chart breakdown
       if (isHourly) {
@@ -377,20 +382,42 @@ export async function GET(req: Request) {
       .filter(Boolean)
 
     const keyCount = Math.max(1, configuredKeys.length)
+    const totalRequestsToday = todayMetrics.length
+
     const keyFleet = configuredKeys.map((key, idx) => {
-      // Estimated distribution share
-      const estimatedLoadShare = Math.round(100 / keyCount)
-      const routedRequestsToday = Math.round((todayMetrics.length / keyCount) * (idx === 0 ? 1.1 : 0.95))
+      const metricsTodayForKey = todayMetrics.filter((m) => (m.keyIndex ?? 0) === idx)
+      const metricsRangeForKey = allMetrics.filter((m) => (m.keyIndex ?? 0) === idx)
+      const routedRequestsToday = metricsTodayForKey.length
+      const tokensTodayForKey = metricsTodayForKey.reduce((acc, m) => acc + m.totalTokens, 0)
+      const requestsInRangeForKey = metricsRangeForKey.length
+      const tokensInRangeForKey = metricsRangeForKey.reduce((acc, m) => acc + m.totalTokens, 0)
+
+      const latenciesForKey = metricsRangeForKey
+        .map((m) => m.latencyMs)
+        .filter((l): l is number => typeof l === 'number' && l > 0)
+      const avgLatencyMs = latenciesForKey.length > 0
+        ? Math.round(latenciesForKey.reduce((a, b) => a + b, 0) / latenciesForKey.length)
+        : null
+
+      const loadSharePercent = totalRequestsToday > 0
+        ? Number(((routedRequestsToday / totalRequestsToday) * 100).toFixed(1))
+        : Number((100 / keyCount).toFixed(1))
 
       return {
         index: idx,
         masked: `${key.slice(0, 6)}...${key.slice(-4)}`,
         status: 'active' as const,
         modelPriority: 'gemini-2.5-flash / gemini-3.6-flash',
-        loadSharePercent: idx === keyCount - 1 ? 100 - (estimatedLoadShare * (keyCount - 1)) : estimatedLoadShare,
-        routedRequestsToday: Math.max(0, routedRequestsToday)
+        loadSharePercent,
+        routedRequestsToday,
+        tokensToday: tokensTodayForKey,
+        routedRequestsRange: requestsInRangeForKey,
+        tokensRange: tokensInRangeForKey,
+        avgLatencyMs
       }
     })
+
+    const fleetHealth = getFleetStatusSnapshot()
 
     return NextResponse.json({
       range: {
@@ -428,7 +455,8 @@ export async function GET(req: Request) {
         model,
         requests: data.requests,
         tokens: data.tokens,
-        durationMinutes: Math.round(data.duration / 60)
+        durationMinutes: Math.round(data.duration / 60),
+        avgLatencyMs: data.latencyCount > 0 ? Math.round(data.latencySum / data.latencyCount) : null
       })),
       dailyStats,
       languages,
@@ -436,6 +464,7 @@ export async function GET(req: Request) {
       formats,
       hourlyActivity: hourlyMap,
       keyFleet,
+      fleetHealth,
       telegram: {
         configured: !!process.env.TELEGRAM_BOT_TOKEN && !!process.env.TELEGRAM_CHAT_ID,
         chatId: process.env.TELEGRAM_CHAT_ID ? `${process.env.TELEGRAM_CHAT_ID.slice(0, 4)}***` : null

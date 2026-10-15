@@ -1,12 +1,11 @@
-name: Daily 5:30 PM Telegram Digest Cron
+name: Daily 6:10 PM Telegram Digest Cron
 
 on:
   schedule:
-    # 10:20 UTC = 17:20 (5:20 PM) Cambodia Time (UTC+7)
-    # Using :20 avoids GitHub Actions queue traffic jam at :00 and :30
-    - cron: '20 10 * * *'
-    # 10:35 UTC = 17:35 (5:35 PM) fallback trigger in case the GitHub queue had a brief delay
-    - cron: '35 10 * * *'
+    # 11:10 UTC = 18:10 (6:10 PM) Cambodia Time (UTC+7)
+    - cron: '10 11 * * *'
+    # 11:15 UTC = 18:15 (6:15 PM) fallback trigger in case the GitHub queue had a brief delay
+    - cron: '15 11 * * *'
   workflow_dispatch:
     inputs:
       force:
@@ -20,12 +19,12 @@ on:
 
 jobs:
   trigger-report:
-    name: Trigger 5:30 PM Daily Digest
+    name: Trigger 6:10 PM Daily Digest
     runs-on: ubuntu-latest
     steps:
       - name: Trigger Daily Report Endpoint
         run: |
-          echo "Triggering 5:30 PM Daily Report endpoint..."
+          echo "Triggering 6:10 PM Daily Report endpoint..."
           CRON_KEY="${{ secrets.CRON_SECRET }}"
           if [ -z "$CRON_KEY" ]; then
             CRON_KEY="signal-cron-daily-report-secure-key"

@@ -358,7 +358,7 @@ export async function POST(req: Request) {
     cleanCmd === 'daily'
   ) {
     if (isAdmin) {
-      const loading = await sendTelegramMessage(incomingChatId, '⏳ <i>Generating and dispatching 5:30 PM Daily Digest report...</i>', undefined, false)
+      const loading = await sendTelegramMessage(incomingChatId, '⏳ <i>Generating and dispatching 6:10 PM Daily Digest report...</i>', undefined, false)
       const result = await sendTelegramDailyReport(undefined, true)
       if (loading.messageId) {
         await deleteTelegramMessage(incomingChatId, loading.messageId)

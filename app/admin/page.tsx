@@ -134,6 +134,7 @@ type AdminStats = {
     requests: number
     tokens: number
     durationMinutes: number
+    avgLatencyMs?: number | null
   }>
   dailyStats: Array<{
     date: string
@@ -165,7 +166,27 @@ type AdminStats = {
     modelPriority: string
     loadSharePercent?: number
     routedRequestsToday?: number
+    tokensToday?: number
+    routedRequestsRange?: number
+    tokensRange?: number
+    avgLatencyMs?: number | null
   }>
+  fleetHealth?: {
+    models: Array<{
+      model: string
+      status: 'HEALTHY' | 'DEGRADED' | 'HIGH_DEMAND_503' | 'RATE_LIMITED_429'
+      rollingLatencyMs: number
+      lastLatencyMs: number
+      consecutiveErrors: number
+      degradedUntil: number
+      lastChecked: string
+      lastError?: string
+      successCount: number
+      failureCount: number
+    }>
+    optimalModel: string
+    optimalOrder: string[]
+  }
   telegram: {
     configured: boolean
     chatId: string | null
@@ -270,6 +291,7 @@ export default function AdminDashboardPage() {
   // 2. API Key Ping Diagnostics State
   const [pingResults, setPingResults] = useState<Record<number, KeyDiagnostic>>({})
   const [isPingingKeys, setIsPingingKeys] = useState(false)
+  const [probingFleet, setProbingFleet] = useState(false)
 
   // 3. User Intelligence Dossier State
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null)
@@ -374,6 +396,24 @@ export default function AdminDashboardPage() {
       alert(err instanceof Error ? err.message : 'Ping probe failed.')
     } finally {
       setIsPingingKeys(false)
+    }
+  }
+
+  // Active Fleet Diagnostic Probe & Latency Benchmark
+  const handleProbeFleet = async () => {
+    setProbingFleet(true)
+    try {
+      const res = await fetch('/api/admin/fleet', { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed to probe model fleet.')
+      }
+      showNotification(`Fleet probe complete! Optimal router target: ${data.optimalModel}`)
+      fetchStats(true, selectedRange)
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Fleet probe failed.')
+    } finally {
+      setProbingFleet(false)
     }
   }
 
@@ -1530,20 +1570,143 @@ export default function AdminDashboardPage() {
                       <div className="flex justify-between text-[11px]">
                         <span className="text-slate-500">Today&apos;s Traffic Share:</span>
                         <span className="font-bold text-blue-600 dark:text-blue-400 font-mono">
-                          ~{k.loadSharePercent || 33}% ({k.routedRequestsToday || 0} reqs)
+                          ~{k.loadSharePercent || 0}% ({k.routedRequestsToday || 0} reqs)
                         </span>
                       </div>
                       <div className="h-1.5 w-full rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
                         <div
-                          style={{ width: `${k.loadSharePercent || 33}%` }}
+                          style={{ width: `${k.loadSharePercent || 0}%` }}
                           className="h-full rounded-full bg-gradient-to-r from-blue-500 to-indigo-500"
                         />
+                      </div>
+                      <div className="flex justify-between items-center text-[10px] text-slate-500 dark:text-slate-400 pt-0.5 font-mono">
+                        <span>Tokens Today: {(k.tokensToday || 0).toLocaleString()}</span>
+                        <span>{k.avgLatencyMs ? `Latency: ${k.avgLatencyMs}ms` : ''}</span>
                       </div>
                     </div>
 
                     {hasPing && (
                       <p className="text-[10px] text-slate-500 font-mono">
                         Probe: {diagnostic.message}
+                      </p>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+
+          {/* Self-Healing Router & Model Fleet Health Section */}
+          <div className="flex flex-col gap-4 rounded-3xl border border-slate-200/80 dark:border-slate-800 bg-white/80 dark:bg-slate-900/60 p-6 shadow-xs backdrop-blur-md">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                    <Zap className="h-4 w-4 text-emerald-500" />
+                    <span>Automated Fleet Health Probe & Self-Healing Router</span>
+                  </h2>
+                  <span className="rounded-full bg-emerald-100 dark:bg-emerald-950/60 px-2 py-0.5 text-[10px] font-bold text-emerald-700 dark:text-emerald-400">
+                    Live Auto-Failover
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  Benchmarks Google Gemini models in real time, isolates 503 high-traffic spikes and 429 rate limits, and prioritizes the fastest model.
+                </p>
+              </div>
+
+              <button
+                onClick={handleProbeFleet}
+                disabled={probingFleet}
+                className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-2 text-xs font-bold text-white shadow-md shadow-emerald-500/20 hover:opacity-90 active:scale-95 disabled:opacity-50 transition-all cursor-pointer"
+              >
+                {probingFleet ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-4 w-4" />
+                )}
+                <span>Probe Fleet Latency</span>
+              </button>
+            </div>
+
+            {/* Active Optimal Routing Banner */}
+            <div className="flex items-center justify-between p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-900 dark:text-emerald-200">
+              <div className="flex items-center gap-3">
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-bold">
+                  #1
+                </div>
+                <div>
+                  <div className="text-xs font-bold flex items-center gap-2">
+                    <span>Active Optimal Primary Model:</span>
+                    <code className="bg-emerald-200/50 dark:bg-emerald-900/60 px-2 py-0.5 rounded font-mono font-bold">
+                      {stats.fleetHealth?.optimalModel || 'gemini-2.5-flash'}
+                    </code>
+                  </div>
+                  <p className="text-[11px] text-emerald-700 dark:text-emerald-300">
+                    Self-healing router dispatches jobs here first. If Google reports high traffic (503) or rate limits (429), failover executes instantly in 0ms with zero user disruption.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Models Health Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+              {(stats.fleetHealth?.models || []).map((m) => {
+                const isOptimal = stats.fleetHealth?.optimalModel === m.model
+                const is503 = m.status === 'HIGH_DEMAND_503'
+                const is429 = m.status === 'RATE_LIMITED_429'
+                const isHealthy = m.status === 'HEALTHY'
+
+                return (
+                  <div
+                    key={m.model}
+                    className={`flex flex-col gap-2.5 rounded-2xl border p-4 transition-all ${
+                      is503
+                        ? 'border-red-300 dark:border-red-900/60 bg-red-50/50 dark:bg-red-950/20'
+                        : is429
+                          ? 'border-amber-300 dark:border-amber-900/60 bg-amber-50/50 dark:bg-amber-950/20'
+                          : isOptimal
+                            ? 'border-emerald-500/50 dark:border-emerald-500/40 bg-emerald-50/30 dark:bg-emerald-950/20 shadow-xs ring-1 ring-emerald-500/20'
+                            : 'border-slate-200/80 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/30'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono text-xs font-bold text-slate-900 dark:text-white truncate" title={m.model}>
+                        {m.model}
+                      </span>
+                      {isOptimal && (
+                        <span className="rounded-full bg-emerald-500 text-white px-2 py-0.5 text-[9px] font-bold">
+                          PRIMARY
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-slate-500 text-[11px]">Status:</span>
+                      <span
+                        className={`font-bold px-2 py-0.5 rounded-full text-[10px] ${
+                          isHealthy
+                            ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400'
+                            : is503
+                              ? 'bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300 animate-pulse'
+                              : is429
+                                ? 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300'
+                                : 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-400'
+                        }`}
+                      >
+                        {isHealthy ? 'Healthy' : is503 ? '503 High Traffic' : is429 ? '429 Rate Limit' : 'Degraded'}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between text-xs border-t border-slate-200/60 dark:border-slate-800/60 pt-2">
+                      <span className="text-slate-500 text-[11px]">Rolling Latency:</span>
+                      <span className="font-mono font-bold text-slate-900 dark:text-white">
+                        {m.rollingLatencyMs ? `${m.rollingLatencyMs}ms` : '–'}
+                      </span>
+                    </div>
+
+                    {m.lastError && (
+                      <p className="text-[10px] text-red-600 dark:text-red-400 font-mono truncate" title={m.lastError}>
+                        {m.lastError}
                       </p>
                     )}
                   </div>
@@ -1560,7 +1723,7 @@ export default function AdminDashboardPage() {
                 <span>Model Volume & Usage Metrics</span>
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Requests handled, tokens consumed, and audio duration by each AI model in active window.
+                Requests handled, tokens consumed, latency, and audio duration by each AI model in active window.
               </p>
             </div>
 
@@ -1571,6 +1734,7 @@ export default function AdminDashboardPage() {
                     <th className="pb-3 pr-4">Model Identifier</th>
                     <th className="pb-3 px-4">Requests</th>
                     <th className="pb-3 px-4">Audio Duration</th>
+                    <th className="pb-3 px-4">Avg Latency</th>
                     <th className="pb-3 pl-4 text-right">Tokens Consumed</th>
                   </tr>
                 </thead>
@@ -1585,6 +1749,9 @@ export default function AdminDashboardPage() {
                       </td>
                       <td className="py-3 px-4 text-slate-600 dark:text-slate-300 font-mono">
                         {m.durationMinutes} mins
+                      </td>
+                      <td className="py-3 px-4 text-slate-600 dark:text-slate-300 font-mono">
+                        {m.avgLatencyMs ? `${m.avgLatencyMs}ms` : '–'}
                       </td>
                       <td className="py-3 pl-4 text-right font-mono font-bold text-blue-600 dark:text-blue-400">
                         {m.tokens.toLocaleString()}
@@ -2243,7 +2410,7 @@ export default function AdminDashboardPage() {
                         🔄 Run Daily Report
                       </span>
                       <span className="text-[10px] text-slate-400">
-                        On-demand trigger for the 5:30 PM performance digest
+                        On-demand trigger for the 6:10 PM performance digest
                       </span>
                     </div>
 
@@ -2267,7 +2434,7 @@ export default function AdminDashboardPage() {
                       className="flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors cursor-pointer"
                     >
                       {dispatchingDigest ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <BarChart3 className="h-3.5 w-3.5" />}
-                      <span>Dispatch 5:30 PM Digest</span>
+                      <span>Dispatch 6:10 PM Digest</span>
                     </button>
 
                     <button

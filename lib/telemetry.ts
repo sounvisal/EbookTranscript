@@ -9,6 +9,8 @@ export type TrackUsageParams = {
   durationSeconds?: number | null
   wordCount?: number | null
   status?: 'success' | 'error'
+  keyIndex?: number | null
+  latencyMs?: number | null
 }
 
 export type TrackErrorParams = {
@@ -61,7 +63,9 @@ export async function trackUsage(params: TrackUsageParams) {
         estimatedInputTokens: inputTokens,
         estimatedOutputTokens: outputTokens,
         totalTokens,
-        status: params.status || 'success'
+        status: params.status || 'success',
+        keyIndex: typeof params.keyIndex === 'number' ? params.keyIndex : 0,
+        latencyMs: typeof params.latencyMs === 'number' ? params.latencyMs : null
       }
     })
   } catch (error) {

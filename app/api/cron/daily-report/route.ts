@@ -81,7 +81,7 @@ async function handleDailyReport(req: Request) {
 
   return NextResponse.json({
     success: true,
-    message: '5:30 PM Daily Usage & Performance Report dispatched to Telegram successfully.',
+    message: '6:10 PM Daily Usage & Performance Report dispatched to Telegram successfully.',
     stats: result.stats
   })
 }

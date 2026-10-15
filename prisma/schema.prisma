@@ -101,11 +101,14 @@ model UsageMetric {
   estimatedOutputTokens Int   @default(0)
   totalTokens        Int      @default(0)
   status             String   @default("success") // "success" | "error"
+  keyIndex           Int?     @default(0)
+  latencyMs          Int?
   createdAt          DateTime @default(now())
 
   @@index([createdAt])
   @@index([model])
   @@index([status])
+  @@index([keyIndex])
 }
 
 /// Error report log for admins to diagnose and fix issues for users.
