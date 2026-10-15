@@ -98,7 +98,7 @@ export function getConfiguredKeys(): string[] {
  * - If a model starts returning 503, it is quarantined for 10 minutes so
  *   no user requests are slowed down by retry delays.
  */
-export function getOptimalModelOrder(): string[] {
+export function getOptimalModelOrder(durationSeconds?: number): string[] {
   const allModels = getConfiguredModels()
   const now = Date.now()
 
@@ -125,10 +125,25 @@ export function getOptimalModelOrder(): string[] {
   // Sort models with recorded history strictly by rolling latency of the last 3 requests (fastest first)
   healthyWithHistory.sort((a, b) => a.rollingLatency - b.rollingLatency)
 
+  const unquarantined = [
+    ...healthyWithHistory.map((m) => m.model),
+    ...healthyNoHistory
+  ]
+
+  // For long recordings (>= 90s), prioritize models with superior sustained long-audio attention
+  // (gemini-3.6-flash, gemini-flash-latest) ahead of lightweight sub-minute models to prevent premature cutoff
+  if (durationSeconds && durationSeconds >= 90) {
+    const longContextModels = ['gemini-3.6-flash', 'gemini-flash-latest']
+    unquarantined.sort((a, b) => {
+      const aIsLong = longContextModels.includes(a) ? 1 : 0
+      const bIsLong = longContextModels.includes(b) ? 1 : 0
+      return bIsLong - aIsLong
+    })
+  }
+
   // Quarantined models (503 / 429) are deferred to the end of the chain
   return [
-    ...healthyWithHistory.map((m) => m.model),
-    ...healthyNoHistory,
+    ...unquarantined,
     ...quarantinedModels.map((m) => m.model)
   ]
 }

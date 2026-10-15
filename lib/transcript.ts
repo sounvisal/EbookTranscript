@@ -712,3 +712,160 @@ export function formatSrtTimestamp(seconds: number) {
 export function formatVttTimestamp(seconds: number) {
   return formatSrtTimestamp(seconds).replace(',', '.')
 }
+
+export type IncompletenessReport = {
+  isIncomplete: boolean
+  reason?: string
+  coverageRatio?: number
+  remainingSeconds?: number
+  wordCount?: number
+  maxSegmentEnd?: number
+}
+
+/**
+ * Validates whether a transcript is complete or was truncated/cut-off prematurely.
+ * Detects:
+ * - Countdown / sequential list truncation (e.g. #9 down to #2, missing final #1 / conclusion)
+ * - Cliffhanger / mid-thought trailing punctuation (..., -, comma) or trailing conjunctions/prepositions
+ * - Duration & coverage gaps (e.g. >18s missing on >=120s media, or severe <50% coverage)
+ * - Abnormally low word count hooks (e.g. 1 introductory hook sentence on long media)
+ */
+export function checkTranscriptIncompleteness(
+  text: string,
+  segments?: TranscriptSegment[] | null,
+  totalDuration: number = 0
+): IncompletenessReport {
+  if (!text || !text.trim()) {
+    return { isIncomplete: true, reason: 'Empty transcript text' }
+  }
+
+  const cleanText = text.trim()
+  if (cleanText === '[No spoken dialogue detected in media]') {
+    return { isIncomplete: false }
+  }
+
+  const words = cleanText.split(/\s+/).filter(Boolean)
+  const wordCount = words.length
+
+  const maxSegmentEnd = segments && segments.length > 0
+    ? segments.reduce((max, s) => {
+        const end = typeof s.end === 'number' && Number.isFinite(s.end) ? s.end : (typeof s.start === 'number' && Number.isFinite(s.start) ? s.start : 0)
+        return Math.max(max, end)
+      }, 0)
+    : Math.max(1, Math.round(wordCount / 2.5))
+
+  const coverageRatio = totalDuration > 0 ? (maxSegmentEnd / totalDuration) : 1
+  const remainingSeconds = totalDuration > 0 ? Math.max(0, totalDuration - maxSegmentEnd) : 0
+
+  // 1. Countdown / List Incompleteness Check (English & Khmer):
+  // Detects if speech has a countdown (e.g. "Number 9", "Number 8" ... "Number 2" or "លេខ ៩" ... "លេខ ២")
+  // but stops before reaching "Number 1" / "Number one" / "#1" / "លេខ ១" / "Top spot".
+  const hasCountdownStart =
+    /\b(?:number|no\.?|#)\s*(?:10|ten|9|nine|8|eight|7|seven|6|six|5|five|4|four|3|three|2|two)\b/i.test(cleanText) ||
+    /(?:លេខ|ចំណាត់ថ្នាក់(?:លេខ)?)\s*(?:១០|៩|៨|៧|៦|៥|៤|៣|២|10|9|8|7|6|5|4|3|2)/.test(cleanText)
+
+  const hasCountdownEnd =
+    /\b(?:number|no\.?|#)\s*(?:1|one)\b/i.test(cleanText) ||
+    /\b(?:top spot|first place|finally|grand prize|#\s*1)\b/i.test(cleanText) ||
+    /(?:លេខ|ចំណាត់ថ្នាក់(?:លេខ)?)\s*(?:១|1)/.test(cleanText) ||
+    /(?:កំពូល|ជ័យលាភី|ចុងក្រោយ|ចំណាត់ថ្នាក់កំពូល)/.test(cleanText)
+
+  if (hasCountdownStart && !hasCountdownEnd && (totalDuration >= 25 || remainingSeconds > 8)) {
+    return {
+      isIncomplete: true,
+      reason: `Countdown cut off before Number 1 (detected countdown entries but missing final #1 item; ~${Math.round(remainingSeconds)}s uncaptured)`,
+      coverageRatio,
+      remainingSeconds,
+      wordCount,
+      maxSegmentEnd
+    }
+  }
+
+  // 2. Dangling Mid-Sentence Cliffhanger Check:
+  const endsWithPunctuationCliffhanger = /[,\-—–]\s*$/s.test(cleanText) || /\.{3,}\s*$/s.test(cleanText) || /…\s*$/s.test(cleanText)
+  const endsWithDanglingWord = /\b(?:the|a|an|and|or|but|that|with|in|to|when|which|because|after|before|during|while|into|onto|of|for|at|by|from|as|so|than|about)\s*$/i.test(cleanText.replace(/[.!?។៕]+$/, ''))
+
+  if ((endsWithPunctuationCliffhanger || endsWithDanglingWord) && (remainingSeconds > 4 || totalDuration === 0)) {
+    const lastWords = words.slice(-4).join(' ')
+    return {
+      isIncomplete: true,
+      reason: `Sentence cut off mid-thought at ending ("...${lastWords}") with ~${Math.round(remainingSeconds)}s remaining`,
+      coverageRatio,
+      remainingSeconds,
+      wordCount,
+      maxSegmentEnd
+    }
+  }
+
+  // 3. Duration & Audio Coverage Check:
+  if (totalDuration >= 20) {
+    // Severe cut-off: less than 50% coverage on any video >= 20s
+    if (coverageRatio < 0.50) {
+      return {
+        isIncomplete: true,
+        reason: `Severe cut-off: captured only ${(coverageRatio * 100).toFixed(0)}% of duration (${Math.round(maxSegmentEnd)}s / ${Math.round(totalDuration)}s)`,
+        coverageRatio,
+        remainingSeconds,
+        wordCount,
+        maxSegmentEnd
+      }
+    }
+
+    // Long media (>= 120s): more than 18 seconds missing at the end and < 92% coverage
+    if (totalDuration >= 120 && remainingSeconds > 18 && coverageRatio < 0.92) {
+      return {
+        isIncomplete: true,
+        reason: `Missing ending speech (~${Math.round(remainingSeconds)}s uncaptured at end of ${Math.round(totalDuration)}s video, coverage ${(coverageRatio * 100).toFixed(0)}%)`,
+        coverageRatio,
+        remainingSeconds,
+        wordCount,
+        maxSegmentEnd
+      }
+    }
+
+    // Medium-long media (60s - 120s): more than 14 seconds missing at the end and < 85% coverage
+    if (totalDuration >= 60 && totalDuration < 120 && remainingSeconds > 14 && coverageRatio < 0.85) {
+      return {
+        isIncomplete: true,
+        reason: `Premature stop: ~${Math.round(remainingSeconds)}s uncaptured at end of ${Math.round(totalDuration)}s media`,
+        coverageRatio,
+        remainingSeconds,
+        wordCount,
+        maxSegmentEnd
+      }
+    }
+
+    // Short-medium media (25s - 60s): more than 10 seconds missing at the end and < 80% coverage
+    if (totalDuration >= 25 && totalDuration < 60 && remainingSeconds > 10 && coverageRatio < 0.80) {
+      return {
+        isIncomplete: true,
+        reason: `Premature stop: ~${Math.round(remainingSeconds)}s uncaptured at end of ${Math.round(totalDuration)}s media`,
+        coverageRatio,
+        remainingSeconds,
+        wordCount,
+        maxSegmentEnd
+      }
+    }
+
+    // Abnormally low word count with deficient coverage (e.g. stopped on opening hook)
+    if (coverageRatio < 0.65 && ((totalDuration >= 25 && wordCount < 16) || (totalDuration >= 60 && wordCount < 30))) {
+      return {
+        isIncomplete: true,
+        reason: `Abnormally low word count and coverage (${wordCount} words, ${(coverageRatio * 100).toFixed(0)}% coverage for ${Math.round(totalDuration)}s audio)`,
+        coverageRatio,
+        remainingSeconds,
+        wordCount,
+        maxSegmentEnd
+      }
+    }
+  }
+
+  return {
+    isIncomplete: false,
+    coverageRatio,
+    remainingSeconds,
+    wordCount,
+    maxSegmentEnd
+  }
+}
+

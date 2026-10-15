@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto'
+import { checkTranscriptIncompleteness } from './transcript'
 
 function getGeminiApiHost(): string {
   const raw = process.env.GEMINI_API_HOST || 'generativelanguage.googleapis.com'
@@ -447,6 +448,7 @@ export async function transcribeAudioBufferWithGemini(
     '1. AUTOMATIC LANGUAGE DETECTION: Detect the spoken language. If the audio is in Khmer, set language to "Khmer". If in English, set language to "English". If bilingual mixed speech, set language to "Khmer / English".',
     '2. VERBATIM SPEECH ACCURACY: Transcribe every spoken word accurately in the native script. For Khmer speech, output clean Khmer script (អក្សរខ្មែរ) with proper spacing and spelling. For English speech, output English.',
     '3. HIGH-SENSITIVITY: Transcribe verbatim even with background music, sound effects, noise, quiet speech, singing, or fast speaking.',
+    '4. COMPLETE RECORDING CONTINUITY & COMPILATIONS: Transcribe the entire duration verbatim from start to finish without stopping. For compilations or countdowns (e.g. "Number 10" down to "Number 1" or Khmer countdowns), you MUST transcribe all entries completely all the way through the final #1 item and conclusion without stopping at intermediate pauses.',
     'Format strictly as JSON with this exact shape:',
     '{"language":"Khmer","text":"Full continuous transcript text here"}',
     'Only return empty text if the audio is 100% complete dead silence or pure instrumental music with zero human words.'
@@ -522,6 +524,13 @@ export async function transcribeAudioBufferWithGemini(
           language = parsed.language || 'auto'
         } catch {
           text = rawResponseText.trim()
+        }
+
+        // Validate transcript completeness before accepting
+        const incompleteness = checkTranscriptIncompleteness(text, null, 0)
+        if (incompleteness.isIncomplete && models.indexOf(modelName) < models.length - 1) {
+          console.warn(`[Gemini Transcribe] Model ${modelName} returned incomplete transcript (${incompleteness.reason}); failing over to next model...`)
+          continue
         }
 
         return { text, language, model: modelName }

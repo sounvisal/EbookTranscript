@@ -13,6 +13,7 @@ import {
   uploadGeminiFile
 } from '@/lib/gemini'
 import {
+  checkTranscriptIncompleteness,
   extractTimestampedSegments,
   getPlainTranscriptText,
   normalizeTranscriptSegments,
@@ -354,8 +355,9 @@ const BASE_TRANSCRIPTION_PROMPT = [
   '2. VERBATIM SPEECH ACCURACY: Transcribe every spoken word accurately in the native script. For Khmer speech, output clean Khmer script (អក្សរខ្មែរ) with proper spacing and spelling. For English speech, output English.',
   '3. HIGH-SENSITIVITY ACOUSTIC EXTRACTION: Listen with maximum sensitivity to all audio channels. Even if the voice is quiet, muffled, whispered, speaking fast, singing, chanting, talking over an intro, or partially masked by background music, sound effects, beats, or ambient noise, you MUST detect and transcribe all spoken words verbatim.',
   '4. COMPLETE RECORDING CONTINUITY & VIRAL VIDEO HOOKS: Transcribe the entire duration verbatim from start to finish without stopping. Viral social media videos (TikTok, Snaptik, Facebook Reels, Shorts) frequently begin with a 1-sentence opening hook, followed by a dramatic sound effect, laugh track, musical break, or scene transition, after which the narration continues. You MUST NOT STOP after the opening hook sentence. Keep listening past all pauses, music stingers, and sound effects all the way to the absolute end of the media.',
-  '5. NUMERIC SECONDS TIMESTAMPS: Every start and end timestamp in "segments" must be a raw number in seconds (e.g. 0.0, 4.5, 38.2, 145.6). Do NOT use formatted colon strings like "2:30".',
-  '6. QUOTATION MARKS: Inside transcript text strings, use single quotes (\'quote\') or properly escaped quotes (\\"quote\\") for spoken dialogue so that JSON formatting is strictly valid.',
+  '5. COMPILATIONS, COUNTDOWNS & MULTI-SCENE CONTINUITY: For countdowns and list videos (e.g. "Number 10" or "Number 9" down to "Number 1"), you MUST transcribe every single entry all the way through the final #1 reveal and outro conclusion. Never stop early at an intermediate number like #2 or #3. There are often 5-15 second transition pauses, action clips, or music between list numbers; continue listening past any pauses and transcribe all speech to the absolute end of the media.',
+  '6. NUMERIC SECONDS TIMESTAMPS: Every start and end timestamp in "segments" must be a raw number in seconds (e.g. 0.0, 4.5, 38.2, 145.6). Do NOT use formatted colon strings like "2:30".',
+  '7. QUOTATION MARKS: Inside transcript text strings, use single quotes (\'quote\') or properly escaped quotes (\\"quote\\") for spoken dialogue so that JSON formatting is strictly valid.',
   'Format strictly as JSON with this exact shape:',
   '{"language":"Khmer","text":"Full continuous transcript text here","segments":[{"start":0.0,"end":4.5,"text":"phrase"}]}',
   'Ensure "text" contains the complete continuous transcript, and "segments" contains all timestamped phrases.',
@@ -385,29 +387,30 @@ function buildTranscriptionPrompt(options?: TranscribeOptions): string {
     '2. VERBATIM SPEECH ACCURACY: Transcribe every spoken word accurately in the native script. For Khmer speech, output clean Khmer script (អក្សរខ្មែរ) with proper spacing and spelling. For English speech, output English.',
     '3. HIGH-SENSITIVITY ACOUSTIC EXTRACTION: Listen with maximum sensitivity to all audio channels. Even if the voice is quiet, muffled, whispered, speaking fast, singing, chanting, talking over an intro, or partially masked by background music, sound effects, beats, or ambient noise, you MUST detect and transcribe all spoken words verbatim.',
     '4. COMPLETE RECORDING CONTINUITY & VIRAL VIDEO HOOKS: Transcribe the entire duration verbatim from start to finish without stopping. Viral social media videos (TikTok, Snaptik, Facebook Reels, Shorts) frequently begin with a 1-sentence opening hook, followed by a dramatic sound effect, laugh track, musical break, or scene transition, after which the narration continues. You MUST NOT STOP after the opening hook sentence. Keep listening past all pauses, music stingers, and sound effects all the way to the absolute end of the media.',
-    '5. NUMERIC SECONDS TIMESTAMPS: Every start and end timestamp in "segments" must be a raw number in seconds (e.g. 0.0, 4.5, 38.2, 145.6). Do NOT use formatted colon strings like "2:30".'
+    '5. COMPILATIONS, COUNTDOWNS & MULTI-SCENE CONTINUITY: For countdowns and list videos (e.g. "Number 10" or "Number 9" down to "Number 1"), you MUST transcribe every single entry all the way through the final #1 reveal and outro conclusion. Never stop early at an intermediate number like #2 or #3. There are often 5-15 second transition pauses, action clips, or music between list numbers; continue listening past any pauses and transcribe all speech to the absolute end of the media.',
+    '6. NUMERIC SECONDS TIMESTAMPS: Every start and end timestamp in "segments" must be a raw number in seconds (e.g. 0.0, 4.5, 38.2, 145.6). Do NOT use formatted colon strings like "2:30".'
   ]
 
   if (diarization) {
     promptParts.push(
-      '5. SPEAKER DIARIZATION: Identify and differentiate distinct speakers across the audio. Prefix each speaker turn or dialogue with speaker labels (e.g., "Speaker 1: ...", "Speaker 2: ..."). Maintain consistent speaker tags across consecutive segments.'
+      '7. SPEAKER DIARIZATION: Identify and differentiate distinct speakers across the audio. Prefix each speaker turn or dialogue with speaker labels (e.g., "Speaker 1: ...", "Speaker 2: ..."). Maintain consistent speaker tags across consecutive segments.'
     )
   }
 
   if (customVocab.length > 0) {
     promptParts.push(
-      `6. DOMAIN VOCABULARY & KEYWORD HINTS: Pay special attention to the following specific proper nouns, technical terms, and keywords: ${customVocab.map((v) => `"${v}"`).join(', ')}. Whenever words sounding like or referring to these terms are spoken, transcribe them with these exact spellings.`
+      `8. DOMAIN VOCABULARY & KEYWORD HINTS: Pay special attention to the following specific proper nouns, technical terms, and keywords: ${customVocab.map((v) => `"${v}"`).join(', ')}. Whenever words sounding like or referring to these terms are spoken, transcribe them with these exact spellings.`
     )
   }
 
   if (options.highSensitivity) {
     promptParts.push(
-      '7. MAXIMUM AUDIO SENSITIVITY ACTIVE: The recording contains quiet dialogue, whispering, lyrics, or speech over background music/beats. Boost vocal channel detection and transcribe all audible utterances verbatim without omitting any words.'
+      '9. MAXIMUM AUDIO SENSITIVITY ACTIVE: The recording contains quiet dialogue, whispering, lyrics, or speech over background music/beats. Boost vocal channel detection and transcribe all audible utterances verbatim without omitting any words.'
     )
   }
 
   promptParts.push(
-    '8. QUOTATION MARKS: Inside transcript text strings, use single quotes (\'quote\') or properly escaped quotes (\\"quote\\") for spoken dialogue so that JSON formatting is strictly valid.',
+    '10. QUOTATION MARKS: Inside transcript text strings, use single quotes (\'quote\') or properly escaped quotes (\\"quote\\") for spoken dialogue so that JSON formatting is strictly valid.',
     'Format strictly as JSON with this exact shape:',
     '{"language":"Khmer","text":"Full continuous transcript text here","segments":[{"start":0.0,"end":4.5,"text":"phrase"}]}',
     'Ensure "text" contains the complete continuous transcript, and "segments" contains all timestamped phrases.',
@@ -461,8 +464,8 @@ function getGeminiApiKeys(): string[] {
 // Self-Healing Fleet Model Order:
 // Dynamically orders models so that fast, healthy models are prioritized.
 // Quarantines models experiencing 503 high demand or 429 rate limits until their cooldown passes.
-function getGeminiModels(): string[] {
-  return getOptimalModelOrder()
+function getGeminiModels(durationSeconds?: number): string[] {
+  return getOptimalModelOrder(durationSeconds)
 }
 
 function buildMockResult(): TranscriptResultPayload {
@@ -520,6 +523,13 @@ async function readTranscriptCache(audioHash: string) {
 }
 
 async function writeTranscriptCache(audioHash: string, result: TranscriptResultPayload) {
+  // Never write incomplete or prematurely cut-off transcripts to cache!
+  const incompleteness = checkTranscriptIncompleteness(result.text, result.segments, result.duration)
+  if (incompleteness.isIncomplete) {
+    console.warn(`[TranscriptCache] Skipping cache for incomplete transcript: ${incompleteness.reason}`)
+    return
+  }
+
   try {
     await prisma.transcriptCache.upsert({
       where: { audioHash },
@@ -647,15 +657,18 @@ async function transcribeWithKey(
 
     emit({ type: 'status', phase: 'processing', duration: totalDuration })
 
+    // For long media (>= 90s), re-order models using duration-aware fleet order so long-context models lead
+    let activeModels = totalDuration >= 90 ? getGeminiModels(totalDuration) : models
+
     let lastProgress = 0
     let lastError: unknown
 
-    for (let modelIndex = 0; modelIndex < models.length; modelIndex += 1) {
-      const modelName = models[modelIndex]
+    for (let modelIndex = 0; modelIndex < activeModels.length; modelIndex += 1) {
+      const modelName = activeModels[modelIndex]
       const modelCallStart = Date.now()
       const roundedDuration = Math.round(totalDuration)
       const effectivePrompt = totalDuration > 0
-        ? `${promptText} CRITICAL FULL-DURATION REQUIREMENT: Total recording duration is exactly ${roundedDuration} seconds. Spoken dialogue occurs across the full recording. Viral social media clips (TikTok, Facebook, Reels) frequently feature dramatic mid-video sound effects (crashes, laughter, music stingers) and action pauses between scenes. You MUST continue listening past any mid-video sound effects or pauses all the way to ${roundedDuration}s. Dialogue resumes after scene transitions. You MUST transcribe all spoken dialogue from 0.0s all the way to ${roundedDuration}s without stopping. Do NOT stop after introductory phrases, sound effects, or musical pauses.`
+        ? `${promptText} CRITICAL FULL-DURATION REQUIREMENT: Total recording duration is exactly ${roundedDuration} seconds. Spoken dialogue occurs across the full recording. Viral social media clips (TikTok, Facebook, Reels) frequently feature dramatic mid-video sound effects (crashes, laughter, music stingers) and action pauses between scenes. You MUST continue listening past any mid-video sound effects or pauses all the way to ${roundedDuration}s. For compilations and countdowns (e.g., Number 10 down to Number 1), you MUST transcribe all entries completely all the way through the final #1 item and conclusion. Dialogue resumes after scene transitions. You MUST transcribe all spoken dialogue from 0.0s all the way to ${roundedDuration}s without stopping. Do NOT stop after introductory phrases, sound effects, or musical pauses.`
         : promptText
 
       try {
@@ -711,10 +724,15 @@ async function transcribeWithKey(
             message: `Continuing transcription past pause (${Math.round(currentMaxEnd)}s / ${roundedTotal}s)...`
           })
 
+          const isCountdownInProgress =
+            /\b(?:number|no\.?|#)\s*(?:10|ten|9|nine|8|eight|7|seven|6|six|5|five|4|four|3|three|2|two)\b/i.test(accumulatedSegments.map((s) => s.text).join(' ')) ||
+            /(?:លេខ|ចំណាត់ថ្នាក់(?:លេខ)?)\s*(?:១០|៩|៨|៧|៦|៥|៤|៣|២|10|9|8|7|6|5|4|3|2)/.test(accumulatedSegments.map((s) => s.text).join(' '))
+
           const contPrompt = [
             `CRITICAL RECORDING CONTINUATION: You are continuing the verbatim transcription of this media recording (total duration: ${roundedTotal} seconds).`,
             `Speech from 0:00 up to ${startOffset} seconds has already been transcribed.`,
             lastWords ? `The transcribed speech so far ended around ${startOffset}s with: "...${lastWords}".` : '',
+            isCountdownInProgress ? `A countdown list is in progress! The final reveal (#1 / Number One / លេខ ១) and concluding dialogue occur between ${startOffset}s and ${roundedTotal}s. Transcribe all remaining entries and conclusion without stopping.` : '',
             `Viral social media clips (TikTok, Facebook, Reels) frequently feature dramatic mid-video sound effects (crashes, laughter, music stingers) and action pauses between scenes. You MUST continue listening past any mid-video sound effects or pauses all the way to ${roundedTotal}s. Dialogue resumes after scene transitions.`,
             `Now listen carefully to all audio from ${startOffset}s to the absolute end (${roundedTotal}s) and transcribe ALL remaining spoken dialogue verbatim into the native script.`,
             'Do NOT stop at music breaks, sound effects, or pauses. Transcribe every remaining word until the end.',
@@ -771,7 +789,7 @@ async function transcribeWithKey(
           // If continuationPass yields no new segments on current model,
           // automatically retry the continuation pass with another model in the fleet with maximum acoustic sensitivity
           // instead of breaking prematurely.
-          const fallbackModel = models.find((m) => m !== modelName) || (modelName === 'gemini-2.5-flash' ? 'gemini-3.5-flash-lite' : 'gemini-2.5-flash')
+          const fallbackModel = activeModels.find((m) => m !== modelName) || (modelName === 'gemini-2.5-flash' ? 'gemini-3.6-flash' : 'gemini-2.5-flash')
           if (newSegments.length === 0 && !contParsedText.trim()) {
             console.warn(
               `Continuation pass ${continuationPass} on ${modelName} yielded no new segments; retrying with ${fallbackModel} with maximum acoustic sensitivity...`
@@ -853,6 +871,16 @@ async function transcribeWithKey(
             currentMaxEnd = totalDuration
             break
           } else {
+            // Gap jumping: if speech paused for an action sequence or sound effect but significant duration remains
+            const remainingGap = totalDuration - currentMaxEnd
+            if (remainingGap > 15 && continuationPass < MAX_CONTINUATION_PASSES) {
+              const jumpOffset = Math.min(totalDuration - 5, currentMaxEnd + 6)
+              console.warn(
+                `Continuation at ${Math.round(currentMaxEnd)}s detected no immediate speech; advancing past scene transition to ${Math.round(jumpOffset)}s (${Math.round(remainingGap)}s remaining)...`
+              )
+              currentMaxEnd = jumpOffset
+              continue
+            }
             break
           }
         }
@@ -872,27 +900,27 @@ async function transcribeWithKey(
           : (maxSegmentEnd > 0 ? Math.round(maxSegmentEnd * 10) / 10 : estimatedFromWords)
 
         // DETECT TRUNCATED / PREMATURE CUT-OFF TRANSCRIPT:
-        // If a video has substantial duration (>= 20s) but the transcript only captured a tiny fraction (< 35%
-        // of total duration or fewer than 18 words for videos >= 30s), it stopped prematurely on an opening hook/music stinger.
-        // Auto-failover to the next fleet model to ensure complete transcription.
-        const coverageRatio = totalDuration > 0 ? (maxSegmentEnd / totalDuration) : 1
-        const isIncompleteTranscript =
-          totalDuration >= 20 &&
-          (coverageRatio < 0.35 || (wordCount < 18 && totalDuration >= 30)) &&
-          modelIndex < models.length - 1
+        // Use comprehensive multi-check detection engine: countdowns, cliffhangers, duration coverage & word density
+        const incompleteness = checkTranscriptIncompleteness(finalText, finalSegments, totalDuration)
 
-        if (isIncompleteTranscript) {
-          const nextModel = models[modelIndex + 1]
+        if (incompleteness.isIncomplete && modelIndex < activeModels.length - 1) {
+          const nextModel = activeModels[modelIndex + 1]
           console.warn(
-            `Model "${modelName}" produced truncated transcript (${wordCount} words, coverage ${(coverageRatio * 100).toFixed(0)}% of ${totalDuration}s). Auto-failing over to "${nextModel}"...`
+            `Model "${modelName}" produced incomplete transcript (${incompleteness.reason}). Auto-failing over to "${nextModel}"...`
           )
-          promptText = `${promptText} CRITICAL FULL DURATION COVERAGE: The previous attempt stopped prematurely after only ${wordCount} words at ${Math.round(maxSegmentEnd)}s of ${Math.round(totalDuration)}s total. Social media videos frequently pause for music stingers or sound effects before narration resumes. You MUST listen to the full recording up to ${Math.round(totalDuration)}s and transcribe all speech.`
+          recordModelFailure({
+            model: modelName,
+            error: new Error(`Incomplete transcript: ${incompleteness.reason}`),
+            failoverModel: nextModel,
+            skipTelegramAlert: true
+          })
+          promptText = `${promptText} CRITICAL FULL DURATION COMPLETION: The previous model attempt stopped prematurely (${incompleteness.reason}). You MUST listen all the way to ${Math.round(totalDuration)}s and capture the complete dialogue, every countdown item down to Number 1, and the conclusion.`
           continue
         }
 
         if (!finalText && (!finalSegments || finalSegments.length === 0)) {
-          if (modelIndex < models.length - 1) {
-            console.warn(`Model "${modelName}" detected no spoken dialogue; trying next fallback model (${models[modelIndex + 1]}) with acoustic sensitivity override...`)
+          if (modelIndex < activeModels.length - 1) {
+            console.warn(`Model "${modelName}" detected no spoken dialogue; trying next fallback model (${activeModels[modelIndex + 1]}) with acoustic sensitivity override...`)
             promptText = `${promptText} ACOUSTIC SENSITIVITY OVERRIDE: Human speech, dialogue, lyrics, or voiceover is present in this media. Isolate voice from background music, instruments, beats, or ambient noise, and transcribe all spoken words verbatim into the native script.`
             continue
           }
@@ -987,7 +1015,7 @@ async function runTranscriptionPipeline(
 
   emit({ type: 'status', phase: 'uploading' })
   const mediaInput = await getMediaInputFromRequest(req)
-  const models = getGeminiModels()
+  const models = getGeminiModels(mediaInput.durationSeconds)
   const promptText = buildTranscriptionPrompt(mediaInput.options)
 
   // Fast direct path for files uploaded directly from browser to Gemini Files API
