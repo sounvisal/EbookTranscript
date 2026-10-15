@@ -30,8 +30,8 @@ export const maxDuration = 300
 const MAX_LOCAL_FILE_BYTES = MAX_MEDIA_UPLOAD_BYTES
 // Flash-Lite has the highest free-tier limits (15 RPM / 1000 RPD vs Flash's
 // 10 RPM / 250 RPD), which is why it's the default. Override with GEMINI_MODEL.
-const MODEL_NAME = process.env.GEMINI_MODEL || 'gemini-3.6-flash'
-const DEFAULT_FALLBACK_MODELS = ['gemini-3.6-flash', 'gemini-flash-latest', 'gemini-3.5-flash-lite', 'gemini-2.5-flash']
+const MODEL_NAME = process.env.GEMINI_MODEL || 'gemini-2.5-flash'
+const DEFAULT_FALLBACK_MODELS = ['gemini-2.5-flash', 'gemini-3.6-flash', 'gemini-flash-latest', 'gemini-3.5-flash-lite']
 
 // Audio at or below this size is sent inline in the transcribe request.
 // Video files or audio larger than 8MB always use the Files API (supports up to 2GB).
@@ -287,10 +287,14 @@ function shouldRotate(error: unknown) {
 }
 
 function isRetryableGeminiError(error: unknown) {
-  // Rate-limit errors are intentionally NOT retried here — they bubble up so the
-  // caller can rotate to a different API key instead of waiting on a busy one.
+  // Rate-limit (429) and high-demand (503) errors are intentionally NOT retried here on
+  // the same model — they bubble up immediately to shouldRotate() so the caller rotates
+  // to the next available model in 0ms instead of waiting through 20+ seconds of retry sleeps.
+  if (isRateLimitError(error) || isServiceUnavailableError(error) || isModelUnavailableError(error)) {
+    return false
+  }
   const message = error instanceof Error ? error.message : String(error)
-  return /network error|timed out|socket hang up|econnreset|econnrefused|enotfound|eai_again|etimedout|503|service unavailable|high demand/i.test(message)
+  return /network error|timed out|socket hang up|econnreset|econnrefused|enotfound|eai_again|etimedout/i.test(message)
 }
 
 async function withGeminiRetry<T>(operation: () => Promise<T>, label: string) {
