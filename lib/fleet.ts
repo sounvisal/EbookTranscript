@@ -137,7 +137,7 @@ export function getOptimalModelOrder(): string[] {
  * Records a successful model transcription and updates the rolling latency of the last 3 requests.
  * If the model was previously degraded, restores it to healthy fleet and alerts Telegram.
  */
-export function recordModelSuccess(model: string, latencyMs: number) {
+export function recordModelSuccess(model: string, latencyMs: number, skipTelegramAlert?: boolean) {
   const record = getOrInitModelRecord(model)
   const now = Date.now()
   const wasDegraded = record.degradedUntil > now || record.status !== 'HEALTHY'
@@ -159,7 +159,7 @@ export function recordModelSuccess(model: string, latencyMs: number) {
   record.lastChecked = new Date().toISOString()
   record.successCount += 1
 
-  if (wasDegraded && latencyMs < 3500) {
+  if (wasDegraded && latencyMs < 3500 && !skipTelegramAlert) {
     console.log(`[Adaptive Router] Model "${model}" recovered (rolling latency: ${(record.rollingLatencyMs / 1000).toFixed(1)}s). Restoring to healthy fleet.`)
     sendTelegramRecoveryAlert(model, latencyMs).catch(() => {})
   }
@@ -176,6 +176,7 @@ export function recordModelFailure(params: {
   latencyMs?: number
   keyIndex?: number
   failoverModel?: string
+  skipTelegramAlert?: boolean
 }) {
   const record = getOrInitModelRecord(params.model)
   const now = Date.now()
@@ -202,32 +203,36 @@ export function recordModelFailure(params: {
     record.spikes503Today = (record.spikes503Today || 0) + 1
     console.warn(`[Adaptive Router] Model "${params.model}" 503 High Traffic spike (#${record.spikes503Today}). Quarantining for 10 minutes.`)
 
-    sendTelegramTrafficAlert({
-      overloadedModel: params.model,
-      errorType: '503_HIGH_DEMAND',
-      errorMessage: message.slice(0, 300),
-      failoverModel: params.failoverModel,
-      latencyMs: params.latencyMs,
-      keyIndex: params.keyIndex,
-      impactSummary: params.failoverModel
-        ? `Zero user downtime: auto-routed to ${params.failoverModel}`
-        : 'Attempting fallback across fleet'
-    }).catch(() => {})
+    if (!params.skipTelegramAlert) {
+      sendTelegramTrafficAlert({
+        overloadedModel: params.model,
+        errorType: '503_HIGH_DEMAND',
+        errorMessage: message.slice(0, 300),
+        failoverModel: params.failoverModel,
+        latencyMs: params.latencyMs,
+        keyIndex: params.keyIndex,
+        impactSummary: params.failoverModel
+          ? `Zero user downtime: auto-routed to ${params.failoverModel}`
+          : 'Attempting fallback across fleet'
+      }).catch(() => {})
+    }
   } else if (is429) {
     record.status = 'RATE_LIMITED_429'
     // Quarantined for 2 minutes
     record.degradedUntil = now + 2 * 60 * 1000
     console.warn(`[Adaptive Router] Model "${params.model}" hit 429 rate limit. Quarantining for 2 minutes.`)
 
-    sendTelegramTrafficAlert({
-      overloadedModel: params.model,
-      errorType: '429_RATE_LIMIT',
-      errorMessage: message.slice(0, 300),
-      failoverModel: params.failoverModel,
-      latencyMs: params.latencyMs,
-      keyIndex: params.keyIndex,
-      impactSummary: 'Auto-rotating API key / model pool'
-    }).catch(() => {})
+    if (!params.skipTelegramAlert) {
+      sendTelegramTrafficAlert({
+        overloadedModel: params.model,
+        errorType: '429_RATE_LIMIT',
+        errorMessage: message.slice(0, 300),
+        failoverModel: params.failoverModel,
+        latencyMs: params.latencyMs,
+        keyIndex: params.keyIndex,
+        impactSummary: 'Auto-rotating API key / model pool'
+      }).catch(() => {})
+    }
   } else {
     record.status = 'DEGRADED'
     if (record.consecutiveErrors >= 2) {
@@ -257,6 +262,7 @@ export function getFleetStatusSnapshot(): {
 /**
  * Runs active diagnostic probe across all configured Gemini models.
  * Measures real latency, verifies availability, and refreshes the health table.
+ * Silent: Probing runs diagnostics without triggering Telegram traffic alerts.
  */
 export async function probeFleet(apiKey?: string): Promise<FleetProbeSummary> {
   const models = getConfiguredModels()
@@ -290,13 +296,14 @@ export async function probeFleet(apiKey?: string): Promise<FleetProbeSummary> {
       clearTimeout(timer)
 
       const latencyMs = Date.now() - t0
-      recordModelSuccess(modelName, latencyMs)
+      recordModelSuccess(modelName, latencyMs, true)
     } catch (err: any) {
       const latencyMs = Date.now() - t0
       recordModelFailure({
         model: modelName,
         error: err,
-        latencyMs
+        latencyMs,
+        skipTelegramAlert: true
       })
     }
   })

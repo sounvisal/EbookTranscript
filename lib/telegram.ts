@@ -208,48 +208,64 @@ export type TelegramTrafficAlertParams = {
  * high traffic (503 Service Unavailable), quota rate-limits (429), or latency degradation.
  * Throttles duplicate alerts per model to prevent alert fatigue.
  */
+/**
+ * Cleans messy raw API URLs and technical stack traces into friendly descriptions
+ */
+function simplifyErrorMessage(rawMessage: string, is503: boolean, is429: boolean): string {
+  if (is503) return 'Google AI is busy (503 High Demand)'
+  if (is429) return 'Google rate limit reached (429)'
+  if (/timeout|aborted|etimedout/i.test(rawMessage)) return 'Google server connection timed out'
+  
+  const clean = rawMessage
+    .replace(/https?:\/\/[^\s)]+/gi, '')
+    .replace(/\[GoogleGenerativeAI Error\]:\s*/gi, '')
+    .replace(/Error fetching from\s*:\s*/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return clean.slice(0, 120) || 'Temporary Google AI interruption'
+}
+
+/**
+ * Sends a clean, simple, and easy-to-understand alert when Google AI experiences traffic spikes.
+ */
 export async function sendTelegramTrafficAlert(params: TelegramTrafficAlertParams): Promise<boolean> {
   const { token, chatId } = getBotCredentials()
   if (!token || !chatId) return false
 
-  // Throttling: avoid alert storms for the same model & error within 10 minutes
+  // Throttling: avoid alert storms for the same model within 15 minutes
   const alertKey = `traffic_${params.overloadedModel}_${params.errorType}`
   const now = Date.now()
   const lastSent = lastAlerts.get(alertKey) || 0
-  if (now - lastSent < 10 * 60 * 1000) {
+  if (now - lastSent < 15 * 60 * 1000) {
     return false
   }
   lastAlerts.set(alertKey, now)
 
-  const timestamp = new Date().toLocaleString('en-US', {
+  const timeStr = new Date().toLocaleTimeString('en-US', {
     timeZone: 'Asia/Phnom_Penh',
-    dateStyle: 'medium',
-    timeStyle: 'medium'
+    hour: '2-digit',
+    minute: '2-digit'
   })
 
   const is503 = params.errorType === '503_HIGH_DEMAND'
   const is429 = params.errorType === '429_RATE_LIMIT'
-  const icon = is503 ? '🚨' : is429 ? '⚠️' : '⚡'
-  const headline = is503
-    ? 'GOOGLE AI TRAFFIC SPIKE DETECTED'
-    : is429
-      ? 'GEMINI API RATE LIMIT DETECTED'
-      : 'GOOGLE AI FLEET INCIDENT'
+  const friendlyReason = simplifyErrorMessage(params.errorMessage, is503, is429)
+
+  const title = params.failoverModel
+    ? `⚡ <b>AI Traffic Switch Notice</b>`
+    : `⚠️ <b>Google AI High Traffic</b>`
 
   const lines = [
-    `${icon} <b>${headline}</b>`,
-    `📅 <code>${timestamp} (Phnom Penh)</code>`,
+    title,
+    `🕒 <code>${timeStr} (Phnom Penh)</code>`,
     '',
-    `🤖 <b>Overloaded Model:</b> <code>${escapeHtml(params.overloadedModel)}</code>`,
-    `⚠️ <b>Failure Reason:</b> <code>${escapeHtml(params.errorMessage)}</code>`,
-    params.failoverModel ? `🔄 <b>Self-Healing Failover:</b> Auto-routed to <code>${escapeHtml(params.failoverModel)}</code>` : '',
-    params.latencyMs ? `⏱ <b>Latency Spike:</b> <code>${params.latencyMs}ms</code>` : '',
-    typeof params.keyIndex === 'number' ? `🔑 <b>API Key:</b> Key #${params.keyIndex + 1}` : '',
-    '',
-    `🛡️ <b>User Impact:</b> <i>${escapeHtml(params.impactSummary || 'Zero user downtime — traffic shifted automatically to healthy model')}</i>`,
-    '',
-    `🛠 <i>Signal Self-Healing Fleet Intelligence Service</i>`
-  ].filter(Boolean)
+    `• <b>Status:</b> Google is busy on <code>${escapeHtml(params.overloadedModel)}</code>`,
+    `• <b>Reason:</b> ${friendlyReason}`,
+    params.failoverModel
+      ? `• <b>Switch:</b> Auto-routed to <code>${escapeHtml(params.failoverModel)}</code> (fast model)`
+      : `• <b>Action:</b> Pausing model for 10m & trying backup models`,
+    `• <b>Your Users:</b> Zero downtime (working normally) ✅`
+  ]
 
   const message = lines.join('\n')
 
@@ -272,27 +288,34 @@ export async function sendTelegramTrafficAlert(params: TelegramTrafficAlertParam
 }
 
 /**
- * Sends a notification when an overloaded Google model returns to healthy latency.
+ * Sends a clean, simple notification when an overloaded Google model returns to normal.
  */
 export async function sendTelegramRecoveryAlert(model: string, latencyMs: number): Promise<boolean> {
   const { token, chatId } = getBotCredentials()
   if (!token || !chatId) return false
 
-  const timestamp = new Date().toLocaleString('en-US', {
+  // Throttling: avoid flip-flop recovery alerts for the same model within 15 minutes
+  const alertKey = `recovery_${model}`
+  const now = Date.now()
+  const lastSent = lastAlerts.get(alertKey) || 0
+  if (now - lastSent < 15 * 60 * 1000) {
+    return false
+  }
+  lastAlerts.set(alertKey, now)
+
+  const timeStr = new Date().toLocaleTimeString('en-US', {
     timeZone: 'Asia/Phnom_Penh',
-    dateStyle: 'medium',
-    timeStyle: 'medium'
+    hour: '2-digit',
+    minute: '2-digit'
   })
 
+  const latencySecs = (latencyMs / 1000).toFixed(1)
   const lines = [
-    `🟢 <b>GOOGLE AI MODEL RECOVERED</b>`,
-    `📅 <code>${timestamp} (Phnom Penh)</code>`,
+    `🟢 <b>Google AI Restored</b>`,
+    `🕒 <code>${timeStr} (Phnom Penh)</code>`,
     '',
-    `🤖 <b>Restored Model:</b> <code>${escapeHtml(model)}</code>`,
-    `⚡ <b>Current Latency:</b> <code>${latencyMs}ms</code>`,
-    `✅ <b>Status:</b> Healthy traffic flow restored to active fleet.`,
-    '',
-    `🛠 <i>Signal Self-Healing Fleet Intelligence Service</i>`
+    `• <b>Model:</b> <code>${escapeHtml(model)}</code> is fast again (${latencySecs}s)`,
+    `• <b>Status:</b> Healthy & active in rotation ✅`
   ]
 
   try {
