@@ -1,4 +1,4 @@
-import { sendTelegramTrafficAlert, sendTelegramRecoveryAlert } from './telegram'
+import { sendTelegramFleetEmergencyAlert, sendTelegramFleetRecoveryAlert } from './telegram'
 
 export type ModelHealthStatus = 'HEALTHY' | 'DEGRADED' | 'HIGH_DEMAND_503' | 'RATE_LIMITED_429'
 
@@ -133,9 +133,12 @@ export function getOptimalModelOrder(): string[] {
   ]
 }
 
+// Tracks whether the entire fleet is currently experiencing an emergency outage
+let isFleetInEmergencyOutage = false
+
 /**
  * Records a successful model transcription and updates the rolling latency of the last 3 requests.
- * If the model was previously degraded, restores it to healthy fleet and alerts Telegram.
+ * If the model was previously degraded, restores it to healthy fleet.
  */
 export function recordModelSuccess(model: string, latencyMs: number, skipTelegramAlert?: boolean) {
   const record = getOrInitModelRecord(model)
@@ -159,16 +162,26 @@ export function recordModelSuccess(model: string, latencyMs: number, skipTelegra
   record.lastChecked = new Date().toISOString()
   record.successCount += 1
 
-  if (wasDegraded && latencyMs < 3500 && !skipTelegramAlert) {
+  if (wasDegraded && latencyMs < 3500) {
     console.log(`[Adaptive Router] Model "${model}" recovered (rolling latency: ${(record.rollingLatencyMs / 1000).toFixed(1)}s). Restoring to healthy fleet.`)
-    sendTelegramRecoveryAlert(model, latencyMs).catch(() => {})
+  }
+
+  // If the fleet was in an emergency outage (all models down) and has now recovered:
+  if (isFleetInEmergencyOutage && !skipTelegramAlert) {
+    isFleetInEmergencyOutage = false
+    console.log(`[Adaptive Router] Fleet emergency resolved: "${model}" restored active service (${(latencyMs / 1000).toFixed(1)}s). Dispatching recovery alert.`)
+    sendTelegramFleetRecoveryAlert({
+      restoredModel: model,
+      latencyMs
+    }).catch(() => {})
   }
 }
 
 /**
  * Records a model failure.
  * If a model starts returning 503, it is quarantined for 10 minutes so no user requests
- * are slowed down by retry delays.
+ * are slowed down by retry delays. Self-healing is automatic and silent.
+ * ONLY triggers an alert if ALL models in the fleet fail (true emergency needing admin intervention).
  */
 export function recordModelFailure(params: {
   model: string
@@ -201,43 +214,34 @@ export function recordModelFailure(params: {
     // Quarantined for 10 minutes so no user requests are slowed down by retry delays
     record.degradedUntil = now + 10 * 60 * 1000
     record.spikes503Today = (record.spikes503Today || 0) + 1
-    console.warn(`[Adaptive Router] Model "${params.model}" 503 High Traffic spike (#${record.spikes503Today}). Quarantining for 10 minutes.`)
-
-    if (!params.skipTelegramAlert) {
-      sendTelegramTrafficAlert({
-        overloadedModel: params.model,
-        errorType: '503_HIGH_DEMAND',
-        errorMessage: message.slice(0, 300),
-        failoverModel: params.failoverModel,
-        latencyMs: params.latencyMs,
-        keyIndex: params.keyIndex,
-        impactSummary: params.failoverModel
-          ? `Zero user downtime: auto-routed to ${params.failoverModel}`
-          : 'Attempting fallback across fleet'
-      }).catch(() => {})
-    }
+    console.warn(`[Adaptive Router] Model "${params.model}" 503 High Traffic spike (#${record.spikes503Today}). Quarantining for 10 minutes (auto-routing user to standby models).`)
   } else if (is429) {
     record.status = 'RATE_LIMITED_429'
     // Quarantined for 2 minutes
     record.degradedUntil = now + 2 * 60 * 1000
-    console.warn(`[Adaptive Router] Model "${params.model}" hit 429 rate limit. Quarantining for 2 minutes.`)
-
-    if (!params.skipTelegramAlert) {
-      sendTelegramTrafficAlert({
-        overloadedModel: params.model,
-        errorType: '429_RATE_LIMIT',
-        errorMessage: message.slice(0, 300),
-        failoverModel: params.failoverModel,
-        latencyMs: params.latencyMs,
-        keyIndex: params.keyIndex,
-        impactSummary: 'Auto-rotating API key / model pool'
-      }).catch(() => {})
-    }
+    console.warn(`[Adaptive Router] Model "${params.model}" hit 429 rate limit. Quarantining for 2 minutes (auto-rotating key/model).`)
   } else {
     record.status = 'DEGRADED'
     if (record.consecutiveErrors >= 2) {
       record.degradedUntil = now + 3 * 60 * 1000
     }
+  }
+
+  // FLEET EMERGENCY CHECK:
+  // Only alert when ALL configured models are down and user transcriptions cannot succeed (admin must step in)
+  const allModels = getConfiguredModels()
+  const allQuarantined = allModels.every((m) => {
+    const r = getOrInitModelRecord(m)
+    return r.degradedUntil > now
+  })
+
+  if (allQuarantined && !isFleetInEmergencyOutage && !params.skipTelegramAlert) {
+    isFleetInEmergencyOutage = true
+    console.error(`[Adaptive Router] FLEET EMERGENCY: All models in fleet are degraded! Dispatching emergency alert.`)
+    sendTelegramFleetEmergencyAlert({
+      modelsDown: allModels,
+      reason: is429 ? 'Google API Quota / Rate Limits reached across all models (429)' : 'Google AI High Demand across all models (503)'
+    }).catch(() => {})
   }
 }
 

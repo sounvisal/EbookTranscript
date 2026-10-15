@@ -228,16 +228,18 @@ function simplifyErrorMessage(rawMessage: string, is503: boolean, is429: boolean
 /**
  * Sends a clean, simple, and easy-to-understand alert when Google AI experiences traffic spikes.
  */
-export async function sendTelegramTrafficAlert(params: TelegramTrafficAlertParams): Promise<boolean> {
+export async function sendTelegramFleetEmergencyAlert(params: {
+  modelsDown: string[]
+  reason: string
+}): Promise<boolean> {
   const { token, chatId } = getBotCredentials()
   if (!token || !chatId) return false
 
-  // Throttling: avoid alert storms for the same model within 15 minutes
-  const alertKey = `traffic_${params.overloadedModel}_${params.errorType}`
+  const alertKey = 'fleet_emergency_outage'
   const now = Date.now()
   const lastSent = lastAlerts.get(alertKey) || 0
-  if (now - lastSent < 15 * 60 * 1000) {
-    return false
+  if (now - lastSent < 20 * 60 * 1000) {
+    return false // Cooldown 20 minutes
   }
   lastAlerts.set(alertKey, now)
 
@@ -247,75 +249,15 @@ export async function sendTelegramTrafficAlert(params: TelegramTrafficAlertParam
     minute: '2-digit'
   })
 
-  const is503 = params.errorType === '503_HIGH_DEMAND'
-  const is429 = params.errorType === '429_RATE_LIMIT'
-  const friendlyReason = simplifyErrorMessage(params.errorMessage, is503, is429)
-
-  const title = params.failoverModel
-    ? `⚡ <b>AI Traffic Switch Notice</b>`
-    : `⚠️ <b>Google AI High Traffic</b>`
-
   const lines = [
-    title,
+    `🚨 <b>GOOGLE AI FLEET EMERGENCY — ACTION REQUIRED</b>`,
     `🕒 <code>${timeStr} (Phnom Penh)</code>`,
     '',
-    `• <b>Status:</b> Google is busy on <code>${escapeHtml(params.overloadedModel)}</code>`,
-    `• <b>Reason:</b> ${friendlyReason}`,
-    params.failoverModel
-      ? `• <b>Switch:</b> Auto-routed to <code>${escapeHtml(params.failoverModel)}</code> (fast model)`
-      : `• <b>Action:</b> Pausing model for 10m & trying backup models`,
-    `• <b>Your Users:</b> Zero downtime (working normally) ✅`
-  ]
-
-  const message = lines.join('\n')
-
-  try {
-    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: message,
-        parse_mode: 'HTML',
-        disable_web_page_preview: true
-      })
-    })
-    return res.ok
-  } catch (err) {
-    console.error('Failed to send Telegram traffic alert:', err)
-    return false
-  }
-}
-
-/**
- * Sends a clean, simple notification when an overloaded Google model returns to normal.
- */
-export async function sendTelegramRecoveryAlert(model: string, latencyMs: number): Promise<boolean> {
-  const { token, chatId } = getBotCredentials()
-  if (!token || !chatId) return false
-
-  // Throttling: avoid flip-flop recovery alerts for the same model within 15 minutes
-  const alertKey = `recovery_${model}`
-  const now = Date.now()
-  const lastSent = lastAlerts.get(alertKey) || 0
-  if (now - lastSent < 15 * 60 * 1000) {
-    return false
-  }
-  lastAlerts.set(alertKey, now)
-
-  const timeStr = new Date().toLocaleTimeString('en-US', {
-    timeZone: 'Asia/Phnom_Penh',
-    hour: '2-digit',
-    minute: '2-digit'
-  })
-
-  const latencySecs = (latencyMs / 1000).toFixed(1)
-  const lines = [
-    `🟢 <b>Google AI Restored</b>`,
-    `🕒 <code>${timeStr} (Phnom Penh)</code>`,
-    '',
-    `• <b>Model:</b> <code>${escapeHtml(model)}</code> is fast again (${latencySecs}s)`,
-    `• <b>Status:</b> Healthy & active in rotation ✅`
+    `• <b>Status:</b> All Gemini models in your fleet are overloaded or rate-limited`,
+    `• <b>Reason:</b> ${escapeHtml(params.reason)}`,
+    `• <b>Models Affected:</b> <code>${escapeHtml(params.modelsDown.join(', '))}</code>`,
+    `• <b>Impact:</b> User transcriptions cannot complete`,
+    `• <b>Action Needed:</b> Please check your Google Cloud quota or add backup API keys 🛠`
   ]
 
   try {
@@ -331,9 +273,75 @@ export async function sendTelegramRecoveryAlert(model: string, latencyMs: number
     })
     return res.ok
   } catch (err) {
-    console.error('Failed to send Telegram recovery alert:', err)
+    console.error('Failed to send Telegram fleet emergency alert:', err)
     return false
   }
+}
+
+export async function sendTelegramFleetRecoveryAlert(params: {
+  restoredModel: string
+  latencyMs: number
+}): Promise<boolean> {
+  const { token, chatId } = getBotCredentials()
+  if (!token || !chatId) return false
+
+  const timeStr = new Date().toLocaleTimeString('en-US', {
+    timeZone: 'Asia/Phnom_Penh',
+    hour: '2-digit',
+    minute: '2-digit'
+  })
+
+  const latencySecs = (params.latencyMs / 1000).toFixed(1)
+  const lines = [
+    `🟢 <b>GOOGLE AI FLEET RESTORED</b>`,
+    `🕒 <code>${timeStr} (Phnom Penh)</code>`,
+    '',
+    `• <b>Status:</b> Healthy traffic flow restored to active fleet`,
+    `• <b>Active Model:</b> <code>${escapeHtml(params.restoredModel)}</code> is responding (${latencySecs}s)`,
+    `• <b>User Impact:</b> Transcriptions are working normally again ✅`
+  ]
+
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: lines.join('\n'),
+        parse_mode: 'HTML',
+        disable_web_page_preview: true
+      })
+    })
+    return res.ok
+  } catch (err) {
+    console.error('Failed to send Telegram fleet recovery alert:', err)
+    return false
+  }
+}
+
+/**
+ * Backward compatibility wrapper:
+ * Only sends alert if called as an emergency (e.g. no failover model available).
+ */
+export async function sendTelegramTrafficAlert(params: TelegramTrafficAlertParams): Promise<boolean> {
+  if (params.failoverModel) {
+    // Handled automatically by router with zero user downtime -> silent
+    return true
+  }
+  return sendTelegramFleetEmergencyAlert({
+    modelsDown: [params.overloadedModel],
+    reason: params.errorMessage
+  })
+}
+
+/**
+ * Backward compatibility wrapper for model recovery.
+ */
+export async function sendTelegramRecoveryAlert(model: string, latencyMs: number): Promise<boolean> {
+  return sendTelegramFleetRecoveryAlert({
+    restoredModel: model,
+    latencyMs
+  })
 }
 
 /**
