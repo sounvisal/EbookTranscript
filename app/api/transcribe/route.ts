@@ -32,8 +32,8 @@ export const maxDuration = 300
 const MAX_LOCAL_FILE_BYTES = MAX_MEDIA_UPLOAD_BYTES
 // Flash-Lite has the highest free-tier limits (15 RPM / 1000 RPD vs Flash's
 // 10 RPM / 250 RPD), which is why it's the default. Override with GEMINI_MODEL.
-const MODEL_NAME = process.env.GEMINI_MODEL || 'gemini-2.5-flash'
-const DEFAULT_FALLBACK_MODELS = ['gemini-2.5-flash', 'gemini-3.6-flash', 'gemini-flash-latest', 'gemini-3.5-flash-lite']
+const MODEL_NAME = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite'
+const DEFAULT_FALLBACK_MODELS = ['gemini-3.5-flash-lite', 'gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-3.6-flash']
 
 // Audio at or below this size is sent inline in the transcribe request.
 // Video files or audio larger than 8MB always use the Files API (supports up to 2GB).
@@ -277,7 +277,7 @@ function isRateLimitError(error: unknown) {
 // users", not found). We skip to the next model when this happens.
 function isModelUnavailableError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error)
-  return /404|not found|no longer available|not available|does not exist|not supported/i.test(message)
+  return /404|not found|no longer available|not available|does not exist|not supported|user location|failed_precondition/i.test(message)
 }
 
 function isServiceUnavailableError(error: unknown) {

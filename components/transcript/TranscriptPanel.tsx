@@ -28,6 +28,7 @@ import {
   Volume2
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useSession, signIn } from 'next-auth/react'
 import ReportErrorButton from '@/components/common/ReportErrorButton'
 import AudioPlayer from '@/components/transcript/AudioPlayer'
 import { transcribeWithProgress } from '@/lib/transcribeClient'
@@ -95,6 +96,7 @@ function getSpeakerStyle(speaker: string) {
 }
 
 export default function TranscriptPanel() {
+  const { data: session } = useSession()
   const { transcript, file, audioBlob, audioUrl: storeAudioUrl, customAudioUrl, resetAll, updateTranscriptContent, advancedOptions } = useTranscriptStore()
   const [viewMode, setViewMode] = useState<'paragraphs' | 'timestamps'>('timestamps')
   const [wordSyncEnabled, setWordSyncEnabled] = useState(true)
@@ -210,7 +212,7 @@ export default function TranscriptPanel() {
     }
 
     const autoSave = async () => {
-      if (!transcript || hasSaved.current || saved || saving || isAlreadySaved) return
+      if (!session || !transcript || hasSaved.current || saved || saving || isAlreadySaved) return
 
       hasSaved.current = true
       setSaving(true)
@@ -250,7 +252,7 @@ export default function TranscriptPanel() {
     }
 
     autoSave()
-  }, [transcript, file, saved, saving, liveText, wordCount, isAlreadySaved])
+  }, [session, transcript, file, saved, saving, liveText, wordCount, isAlreadySaved])
 
   const handleCopy = () => {
     navigator.clipboard.writeText(liveText)
@@ -407,6 +409,33 @@ export default function TranscriptPanel() {
 
   return (
     <div className="apple-glass mx-auto w-full max-w-4xl overflow-hidden rounded-3xl transition-all duration-300">
+      {/* Guest Celebration & Cloud Save Banner */}
+      {!session && (
+        <div className="relative overflow-hidden border-b border-indigo-200/50 dark:border-indigo-800/60 bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-600 px-5 py-3 text-white shadow-xs">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-xl bg-white/20 backdrop-blur-xs text-base">
+                🎉
+              </span>
+              <div className="text-xs sm:text-sm">
+                <span className="font-semibold text-white">Transcript generated successfully!</span>{' '}
+                <span className="text-blue-100">Sign in free to save to your Cloud History and unlock Batch Queue.</span>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => signIn()}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-white px-3.5 py-1.5 text-xs font-semibold text-indigo-700 shadow-xs hover:bg-indigo-50 hover:shadow-md transition-all active:scale-95 cursor-pointer"
+              >
+                <Sparkles className="h-3.5 w-3.5 text-indigo-600" />
+                Sign in Free
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header Card */}
       <div className="border-b border-slate-200/60 dark:border-slate-800 bg-gradient-to-b from-white/90 to-slate-50/50 dark:from-slate-900/90 dark:to-slate-950/50 p-6 sm:flex sm:items-center sm:justify-between sm:p-7">
         <div className="min-w-0">
@@ -459,8 +488,8 @@ export default function TranscriptPanel() {
             </span>
           )}
           <span className="inline-flex items-center gap-1.5 rounded-full bg-white/90 dark:bg-slate-900/90 px-3.5 py-1 text-xs font-medium text-slate-600 dark:text-slate-300 ring-1 ring-slate-200/80 dark:ring-slate-700 shadow-2xs">
-            <span className={`h-1.5 w-1.5 rounded-full ${saving ? 'bg-amber-500 animate-pulse' : (saved || isAlreadySaved) ? 'bg-emerald-500' : 'bg-slate-400'}`} />
-            {saving ? 'Saving to cloud…' : (saved || isAlreadySaved) ? 'Saved to history' : 'Ready'}
+            <span className={`h-1.5 w-1.5 rounded-full ${saving ? 'bg-amber-500 animate-pulse' : (saved || isAlreadySaved) ? 'bg-emerald-500' : (!session ? 'bg-blue-500' : 'bg-slate-400')}`} />
+            {saving ? 'Saving to cloud…' : (saved || isAlreadySaved) ? 'Saved to history' : (!session ? 'Guest Preview' : 'Ready')}
           </span>
         </div>
       </div>

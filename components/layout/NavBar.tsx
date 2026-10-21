@@ -37,7 +37,8 @@ export default function NavBar() {
         {/* Navigation items & Auth & Theme */}
         <div className="flex items-center gap-2 sm:gap-3">
           <div className="flex items-center rounded-full bg-slate-100/80 dark:bg-slate-900/80 p-1 ring-1 ring-slate-200/50 dark:ring-slate-800/50">
-            <Link href="/" className={linkClass('/')}>Transcribe</Link>
+            <Link href="/" className={linkClass('/')}>Home</Link>
+            <Link href="/transcribe" className={linkClass('/transcribe')}>Transcribe</Link>
             <Link href="/history" className={linkClass('/history')}>History</Link>
             <Link href="/formats" className={linkClass('/formats')}>Formats</Link>
             {session?.user?.role === 'admin' && (
