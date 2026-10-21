@@ -1,8 +1,8 @@
 'use client'
 
 import { motion } from 'framer-motion'
-import { useEffect, useState } from 'react'
-import { Sparkles, Brain, Cpu, CheckCircle } from 'lucide-react'
+import { useEffect, useState, useRef } from 'react'
+import { Sparkles, Brain, Cpu, CheckCircle, Clock } from 'lucide-react'
 import { useTranscriptStore } from '@/store/transcriptStore'
 
 const STATUS_STEPS = [
@@ -15,6 +15,45 @@ const STATUS_STEPS = [
 export default function ProcessingPanel() {
   const [stepIndex, setStepIndex] = useState(0)
   const progress = useTranscriptStore((state) => state.progress)
+  const [eta, setEta] = useState<number | null>(null)
+  const startTimeRef = useRef<number>(Date.now())
+  const lastProgressRef = useRef<number>(0)
+
+  useEffect(() => {
+    startTimeRef.current = Date.now()
+    lastProgressRef.current = 0
+  }, [])
+
+  useEffect(() => {
+    if (progress <= 0 || progress >= 100) {
+      setEta(null)
+      return
+    }
+
+    const now = Date.now()
+    const elapsed = Math.max(0.5, (now - startTimeRef.current) / 1000)
+    const progressDelta = progress - lastProgressRef.current
+
+    if (progressDelta > 0) {
+      const rate = progress / elapsed
+      const remaining = 100 - progress
+      const estimatedSeconds = remaining / Math.max(0.2, rate)
+
+      setEta((prev) => {
+        if (prev === null) return Math.round(estimatedSeconds)
+        return Math.round(prev * 0.65 + estimatedSeconds * 0.35)
+      })
+
+      lastProgressRef.current = progress
+    }
+  }, [progress])
+
+  const formatETA = (seconds: number | null) => {
+    if (seconds === null || !Number.isFinite(seconds) || seconds <= 0) return null
+    if (seconds < 60) return `~${Math.ceil(seconds)}s left`
+    const mins = Math.ceil(seconds / 60)
+    return `~${mins} min${mins > 1 ? 's' : ''} left`
+  }
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -70,7 +109,15 @@ export default function ProcessingPanel() {
             <span className="flex items-center gap-1.5">
               <Cpu className="h-3.5 w-3.5 text-blue-500 dark:text-blue-400" /> Speech Engine Active
             </span>
-            <span className="font-mono text-sm font-bold text-blue-600 dark:text-blue-400">{Math.floor(progress)}%</span>
+            <div className="flex items-center gap-2.5">
+              {formatETA(eta) && (
+                <span className="inline-flex items-center gap-1 rounded-md bg-blue-50 dark:bg-blue-950/60 px-2 py-0.5 text-[11px] font-semibold text-blue-600 dark:text-blue-400 font-mono ring-1 ring-blue-500/20">
+                  <Clock className="h-3 w-3" />
+                  <span>{formatETA(eta)}</span>
+                </span>
+              )}
+              <span className="font-mono text-sm font-bold text-blue-600 dark:text-blue-400">{Math.floor(progress)}%</span>
+            </div>
           </div>
 
           <div className="relative mt-3 h-3 overflow-hidden rounded-full bg-slate-200/70 dark:bg-slate-800/80 p-0.5 ring-1 ring-black/5 dark:ring-white/5">

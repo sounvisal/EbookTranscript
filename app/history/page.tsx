@@ -25,6 +25,7 @@ import { downloadTxt } from '@/lib/download'
 import { getPlainTranscriptText } from '@/lib/transcript'
 import { useSession, signIn } from 'next-auth/react'
 import { useTranscriptStore } from '@/store/transcriptStore'
+import { HistoryTableSkeleton } from '@/components/skeletons/HistoryTableSkeleton'
 
 const PAGE_SIZE = 15
 
@@ -340,10 +341,7 @@ export default function HistoryPage() {
       {/* macOS Style Table Card */}
       <div className="apple-glass-card overflow-hidden rounded-3xl transition-all">
         {loading ? (
-          <div className="flex items-center justify-center gap-2.5 p-20 text-sm font-semibold text-slate-500 dark:text-slate-400">
-            <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
-            <span>Loading history…</span>
-          </div>
+          <HistoryTableSkeleton />
         ) : history.length === 0 ? (
           <div className="flex flex-col items-center p-20 text-center">
             <span className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-100 dark:bg-slate-800 text-slate-400">

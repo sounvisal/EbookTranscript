@@ -10,6 +10,8 @@ import { transcribeWithProgress } from '@/lib/transcribeClient'
 import AdvancedOptionsDrawer from './AdvancedOptionsDrawer'
 import { useSession, signIn } from 'next-auth/react'
 import { loadDemoSample } from '@/lib/demoSample'
+import { AudioWaveformPreview } from '@/components/preview/AudioWaveformPreview'
+import { VideoThumbnailPreview } from '@/components/preview/VideoThumbnailPreview'
 
 import ReportErrorButton from '@/components/common/ReportErrorButton'
 
@@ -239,6 +241,15 @@ export default function MediaUploadZone() {
                 <X className="h-3.5 w-3.5" />
                 <span>Change</span>
               </button>
+            </div>
+
+            {/* Media Preview (Audio Waveform or Video Frame Thumbnail) */}
+            <div className="w-full">
+              {file.type.startsWith('audio/') || /\.(mp3|wav|m4a|aac|ogg|flac)$/i.test(file.name) ? (
+                <AudioWaveformPreview file={file} />
+              ) : file.type.startsWith('video/') || /\.(mp4|webm|mov|m4v|avi|mkv)$/i.test(file.name) ? (
+                <VideoThumbnailPreview file={file} />
+              ) : null}
             </div>
 
             {/* Advanced Options Drawer in File Preview */}

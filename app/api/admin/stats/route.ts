@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions, isUserAdmin } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { getFleetStatusSnapshot } from '@/lib/fleet'
+import { logAdminAction } from '@/lib/auditLog'
 
 export const dynamic = 'force-dynamic'
 
@@ -405,7 +406,7 @@ export async function GET(req: Request) {
 
       return {
         index: idx,
-        masked: `${key.slice(0, 6)}...${key.slice(-4)}`,
+        masked: key.length > 8 ? `${key.slice(0, 4)}${'•'.repeat(16)}` : '••••••••',
         status: 'active' as const,
         modelPriority: 'gemini-2.5-flash / gemini-3.6-flash',
         loadSharePercent,
@@ -510,7 +511,17 @@ export async function DELETE(req: Request) {
   }
 
   try {
+    const count = await prisma.errorLog.count()
     await prisma.errorLog.deleteMany({})
+
+    await logAdminAction({
+      adminId: session.user.id || 'admin',
+      adminEmail: session.user.email,
+      action: 'CLEAR_ERRORS',
+      metadata: { clearedCount: count },
+      req
+    })
+
     return NextResponse.json({ success: true, message: 'Error logs cleared' })
   } catch (error) {
     console.error('Clear error logs error:', error)

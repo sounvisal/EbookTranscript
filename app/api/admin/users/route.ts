@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions, isUserAdmin } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { checkUserQuota } from '@/lib/quota'
+import { logAdminAction } from '@/lib/auditLog'
 
 export const dynamic = 'force-dynamic'
 
@@ -210,6 +211,15 @@ export async function PATCH(req: Request) {
       }
     })
 
+    await logAdminAction({
+      adminId: session.user.id || 'admin',
+      adminEmail: session.user.email,
+      action: 'ROLE_CHANGE',
+      targetId: userId,
+      metadata: { targetEmail: updatedUser.email, newRole: role },
+      req
+    })
+
     return NextResponse.json({ success: true, user: updatedUser })
   } catch (err) {
     console.error('Error updating user role:', err)
@@ -237,8 +247,22 @@ export async function DELETE(req: Request) {
       return NextResponse.json({ error: 'You cannot delete your own active admin account.' }, { status: 400 })
     }
 
+    const targetUser = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { email: true }
+    })
+
     await prisma.user.delete({
       where: { id: userId }
+    })
+
+    await logAdminAction({
+      adminId: session.user.id || 'admin',
+      adminEmail: session.user.email,
+      action: 'USER_DELETE',
+      targetId: userId,
+      metadata: { deletedEmail: targetUser?.email },
+      req
     })
 
     return NextResponse.json({ success: true, message: 'User deleted successfully' })

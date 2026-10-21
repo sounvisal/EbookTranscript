@@ -43,7 +43,7 @@ export async function POST(req: Request) {
   }
 
   const diagnosticPromises = keys.map(async (key, index): Promise<KeyDiagnosticResult> => {
-    const masked = `${key.slice(0, 6)}...${key.slice(-4)}`
+    const masked = key.length > 8 ? `${key.slice(0, 4)}${'•'.repeat(16)}` : '••••••••'
     const startTime = Date.now()
 
     try {

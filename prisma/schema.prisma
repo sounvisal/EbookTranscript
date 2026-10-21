@@ -126,3 +126,19 @@ model ErrorLog {
 
   @@index([createdAt])
 }
+
+/// Audit log tracking sensitive operations performed by system administrators.
+model AdminAuditLog {
+  id         String   @id @default(cuid())
+  adminId    String
+  adminEmail String?
+  action     String   // "ROLE_CHANGE" | "USER_DELETE" | "CLEAR_ERRORS" | "PING_FLEET" | "SYSTEM_SETTING"
+  targetId   String?  // Target user, resource, or setting id
+  metadata   String?  // JSON stringified context
+  ipAddress  String?
+  createdAt  DateTime @default(now())
+
+  @@index([adminId])
+  @@index([action])
+  @@index([createdAt])
+}

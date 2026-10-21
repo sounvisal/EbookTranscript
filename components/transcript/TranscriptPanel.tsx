@@ -25,13 +25,17 @@ import {
   X,
   Edit3,
   Loader2,
-  Volume2
+  Volume2,
+  Undo2,
+  Redo2
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSession, signIn } from 'next-auth/react'
 import ReportErrorButton from '@/components/common/ReportErrorButton'
 import AudioPlayer from '@/components/transcript/AudioPlayer'
 import { transcribeWithProgress } from '@/lib/transcribeClient'
+import { TranscriptSearch } from '@/components/transcript/TranscriptSearch'
+import { useUndoRedo } from '@/hooks/useUndoRedo'
 
 const SPEAKER_REGEX = /^(?:\[?(?:Speaker\s*[A-Za-z0-9]+|Person\s*[A-Za-z0-9]+|Host|Guest|Interviewer|Interviewee|អ្នកនិយាយ\s*[០-៩0-9]+)\]?)\s*[:：]\s*/i
 
@@ -130,15 +134,54 @@ export default function TranscriptPanel() {
     [rawText, transcript?.segments, transcript?.duration]
   )
 
-  // Live mutable segments & text for in-line edits
-  const [liveSegments, setLiveSegments] = useState<TranscriptSegment[]>(initialSegments)
-  const [liveText, setLiveText] = useState<string>(baseText)
+  // Undo / Redo history for in-line edits
+  type TranscriptEditSnapshot = {
+    text: string
+    segments: TranscriptSegment[]
+  }
+
+  const {
+    state: historyState,
+    set: setHistoryState,
+    undo,
+    redo,
+    canUndo,
+    canRedo,
+    reset: resetHistory
+  } = useUndoRedo<TranscriptEditSnapshot>({
+    text: baseText,
+    segments: initialSegments
+  })
+
+  const liveSegments = historyState.segments
+  const liveText = historyState.text
 
   // Synchronize live state when the underlying transcript / segments change externally
   useEffect(() => {
-    setLiveSegments(initialSegments)
-    setLiveText(baseText)
-  }, [initialSegments, baseText])
+    resetHistory({
+      text: baseText,
+      segments: initialSegments
+    })
+  }, [initialSegments, baseText, resetHistory])
+
+  // Search in transcript state
+  const [highlightedSegmentIdx, setHighlightedSegmentIdx] = useState<number | null>(null)
+
+  const handleSearchJump = useCallback((segmentIndex: number, time: number) => {
+    setHighlightedSegmentIdx(segmentIndex)
+    setCurrentTime(time)
+    setViewMode('timestamps')
+    setTimeout(() => {
+      const el = document.getElementById(`segment-${segmentIndex}`)
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }
+    }, 50)
+  }, [])
+
+  const handleSearchClear = useCallback(() => {
+    setHighlightedSegmentIdx(null)
+  }, [])
 
   const sourceName = file ? file.name : (transcript?.source || 'Transcript')
   const wordCount = liveText.split(/\s+/).filter(Boolean).length
@@ -323,7 +366,7 @@ export default function TranscriptPanel() {
     setEditDraft('')
   }
 
-  const persistToHistory = async (newText: string) => {
+  const persistToHistory = useCallback(async (newText: string) => {
     const transcriptId = transcript?.id
     if (!transcriptId) {
       setSaveSuccessMessage('Edited & synced')
@@ -350,7 +393,7 @@ export default function TranscriptPanel() {
       setIsPatchingHistory(false)
       setTimeout(() => setSaveSuccessMessage(null), 2500)
     }
-  }
+  }, [transcript?.id])
 
   const handleSaveSegment = async (idx: number, e?: React.MouseEvent) => {
     if (e) e.stopPropagation()
@@ -365,8 +408,7 @@ export default function TranscriptPanel() {
     )
     const updatedText = updatedSegments.map((s) => s.text).join('\n\n')
 
-    setLiveSegments(updatedSegments)
-    setLiveText(updatedText)
+    setHistoryState({ text: updatedText, segments: updatedSegments })
     setEditingSegmentIdx(null)
     setEditDraft('')
     updateTranscriptContent(updatedText, updatedSegments)
@@ -386,13 +428,69 @@ export default function TranscriptPanel() {
     updatedParagraphs[idx] = trimmed
     const updatedText = updatedParagraphs.join('\n\n')
 
-    setLiveText(updatedText)
+    setHistoryState({ text: updatedText, segments: liveSegments })
     setEditingParagraphIdx(null)
     setEditDraft('')
     updateTranscriptContent(updatedText, liveSegments)
 
     await persistToHistory(updatedText)
   }
+
+  const handleUndo = useCallback(async () => {
+    if (!canUndo) return
+    const prev = undo()
+    if (prev) {
+      updateTranscriptContent(prev.text, prev.segments)
+      setSaveSuccessMessage('Undone ↩')
+      setTimeout(() => setSaveSuccessMessage(null), 2000)
+      await persistToHistory(prev.text)
+    }
+  }, [canUndo, undo, updateTranscriptContent, persistToHistory])
+
+  const handleRedo = useCallback(async () => {
+    if (!canRedo) return
+    const next = redo()
+    if (next) {
+      updateTranscriptContent(next.text, next.segments)
+      setSaveSuccessMessage('Redone ↪')
+      setTimeout(() => setSaveSuccessMessage(null), 2000)
+      await persistToHistory(next.text)
+    }
+  }, [canRedo, redo, updateTranscriptContent, persistToHistory])
+
+  // Global Undo / Redo keyboard shortcuts (Ctrl+Z / Cmd+Z, Ctrl+Y / Cmd+Shift+Z)
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.isContentEditable)
+      ) {
+        return
+      }
+
+      const isMac = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform)
+      const isMod = isMac ? e.metaKey : e.ctrlKey
+
+      if (isMod && e.key.toLowerCase() === 'z') {
+        if (e.shiftKey) {
+          e.preventDefault()
+          handleRedo()
+        } else {
+          e.preventDefault()
+          handleUndo()
+        }
+      } else if (isMod && e.key.toLowerCase() === 'y') {
+        e.preventDefault()
+        handleRedo()
+      }
+    }
+
+    window.addEventListener('keydown', handleGlobalKeyDown)
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown)
+  }, [handleUndo, handleRedo])
 
   const handleKeyDown = (
     e: React.KeyboardEvent<HTMLTextAreaElement>,
@@ -548,6 +646,28 @@ export default function TranscriptPanel() {
             <span>Word Tracking: {wordSyncEnabled ? 'ON' : 'OFF'}</span>
           </button>
 
+          {/* Undo / Redo controls */}
+          <div className="flex items-center rounded-xl bg-white/80 dark:bg-slate-800 p-0.5 ring-1 border border-slate-200/80 dark:border-slate-700 shadow-2xs">
+            <button
+              type="button"
+              onClick={handleUndo}
+              disabled={!canUndo}
+              className="p-1.5 rounded-lg text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent transition-colors cursor-pointer"
+              title="Undo inline edit (Ctrl+Z / Cmd+Z)"
+            >
+              <Undo2 className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={handleRedo}
+              disabled={!canRedo}
+              className="p-1.5 rounded-lg text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent transition-colors cursor-pointer"
+              title="Redo inline edit (Ctrl+Y / Cmd+Shift+Z)"
+            >
+              <Redo2 className="h-3.5 w-3.5" />
+            </button>
+          </div>
+
           {/* Primary Copy Pill */}
           <button
             onClick={handleCopy}
@@ -584,7 +704,14 @@ export default function TranscriptPanel() {
           </div>
         </div>
 
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          {/* Transcript Search Box */}
+          <TranscriptSearch
+            segments={liveSegments}
+            onJumpTo={handleSearchJump}
+            onClear={handleSearchClear}
+          />
+
           <ReportErrorButton
             errorMessage="User reported inaccurate transcript or quality issue"
             filename={sourceName}
@@ -602,7 +729,6 @@ export default function TranscriptPanel() {
             className="flex items-center gap-1.5 rounded-xl border border-slate-200/80 dark:border-slate-700 bg-white/90 dark:bg-slate-900/90 px-3.5 py-2 text-xs sm:text-sm font-medium text-slate-600 dark:text-slate-300 transition-all hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-950 dark:hover:text-white active:scale-95 cursor-pointer"
           >
             <RefreshCw className="h-3.5 w-3.5" />
-            <span>New</span>
           </button>
         </div>
       </div>
@@ -815,14 +941,18 @@ export default function TranscriptPanel() {
                 const totalRealWords = Math.max(1, realWords.length)
 
                 let wordCounter = 0
+                const isSearchMatch = highlightedSegmentIdx === segIdx
 
                 return (
                   <div
                     key={`${segment.start}-${segIdx}`}
+                    id={`segment-${segIdx}`}
                     onClick={() => handleSeekToSegment(segment.start)}
                     onDoubleClick={(e) => handleStartEditSegment(segIdx, e)}
                     className={`group grid grid-cols-[4rem_minmax(0,1fr)] sm:grid-cols-[5rem_minmax(0,1fr)] gap-3 sm:gap-4 rounded-2xl p-3.5 cursor-pointer transition-all duration-200 relative ${
-                      isSegmentActive
+                      isSearchMatch
+                        ? 'ring-2 ring-amber-400 bg-amber-50/90 dark:bg-amber-950/40 shadow-sm border-l-4 border-amber-500'
+                        : isSegmentActive
                         ? `${speakerStyle?.bgActive || 'bg-blue-50/90 dark:bg-blue-950/50'} border-l-4 ${speakerStyle?.accent || 'border-blue-600'} shadow-xs ring-1 ring-blue-500/10`
                         : 'hover:bg-slate-100/60 dark:hover:bg-slate-800/40'
                     }`}

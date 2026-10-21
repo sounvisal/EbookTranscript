@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { useSession } from 'next-auth/react'
 import { FileAudio, AlertCircle, Check, Copy, Download, Loader2, X, PlayCircle, Layers, Sparkles, RefreshCw, ShieldCheck } from 'lucide-react'
@@ -60,6 +60,7 @@ export default function BatchUploadZone() {
   const [running, setRunning] = useState(false)
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const savedRef = useRef<Set<string>>(new Set())
+  const objectUrlsRef = useRef<Map<string, string>>(new Map())
 
   const updateJob = useCallback((id: string, patch: Partial<BatchJob>) => {
     setJobs((current) => current.map((job) => (job.id === id ? { ...job, ...patch } : job)))
@@ -93,11 +94,20 @@ export default function BatchUploadZone() {
 
   const removeJob = (id: string) => {
     if (running) return
+    // Revoke Object URL to prevent memory leak
+    const url = objectUrlsRef.current.get(id)
+    if (url) {
+      URL.revokeObjectURL(url)
+      objectUrlsRef.current.delete(id)
+    }
     setJobs((current) => current.filter((job) => job.id !== id))
   }
 
   const clearAll = () => {
     if (running) return
+    // Revoke all Object URLs to prevent memory leak
+    objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url))
+    objectUrlsRef.current.clear()
     setJobs([])
     savedRef.current = new Set()
   }
@@ -402,6 +412,12 @@ export default function BatchUploadZone() {
                       onClick={() => {
                         const store = useTranscriptStore.getState()
                         store.setFile(job.file)
+                        // Reuse or create Object URL and track it
+                        let url = objectUrlsRef.current.get(job.id)
+                        if (!url) {
+                          url = URL.createObjectURL(job.file)
+                          objectUrlsRef.current.set(job.id, url)
+                        }
                         store.setTranscriptWithAudio(
                           {
                             id: job.transcript?.id,
@@ -413,7 +429,7 @@ export default function BatchUploadZone() {
                             kind: 'transcript',
                             alreadySaved: true
                           },
-                          URL.createObjectURL(job.file)
+                          url
                         )
                       }}
                       className="flex items-center gap-1.5 rounded-lg border border-purple-200 dark:border-purple-800/80 bg-purple-50 dark:bg-purple-950/50 px-3 py-1.5 text-xs font-semibold text-purple-700 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-900/60 transition-colors cursor-pointer"
@@ -468,4 +484,4 @@ function StatusBadge({ status }: { status: BatchJobStatus }) {
   }
   const { label, className } = config[status]
   return <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${className}`}>{label}</span>
-}
+}
