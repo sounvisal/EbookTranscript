@@ -309,7 +309,7 @@ export default function BatchUploadZone() {
             </span>
           ) : (
             <span className="rounded-full bg-slate-100 dark:bg-slate-800 px-2 py-0.5 text-[10px] font-semibold text-slate-600 dark:text-slate-400">
-              Standard: 20
+              Standard: {maxBatchFiles}
             </span>
           )}
         </div>
@@ -317,7 +317,7 @@ export default function BatchUploadZone() {
           Drag and drop multiple audio or video files to transcribe in parallel
         </p>
         <p className="mt-3 text-[11px] font-medium text-slate-400 dark:text-slate-500">
-          Up to {MAX_MEDIA_UPLOAD_MB} MB per file · {concurrency} parallel streams distributed across {totalFleetKeys} rotated Gemini keys
+          Up to {MAX_MEDIA_UPLOAD_MB} MB per file · {concurrency} parallel streams
         </p>
       </div>
 
@@ -357,13 +357,9 @@ export default function BatchUploadZone() {
                       ? 'bg-purple-600 text-white shadow-xs'
                       : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                   } disabled:opacity-50 disabled:cursor-not-allowed`}
-                  title={
-                    count <= totalFleetKeys
-                      ? `Run ${count} parallel workers with dedicated 1:1 API key allocation (Zero 429 rate limit risk)`
-                      : `Run ${count} parallel workers rotated across all ${totalFleetKeys} fleet keys for maximum throughput`
-                  }
+                  title={`Run ${count} parallel worker streams simultaneously`}
                 >
-                  {count}x{count === totalFleetKeys ? '⚡' : ''}
+                  {count}x
                 </button>
               ))}
 
@@ -434,17 +430,6 @@ export default function BatchUploadZone() {
                 </div>
 
                 <div className="flex shrink-0 items-center gap-2">
-                  {typeof job.assignedKeyIndex === 'number' && job.status === 'processing' && (
-                    <span className="flex items-center gap-1 rounded-full bg-blue-50 dark:bg-blue-950/80 border border-blue-200/80 dark:border-blue-800/80 px-2 py-0.5 text-[10px] font-mono font-bold text-blue-600 dark:text-blue-400 animate-pulse">
-                      <Sparkles className="h-2.5 w-2.5 text-blue-500" />
-                      <span>Key #{job.assignedKeyIndex + 1}</span>
-                    </span>
-                  )}
-                  {typeof job.assignedKeyIndex === 'number' && job.status === 'complete' && (
-                    <span className="hidden sm:inline-block rounded-full bg-slate-100 dark:bg-slate-800/80 px-2 py-0.5 text-[10px] font-mono font-medium text-slate-500 dark:text-slate-400">
-                      Key #{job.assignedKeyIndex + 1}
-                    </span>
-                  )}
                   <StatusBadge status={job.status} />
                   {job.status === 'queued' && !running && (
                     <button
