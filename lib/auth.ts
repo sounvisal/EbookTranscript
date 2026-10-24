@@ -177,7 +177,14 @@ export const authOptions: NextAuthOptions = {
     async jwt({ token, user }) {
       if (user) {
         token.id = user.id
-        token.role = (user as any).role || (isUserAdmin(user.email) ? 'admin' : 'user')
+        const isAdmin = isUserAdmin(user.email, (user as any).role)
+        token.role = isAdmin ? 'admin' : ((user as any).role || 'user')
+        if (isAdmin && user.email) {
+          prisma.user.updateMany({
+            where: { email: user.email.toLowerCase(), role: { not: 'admin' } },
+            data: { role: 'admin' }
+          }).catch(() => {})
+        }
       } else {
         // Keep token.role synchronized if user email is recognized as admin
         if (token.email && isUserAdmin(token.email as string, token.role as string)) {
