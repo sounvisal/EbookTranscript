@@ -1,8 +1,8 @@
 'use client'
 
-import { Activity, Radio, Users, Cpu, BarChart3, AlertTriangle } from 'lucide-react'
+import { Activity, Radio, Users, Cpu, BarChart3, AlertTriangle, Database, Shield } from 'lucide-react'
 
-type TabId = 'overview' | 'feed' | 'users' | 'keys' | 'tokens' | 'errors'
+export type TabId = 'overview' | 'feed' | 'users' | 'keys' | 'tokens' | 'errors' | 'cache' | 'audit'
 
 interface TabNavigationProps {
   activeTab: TabId
@@ -18,8 +18,10 @@ export function TabNavigation({ activeTab, onTabChange, usersCount, keyFleetCoun
     { id: 'feed' as TabId, label: 'Live Activity Feed', shortcut: '2', icon: Radio },
     { id: 'users' as TabId, label: `User Directory (${usersCount})`, shortcut: '3', icon: Users },
     { id: 'keys' as TabId, label: `API Key Fleet & Models (${keyFleetCount})`, shortcut: '4', icon: Cpu },
-    { id: 'tokens' as TabId, label: 'Tokens & Quotas', shortcut: '5', icon: BarChart3 },
-    { id: 'errors' as TabId, label: `Error Intel & Clusters (${recentErrorsCount})`, shortcut: '6', icon: AlertTriangle }
+    { id: 'cache' as TabId, label: 'Transcript Cache', shortcut: '5', icon: Database },
+    { id: 'audit' as TabId, label: 'Security Audit Logs', shortcut: '6', icon: Shield },
+    { id: 'tokens' as TabId, label: 'Tokens & Quotas', shortcut: '7', icon: BarChart3 },
+    { id: 'errors' as TabId, label: `Error Intel & Clusters (${recentErrorsCount})`, shortcut: '8', icon: AlertTriangle }
   ]
 
   return (

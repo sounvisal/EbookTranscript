@@ -2,7 +2,7 @@
 
 import React from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, Gauge, FileAudio, Loader2 } from 'lucide-react'
+import { X, Gauge, FileAudio, Loader2, RotateCcw, Zap } from 'lucide-react'
 import type { UserDossier } from '../../types'
 
 interface UserDossierDrawerProps {
@@ -10,13 +10,17 @@ interface UserDossierDrawerProps {
   userDossier: UserDossier | null
   dossierLoading: boolean
   onClose: () => void
+  onResetQuota?: (id: string) => void
+  onBoostQuota?: (id: string, minutes: number) => void
 }
 
 export function UserDossierDrawer({
   isOpen,
   userDossier,
   dossierLoading,
-  onClose
+  onClose,
+  onResetQuota,
+  onBoostQuota
 }: UserDossierDrawerProps) {
   return (
     <AnimatePresence>
@@ -94,6 +98,39 @@ export function UserDossierDrawer({
                       <span className="text-[10px] text-slate-500">
                         {userDossier.quota.remainingMinutes} minutes remaining today. Resets at midnight UTC+7.
                       </span>
+
+                      <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-blue-200/50 dark:border-blue-900/40">
+                        {onResetQuota && (
+                          <button
+                            type="button"
+                            onClick={() => onResetQuota(userDossier.id)}
+                            className="flex items-center gap-1.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-3 py-1.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition-colors shadow-xs cursor-pointer"
+                          >
+                            <RotateCcw className="h-3 w-3" />
+                            <span>Reset to 0m</span>
+                          </button>
+                        )}
+                        {onBoostQuota && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => onBoostQuota(userDossier.id, 60)}
+                              className="flex items-center gap-1.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-3 py-1.5 text-xs font-semibold text-purple-600 dark:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-950/40 transition-colors shadow-xs cursor-pointer"
+                            >
+                              <Zap className="h-3 w-3" />
+                              <span>+60m Boost</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => onBoostQuota(userDossier.id, 120)}
+                              className="flex items-center gap-1.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-3 py-1.5 text-xs font-semibold text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/40 transition-colors shadow-xs cursor-pointer"
+                            >
+                              <Zap className="h-3 w-3" />
+                              <span>+120m</span>
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>

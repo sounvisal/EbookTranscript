@@ -135,6 +135,54 @@ export function useUsers({ session, showNotification, fetchStats, selectedRange 
     showNotification('✅ User directory exported to CSV.')
   }
 
+  // Reset User Daily Quota
+  const handleResetQuota = async (userId: string) => {
+    setActionUserId(userId)
+    try {
+      const res = await fetch('/api/admin/users/quota', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, action: 'reset' })
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to reset quota.')
+      }
+      showNotification('✅ Daily quota reset to 0 minutes.')
+      if (selectedUserId === userId) {
+        handleInspectUser(userId)
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Error resetting quota.')
+    } finally {
+      setActionUserId(null)
+    }
+  }
+
+  // Grant Bonus Minutes
+  const handleBoostQuota = async (userId: string, minutes: number = 60) => {
+    setActionUserId(userId)
+    try {
+      const res = await fetch('/api/admin/users/quota', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, action: 'boost', bonusMinutes: minutes })
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to grant bonus minutes.')
+      }
+      showNotification(`✅ Granted +${minutes} bonus minutes.`)
+      if (selectedUserId === userId) {
+        handleInspectUser(userId)
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Error granting bonus minutes.')
+    } finally {
+      setActionUserId(null)
+    }
+  }
+
   // Close user dossier
   const closeUserDossier = () => {
     setSelectedUserId(null)
@@ -169,6 +217,8 @@ export function useUsers({ session, showNotification, fetchStats, selectedRange 
     handleRoleChange,
     handleDeleteUser,
     handleExportUsersCsv,
+    handleResetQuota,
+    handleBoostQuota,
     closeUserDossier
   }
 }

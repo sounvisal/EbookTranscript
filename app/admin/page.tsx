@@ -24,6 +24,8 @@ import { OverviewTab } from './components/tabs/OverviewTab'
 import { LiveFeedTab } from './components/tabs/LiveFeedTab'
 import { UserManagementTab } from './components/tabs/UserManagementTab'
 import { FleetHealthTab } from './components/tabs/FleetHealthTab'
+import { CacheManagementTab } from './components/tabs/CacheManagementTab'
+import { AuditLogsTab } from './components/tabs/AuditLogsTab'
 import { TokenIntelligenceTab } from './components/tabs/TokenIntelligenceTab'
 import { ErrorClusteringTab } from './components/tabs/ErrorClusteringTab'
 
@@ -35,12 +37,13 @@ import { ErrorDetailModal } from './components/modals/ErrorDetailModal'
 
 // Types
 import type { AdminStats } from './types'
+import type { TabId } from './components/TabNavigation'
 
 function AdminDashboardContent() {
   const { data: session, status } = useSession()
 
   // UI state
-  const [activeTab, setActiveTab] = useState<'overview' | 'feed' | 'users' | 'keys' | 'tokens' | 'errors'>('overview')
+  const [activeTab, setActiveTab] = useState<TabId>('overview')
   const [currentTime, setCurrentTime] = useState<Date>(new Date())
   const [notification, setNotification] = useState<string | null>(null)
   const [selectedError, setSelectedError] = useState<AdminStats['errors']['recent'][0] | null>(null)
@@ -144,13 +147,15 @@ function AdminDashboardContent() {
         return
       }
 
-      const tabMap: Record<string, typeof activeTab> = {
+      const tabMap: Record<string, TabId> = {
         '1': 'overview',
         '2': 'feed',
         '3': 'users',
         '4': 'keys',
-        '5': 'tokens',
-        '6': 'errors'
+        '5': 'cache',
+        '6': 'audit',
+        '7': 'tokens',
+        '8': 'errors'
       }
 
       if (tabMap[e.key]) {
@@ -271,6 +276,8 @@ function AdminDashboardContent() {
           onInspectUser={usersHook.handleInspectUser}
           onRoleChange={usersHook.handleRoleChange}
           onDeleteUser={usersHook.handleDeleteUser}
+          onResetQuota={usersHook.handleResetQuota}
+          onBoostQuota={usersHook.handleBoostQuota}
           onExportCsv={usersHook.handleExportUsersCsv}
           currentAdminEmail={session?.user?.email}
         />
@@ -291,12 +298,18 @@ function AdminDashboardContent() {
         />
       )}
 
-      {/* TAB 5: TOKENS & ESTIMATED COSTS */}
+      {/* TAB 5: TRANSCRIPT CACHE INTELLIGENCE & PURGE */}
+      {activeTab === 'cache' && <CacheManagementTab />}
+
+      {/* TAB 6: SECURITY AUDIT LOGS */}
+      {activeTab === 'audit' && <AuditLogsTab />}
+
+      {/* TAB 7: TOKENS & ESTIMATED COSTS */}
       {activeTab === 'tokens' && stats && (
         <TokenIntelligenceTab tokens={stats.tokens} />
       )}
 
-      {/* TAB 6: ERROR INTEL & CLUSTERING */}
+      {/* TAB 8: ERROR INTEL & CLUSTERING */}
       {activeTab === 'errors' && stats && (
         <ErrorClusteringTab
           errors={stats.errors}
@@ -315,6 +328,8 @@ function AdminDashboardContent() {
         userDossier={usersHook.userDossier}
         dossierLoading={usersHook.dossierLoading}
         onClose={usersHook.closeUserDossier}
+        onResetQuota={usersHook.handleResetQuota}
+        onBoostQuota={usersHook.handleBoostQuota}
       />
 
       {/* Transcript Content Inspector Modal */}

@@ -90,6 +90,28 @@ export function FleetHealthTab({
           </div>
         </div>
 
+        {/* Fleet Aggregate Bandwidth Bar */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-4 rounded-2xl bg-gradient-to-r from-amber-500/10 via-purple-500/10 to-blue-500/10 border border-slate-200/80 dark:border-slate-800">
+          <div>
+            <span className="text-[11px] text-slate-500 dark:text-slate-400 block font-medium">Fleet Size</span>
+            <p className="text-lg font-bold text-slate-900 dark:text-white font-mono mt-0.5">{keyFleet?.length || 1} API Keys</p>
+          </div>
+          <div>
+            <span className="text-[11px] text-slate-500 dark:text-slate-400 block font-medium">Daily Quota Capacity</span>
+            <p className="text-lg font-bold text-emerald-600 dark:text-emerald-400 font-mono mt-0.5">{((keyFleet?.length || 1) * 1500).toLocaleString()} reqs/day</p>
+          </div>
+          <div>
+            <span className="text-[11px] text-slate-500 dark:text-slate-400 block font-medium">Instant Bandwidth</span>
+            <p className="text-lg font-bold text-blue-600 dark:text-blue-400 font-mono mt-0.5">{(keyFleet?.length || 1) * 15} RPM max</p>
+          </div>
+          <div>
+            <span className="text-[11px] text-slate-500 dark:text-slate-400 block font-medium">Probe Health</span>
+            <p className="text-lg font-bold text-purple-600 dark:text-purple-400 font-mono mt-0.5">
+              {Object.values(pingResults).filter((p) => p.status === 'healthy').length || keyFleet?.length || 1} / {keyFleet?.length || 1} Operational
+            </p>
+          </div>
+        </div>
+
         {/* Key Cards Grid */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-1">
           {keyFleet?.map((k) => {
@@ -163,6 +185,28 @@ export function FleetHealthTab({
                   <div className="flex justify-between items-center text-[10px] text-slate-500 dark:text-slate-400 pt-0.5 font-mono">
                     <span>Tokens Today: {(k.tokensToday || 0).toLocaleString()}</span>
                     <span>{k.avgLatencyMs ? `Latency: ${k.avgLatencyMs}ms` : ''}</span>
+                  </div>
+                </div>
+
+                {/* Per-Key Daily Cap Progress against Google 1,500 limit */}
+                <div className="flex flex-col gap-1 border-t border-slate-200/60 dark:border-slate-800/80 pt-2">
+                  <div className="flex justify-between text-[10px]">
+                    <span className="text-slate-500">Daily Quota (1,500 cap):</span>
+                    <span className="font-bold text-slate-700 dark:text-slate-300 font-mono">
+                      {k.routedRequestsToday || 0} / 1,500 ({Math.min(100, Math.round(((k.routedRequestsToday || 0) / 1500) * 100))}%)
+                    </span>
+                  </div>
+                  <div className="h-1.5 w-full rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
+                    <div
+                      style={{ width: `${Math.min(100, Math.max(2, Math.round(((k.routedRequestsToday || 0) / 1500) * 100)))}%` }}
+                      className={`h-full rounded-full ${
+                        (k.routedRequestsToday || 0) >= 1200
+                          ? 'bg-red-500'
+                          : (k.routedRequestsToday || 0) >= 750
+                          ? 'bg-amber-500'
+                          : 'bg-emerald-500'
+                      }`}
+                    />
                   </div>
                 </div>
 

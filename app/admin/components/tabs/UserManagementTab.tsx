@@ -8,7 +8,9 @@ import {
   Loader2,
   UserCheck,
   UserX,
-  Trash2
+  Trash2,
+  RotateCcw,
+  Zap
 } from 'lucide-react'
 import type { ManagedUser } from '../../types'
 
@@ -24,6 +26,8 @@ interface UserManagementTabProps {
   onInspectUser: (id: string) => void
   onRoleChange: (id: string, role: 'admin' | 'user') => void
   onDeleteUser: (id: string, email: string) => void
+  onResetQuota?: (id: string) => void
+  onBoostQuota?: (id: string, minutes: number) => void
   onExportCsv: () => void
   currentAdminEmail?: string | null
 }
@@ -40,6 +44,8 @@ export function UserManagementTab({
   onInspectUser,
   onRoleChange,
   onDeleteUser,
+  onResetQuota,
+  onBoostQuota,
   onExportCsv,
   currentAdminEmail
 }: UserManagementTabProps) {
@@ -165,6 +171,30 @@ export function UserManagementTab({
                         >
                           Dossier
                         </button>
+
+                        {!isAdmin && onResetQuota && (
+                          <button
+                            onClick={() => onResetQuota(u.id)}
+                            disabled={actionUserId === u.id}
+                            className="flex items-center gap-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200/80 dark:border-emerald-800/60 px-2 py-1 text-[11px] font-semibold text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 transition-colors cursor-pointer"
+                            title="Reset today's transcription quota to 0 mins"
+                          >
+                            <RotateCcw className="h-3 w-3" />
+                            <span>Reset</span>
+                          </button>
+                        )}
+
+                        {!isAdmin && onBoostQuota && (
+                          <button
+                            onClick={() => onBoostQuota(u.id, 60)}
+                            disabled={actionUserId === u.id}
+                            className="flex items-center gap-1 rounded-lg bg-purple-50 dark:bg-purple-950/60 border border-purple-200/80 dark:border-purple-800/60 px-2 py-1 text-[11px] font-semibold text-purple-700 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-900/60 transition-colors cursor-pointer"
+                            title="Grant +60 bonus minutes for today"
+                          >
+                            <Zap className="h-3 w-3" />
+                            <span>+60m</span>
+                          </button>
+                        )}
 
                         {isAdmin ? (
                           <button
