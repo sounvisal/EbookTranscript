@@ -1,8 +1,9 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
+import { useRouter } from 'next/navigation'
 import { useSession } from 'next-auth/react'
-import { Lock, Sparkles } from 'lucide-react'
+import { Sparkles } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 
 // Custom hooks
@@ -40,6 +41,7 @@ import type { AdminStats } from './types'
 import type { TabId } from './components/TabNavigation'
 
 function AdminDashboardContent() {
+  const router = useRouter()
   const { data: session, status } = useSession()
 
   // UI state
@@ -111,13 +113,20 @@ function AdminDashboardContent() {
     usersHook.fetchUsers(true)
   }, [statsHook, usersHook])
 
-  // Initial data fetch on auth
+  // Initial data fetch on auth, or stealth-redirect non-admin users
   useEffect(() => {
-    if (status === 'authenticated' && session?.user?.role === 'admin') {
-      statsHook.fetchStats(false, statsHook.selectedRange)
-      usersHook.fetchUsers(false)
+    if (status === 'authenticated') {
+      if (session?.user?.role === 'admin') {
+        statsHook.fetchStats(false, statsHook.selectedRange)
+        usersHook.fetchUsers(false)
+      } else {
+        // Silently redirect non-admin users to workspace without showing error panels
+        router.replace('/transcribe')
+      }
+    } else if (status === 'unauthenticated') {
+      router.replace('/login')
     }
-  }, [status, session]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [status, session, router]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Global Keyboard Shortcuts (R to sync, 1-6 for tabs, Esc to close modals)
   useEffect(() => {
@@ -184,17 +193,7 @@ function AdminDashboardContent() {
   }
 
   if (status === 'unauthenticated' || session?.user?.role !== 'admin') {
-    return (
-      <div className="mx-auto flex min-h-[60vh] max-w-md flex-col items-center justify-center text-center p-6">
-        <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-3xl bg-red-100 dark:bg-red-950/60 text-red-600 dark:text-red-400">
-          <Lock className="h-8 w-8" />
-        </div>
-        <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">Admin Access Restricted</h1>
-        <p className="mt-2 text-sm leading-relaxed text-slate-600 dark:text-slate-400">
-          You must be authenticated with an administrative account to inspect telemetry, API key rotation, or manage users.
-        </p>
-      </div>
-    )
+    return <AdminSkeleton />
   }
 
   return (

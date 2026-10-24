@@ -63,11 +63,20 @@ export default function AuthDialog() {
 
   const { data: session, status } = useSession()
 
+  // Security & Route Stealth: Check if user has verified admin role
+  const isAdmin = session?.user?.role === 'admin'
+  const isTargetingAdmin = callbackUrl.startsWith('/admin') || callbackUrl.startsWith('/api/admin')
+
+  // Destination Sanitization: Non-admins must NEVER be directed to /admin
+  const destination = (!isAdmin && isTargetingAdmin)
+    ? '/transcribe'
+    : (callbackUrl === '/login' ? '/transcribe' : callbackUrl)
+
   useEffect(() => {
-    if (status === 'authenticated' && session?.user && callbackUrl && callbackUrl !== '/login') {
-      router.push(callbackUrl)
+    if (status === 'authenticated' && session?.user) {
+      router.push(destination)
     }
-  }, [status, session, callbackUrl, router])
+  }, [status, session, destination, router])
 
   const hasGoogleProvider = Boolean(providers?.google)
 
@@ -147,7 +156,7 @@ export default function AuthDialog() {
         email: normalizedEmail,
         password,
         redirect: false,
-        callbackUrl
+        callbackUrl: destination
       })
 
       if (signInResult?.error) {
@@ -156,7 +165,7 @@ export default function AuthDialog() {
         return
       }
 
-      router.push(signInResult?.url || callbackUrl)
+      router.push(signInResult?.url || destination)
       router.refresh()
     } catch (err) {
       console.error(err)
@@ -181,7 +190,7 @@ export default function AuthDialog() {
       await signIn('email', {
         email: normalizedEmail,
         redirect: false,
-        callbackUrl
+        callbackUrl: destination
       })
 
       // Query generated direct link
@@ -235,10 +244,16 @@ export default function AuthDialog() {
             <span>Signal Intelligence</span>
           </div>
           <h1 className="mt-3 text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
-            {mode === 'login' ? 'Welcome to Signal' : 'Create an Account'}
+            {status === 'authenticated'
+              ? 'Welcome Back'
+              : mode === 'login'
+              ? 'Welcome to Signal'
+              : 'Create an Account'}
           </h1>
           <p className="mt-1 text-xs sm:text-sm text-slate-500">
-            {mode === 'login'
+            {status === 'authenticated'
+              ? (isAdmin ? 'You are authenticated with administrative privileges.' : 'Redirecting to your transcription workspace...')
+              : mode === 'login'
               ? 'Sign in to access your transcription workspace'
               : 'Start converting audio into structured intelligence'}
           </p>
@@ -260,10 +275,10 @@ export default function AuthDialog() {
             <div className="flex flex-col gap-2 pt-2">
               <button
                 type="button"
-                onClick={() => router.push(callbackUrl)}
+                onClick={() => router.push(destination)}
                 className="apple-btn-primary flex w-full items-center justify-center gap-2 rounded-xl py-3 text-sm font-bold text-white shadow-md shadow-blue-500/20"
               >
-                <span>Continue to {callbackUrl.startsWith('/admin') ? 'Admin Panel' : 'Workspace'}</span>
+                <span>Continue to {isAdmin && isTargetingAdmin ? 'Admin Panel' : 'Workspace'}</span>
                 <ArrowRight className="h-4 w-4" />
               </button>
 
@@ -346,7 +361,7 @@ export default function AuthDialog() {
           <div className="mb-5">
             <button
               type="button"
-              onClick={() => signIn('google', { callbackUrl })}
+              onClick={() => signIn('google', { callbackUrl: destination })}
               className="flex w-full items-center justify-center gap-3 rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700 shadow-sm transition-all hover:bg-slate-50 hover:border-slate-400"
             >
               <GoogleIcon />

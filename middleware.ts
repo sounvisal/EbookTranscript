@@ -9,13 +9,20 @@ export async function middleware(req: NextRequest) {
   if (pathname.startsWith('/admin') || pathname.startsWith('/api/admin')) {
     const isApiAdmin = pathname.startsWith('/api/admin')
 
-    const rejectUnauthorized = (status: number, message: string) => {
+    // Stealth 404 Camouflage:
+    // Unauthorized visitors, standard users, and automated scanners receive a genuine 404 Not Found.
+    // The admin route appears completely non-existent to anyone lacking active admin privileges.
+    const serveStealth404 = () => {
       if (isApiAdmin) {
-        return NextResponse.json({ error: message }, { status })
+        return NextResponse.json({ error: 'Not Found' }, { status: 404 })
       }
-      const loginUrl = new URL('/login', req.url)
-      loginUrl.searchParams.set('callbackUrl', pathname)
-      return NextResponse.redirect(loginUrl)
+      return NextResponse.rewrite(new URL('/not-found', req.url), {
+        status: 404,
+        headers: {
+          'x-middleware-status': '404',
+          'x-robots-tag': 'noindex, nofollow'
+        }
+      })
     }
 
     // 1. Check for session cookie presence (both HTTPS __Secure- prefix and standard names, including chunks)
@@ -30,14 +37,14 @@ export async function middleware(req: NextRequest) {
     const hasSessionCookie = isSecureCookie || hasPlainCookie
 
     if (!hasSessionCookie) {
-      return rejectUnauthorized(401, 'Authentication required.')
+      return serveStealth404()
     }
 
     // 2. Decode and cryptographically verify session token
     const secret = process.env.NEXTAUTH_SECRET
     if (!secret) {
       console.error('[Middleware] Critical: NEXTAUTH_SECRET is not configured.')
-      return rejectUnauthorized(500, 'Server security configuration error.')
+      return serveStealth404()
     }
 
     let token = null
@@ -78,9 +85,9 @@ export async function middleware(req: NextRequest) {
       token = null
     }
 
-    // STRICT FAIL-CLOSED: If token cannot be decoded or is invalid, deny access
+    // STRICT FAIL-CLOSED: If token cannot be decoded or is invalid, camouflage with 404
     if (!token) {
-      return rejectUnauthorized(401, 'Invalid or expired session. Please sign in again.')
+      return serveStealth404()
     }
 
     // 3. Verify admin privilege
@@ -94,8 +101,9 @@ export async function middleware(req: NextRequest) {
 
     const isAdmin = userRole === 'admin' || (Boolean(userEmail) && adminEmails.includes(userEmail))
 
+    // If authenticated user is NOT an admin, camouflage the route with 404
     if (!isAdmin) {
-      return rejectUnauthorized(403, 'Forbidden. Admin credentials required.')
+      return serveStealth404()
     }
   }
 

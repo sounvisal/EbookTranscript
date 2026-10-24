@@ -12,7 +12,9 @@ export default function RegisterPage({ searchParams }: RegisterPageProps) {
   const params = new URLSearchParams({ mode: 'register' })
 
   if (searchParams?.callbackUrl) {
-    params.set('callbackUrl', searchParams.callbackUrl)
+    const rawCallback = searchParams.callbackUrl
+    const safeCallback = rawCallback.startsWith('/admin') ? '/transcribe' : rawCallback
+    params.set('callbackUrl', safeCallback)
   }
 
   redirect(`/login?${params.toString()}`)
