@@ -42,3 +42,4 @@ prisma/dev.db-journal
 
 # temp
 /.temp/
+/scratch/

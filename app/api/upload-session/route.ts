@@ -28,6 +28,11 @@ function getAllGeminiKeys(): string[] {
 
 import { checkUserQuota } from '@/lib/quota'
 
+export async function GET() {
+  const keys = getAllGeminiKeys()
+  return NextResponse.json({ totalKeys: keys.length })
+}
+
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) {
@@ -47,7 +52,7 @@ export async function POST(req: Request) {
 
   const host = getGeminiApiHost()
   const body = await req.json().catch(() => ({}))
-  const { fileName, mimeType, fileSize } = body
+  const { fileName, mimeType, fileSize, preferredKeyIndex } = body
 
   let uploadUrl = ''
   let assignedKey = keys[0]
@@ -73,9 +78,15 @@ export async function POST(req: Request) {
   }
 
   if (fileName && mimeType && typeof fileSize === 'number' && fileSize > 0) {
+    // If a preferred keyIndex was requested (e.g. from parallel batch workers), start from that key!
+    const startingIndex =
+      typeof preferredKeyIndex === 'number' && preferredKeyIndex >= 0
+        ? preferredKeyIndex % keys.length
+        : keyIndex
+
     // Try up to keys.length times to establish an authorized resumable session
     for (let attempt = 0; attempt < keys.length; attempt++) {
-      const idx = (keyIndex + attempt) % keys.length
+      const idx = (startingIndex + attempt) % keys.length
       const candidateKey = keys[idx]
 
       try {
@@ -132,6 +143,7 @@ export async function POST(req: Request) {
     keyIndex: assignedIndex,
     host,
     uploadUrl,
+    totalKeys: keys.length,
     quota: {
       usedMinutes: quota.usedMinutes,
       limitMinutes: quota.limitMinutes,

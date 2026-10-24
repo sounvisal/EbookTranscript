@@ -233,7 +233,8 @@ async function readTranscriptionStream(
 export async function transcribeWithProgress(
   input: { file?: File; url?: string },
   onEvent?: (event: TranscribeProgressEvent) => void,
-  options?: AdvancedOptions
+  options?: AdvancedOptions,
+  preferredKeyIndex?: number
 ): Promise<TranscribeResult> {
   let requestInit: RequestInit = { method: 'POST' }
 
@@ -263,13 +264,21 @@ export async function transcribeWithProgress(
       if (options) {
         formData.append('options', JSON.stringify(options))
       }
+      if (typeof preferredKeyIndex === 'number') {
+        formData.append('keyIndex', String(preferredKeyIndex))
+      }
 
       try {
+        const directHeaders: Record<string, string> = {
+          'x-stream': '1'
+        }
+        if (typeof preferredKeyIndex === 'number') {
+          directHeaders['x-key-index'] = String(preferredKeyIndex)
+        }
+
         const directRes = await fetch('/api/transcribe', {
           method: 'POST',
-          headers: {
-            'x-stream': '1'
-          },
+          headers: directHeaders,
           body: formData
         })
 
@@ -300,7 +309,8 @@ export async function transcribeWithProgress(
           fileName: fileToUpload.name,
           mimeType: inferMimeType(fileToUpload),
           fileSize: fileToUpload.size,
-          clientOrigin: typeof window !== 'undefined' ? window.location.origin : undefined
+          clientOrigin: typeof window !== 'undefined' ? window.location.origin : undefined,
+          preferredKeyIndex
         })
       })
 
@@ -375,7 +385,7 @@ export async function transcribeWithProgress(
         mimeType: uploadedFile.mimeType || fileToUpload.type || 'audio/wav',
         displayName: input.file.name,
         duration: mediaDuration,
-        keyIndex,
+        keyIndex: preferredKeyIndex ?? keyIndex,
         options
       })
     }

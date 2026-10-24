@@ -244,6 +244,11 @@ async function getMediaInputFromRequest(req: Request): Promise<MediaInput> {
     } catch {}
   }
 
+  const keyIndexHeader = req.headers.get('x-key-index')
+  const keyIndexForm = formData.get('keyIndex')
+  const parsedKeyIndex = keyIndexHeader !== null ? Number(keyIndexHeader) : (keyIndexForm !== null ? Number(keyIndexForm) : undefined)
+  const keyIndex = typeof parsedKeyIndex === 'number' && Number.isFinite(parsedKeyIndex) ? parsedKeyIndex : undefined
+
   if (file && file.size > 0) {
     const fileName = 'name' in file && typeof file.name === 'string' ? file.name : 'uploaded-media'
     const mimeType = normalizeMimeType(file.type) || inferMimeTypeFromName(fileName)
@@ -261,7 +266,8 @@ async function getMediaInputFromRequest(req: Request): Promise<MediaInput> {
       mimeType,
       displayName: fileName,
       sourceName: fileName,
-      options
+      options,
+      keyIndex
     }
   }
 
@@ -1095,16 +1101,22 @@ async function runTranscriptionPipeline(
     audio: { buffer: Buffer; mimeType: string; displayName: string; durationSeconds: number },
     onEvent: (event: ProgressEvent) => void
   ) => {
+    const startKey =
+      typeof mediaInput.keyIndex === 'number' && mediaInput.keyIndex >= 0
+        ? mediaInput.keyIndex % keys.length
+        : 0
+
     let lastError: unknown
-    for (let index = 0; index < keys.length; index += 1) {
+    for (let offset = 0; offset < keys.length; offset += 1) {
+      const index = (startKey + offset) % keys.length
       try {
         return await transcribeWithKey(keys[index], audio, mediaInput.sourceName, models, onEvent, promptText, index)
       } catch (error) {
         lastError = error
         // A key throws only after ALL its models were exhausted (rate-limited or
         // unavailable), so rotate to the next key.
-        if (shouldRotate(error) && index < keys.length - 1) {
-          console.warn(`Gemini key #${index + 1} exhausted all models; rotating to key #${index + 2}.`)
+        if (shouldRotate(error) && offset < keys.length - 1) {
+          console.warn(`Gemini key #${index + 1} exhausted all models; rotating to next fleet key.`)
           continue
         }
         throw error

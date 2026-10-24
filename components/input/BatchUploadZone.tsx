@@ -13,12 +13,22 @@ import ReportErrorButton from '@/components/common/ReportErrorButton'
 import AdvancedOptionsDrawer from './AdvancedOptionsDrawer'
 import { useTranscriptStore } from '@/store/transcriptStore'
 
-// Role-based batch limits: 20 for standard users, 50 for admins
-const USER_BATCH_LIMIT = 20
-const ADMIN_BATCH_LIMIT = 50
-const STAGGER_MS = 400
-// Process up to 3 files concurrently in parallel across the rotated Gemini keys
-const MAX_CONCURRENT_JOBS = 3
+// Role-based batch limits: 30 for standard users, 100 for admins
+const USER_BATCH_LIMIT = 30
+const ADMIN_BATCH_LIMIT = 100
+const STAGGER_MS = 200
+// Default concurrent parallel worker streams (matches full 9-key Gemini fleet)
+const DEFAULT_CONCURRENT_JOBS = 9
+
+function getWorkerPresets(fleetCount: number): number[] {
+  const presets = [3, 5]
+  if (fleetCount >= 7) presets.push(7)
+  if (fleetCount >= 1) presets.push(fleetCount)
+  if (fleetCount >= 6) presets.push(12)
+  if (fleetCount >= 8) presets.push(15)
+  if (fleetCount >= 9) presets.push(18)
+  return Array.from(new Set(presets)).sort((a, b) => a - b)
+}
 
 type BatchJobStatus = 'queued' | 'processing' | 'complete' | 'error'
 
@@ -38,6 +48,7 @@ type BatchJob = {
   progress: number
   transcript?: BatchTranscript
   error?: string
+  assignedKeyIndex?: number
 }
 
 function createId() {
@@ -59,8 +70,24 @@ export default function BatchUploadZone() {
   const [jobs, setJobs] = useState<BatchJob[]>([])
   const [running, setRunning] = useState(false)
   const [copiedId, setCopiedId] = useState<string | null>(null)
+  const [totalFleetKeys, setTotalFleetKeys] = useState<number>(9)
+  const [concurrency, setConcurrency] = useState<number>(DEFAULT_CONCURRENT_JOBS)
   const savedRef = useRef<Set<string>>(new Set())
   const objectUrlsRef = useRef<Map<string, string>>(new Map())
+
+  // Detect total configured keys in the Gemini Fleet on mount
+  useEffect(() => {
+    fetch('/api/upload-session')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.totalKeys && data.totalKeys > 0) {
+          setTotalFleetKeys(data.totalKeys)
+          // Default to the fleet size so each worker gets its own key
+          setConcurrency((current) => (current === DEFAULT_CONCURRENT_JOBS || current < data.totalKeys ? data.totalKeys : current))
+        }
+      })
+      .catch(() => {})
+  }, [])
 
   const updateJob = useCallback((id: string, patch: Partial<BatchJob>) => {
     setJobs((current) => current.map((job) => (job.id === id ? { ...job, ...patch } : job)))
@@ -142,8 +169,14 @@ export default function BatchUploadZone() {
   }
 
   const runJob = useCallback(
-    async (job: BatchJob) => {
-      updateJob(job.id, { status: 'processing', progress: 0, error: undefined })
+    async (job: BatchJob, workerIndex: number = 0) => {
+      const assignedKeyIndex = totalFleetKeys > 0 ? workerIndex % totalFleetKeys : workerIndex
+      updateJob(job.id, {
+        status: 'processing',
+        progress: 0,
+        error: undefined,
+        assignedKeyIndex
+      })
 
       try {
         const advancedOptions = useTranscriptStore.getState().advancedOptions
@@ -154,7 +187,8 @@ export default function BatchUploadZone() {
               updateJob(job.id, { progress: event.progress })
             }
           },
-          advancedOptions
+          advancedOptions,
+          assignedKeyIndex
         )
 
         const transcript: BatchTranscript = {
@@ -183,12 +217,12 @@ export default function BatchUploadZone() {
             filename: job.file.name,
             fileSizeBytes: job.file.size,
             inputType: 'batch',
-            userComment: 'Automated batch failure detection alert'
+            userComment: `Automated batch failure alert (Key #${assignedKeyIndex + 1})`
           })
         }).catch(() => {})
       }
     },
-    [updateJob]
+    [updateJob, totalFleetKeys]
   )
 
   const runAll = async () => {
@@ -198,15 +232,16 @@ export default function BatchUploadZone() {
     setRunning(true)
 
     let cursor = 0
+    const activeWorkers = Math.min(concurrency, pending.length)
     const workers = Array.from(
-      { length: Math.min(MAX_CONCURRENT_JOBS, pending.length) },
+      { length: activeWorkers },
       async (_unused, workerIndex) => {
         await delay(workerIndex * STAGGER_MS)
         while (true) {
           const index = cursor
           cursor += 1
           if (index >= pending.length) break
-          await runJob(pending[index])
+          await runJob(pending[index], workerIndex)
         }
       }
     )
@@ -282,12 +317,12 @@ export default function BatchUploadZone() {
           Drag and drop multiple audio or video files to transcribe in parallel
         </p>
         <p className="mt-3 text-[11px] font-medium text-slate-400 dark:text-slate-500">
-          Up to {MAX_MEDIA_UPLOAD_MB} MB per file · 3 concurrent parallel worker streams
+          Up to {MAX_MEDIA_UPLOAD_MB} MB per file · {concurrency} parallel streams distributed across {totalFleetKeys} rotated Gemini keys
         </p>
       </div>
 
       {jobs.length > 0 && (
-        <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs font-semibold text-slate-600 dark:text-slate-400">
+        <div className="flex flex-wrap items-center justify-between gap-3 px-1 text-xs font-semibold text-slate-600 dark:text-slate-400">
           <div className="flex flex-wrap items-center gap-2.5">
             <span>
               {jobs.length} of {maxBatchFiles} files · {completedCount} completed
@@ -304,13 +339,70 @@ export default function BatchUploadZone() {
               </button>
             )}
           </div>
-          <button
-            onClick={clearAll}
-            disabled={running}
-            className="rounded-full px-3 py-1 text-xs font-medium text-slate-500 hover:bg-slate-200/60 dark:hover:bg-slate-800 hover:text-red-600 dark:hover:text-red-400 transition-colors disabled:opacity-40 cursor-pointer"
-          >
-            Clear all
-          </button>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-1 rounded-xl bg-slate-100 dark:bg-slate-800/80 p-1 border border-slate-200/60 dark:border-slate-700/60 shadow-xs">
+              <span className="px-2 text-[11px] font-semibold text-slate-500 dark:text-slate-400 flex items-center gap-1">
+                <Layers className="h-3 w-3 text-purple-500" />
+                <span>Workers:</span>
+              </span>
+              {getWorkerPresets(totalFleetKeys).map((count) => (
+                <button
+                  key={count}
+                  type="button"
+                  disabled={running}
+                  onClick={() => setConcurrency(count)}
+                  className={`rounded-lg px-2.5 py-0.5 text-[11px] font-bold transition-all cursor-pointer ${
+                    concurrency === count
+                      ? 'bg-purple-600 text-white shadow-xs'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                  } disabled:opacity-50 disabled:cursor-not-allowed`}
+                  title={
+                    count <= totalFleetKeys
+                      ? `Run ${count} parallel workers with dedicated 1:1 API key allocation (Zero 429 rate limit risk)`
+                      : `Run ${count} parallel workers rotated across all ${totalFleetKeys} fleet keys for maximum throughput`
+                  }
+                >
+                  {count}x{count === totalFleetKeys ? '⚡' : ''}
+                </button>
+              ))}
+
+              <div className="mx-1 h-3.5 w-px bg-slate-300 dark:bg-slate-700" />
+
+              {/* Fine-tune Stepper */}
+              <div className="flex items-center gap-0.5 pr-1">
+                <button
+                  type="button"
+                  disabled={running || concurrency <= 1}
+                  onClick={() => setConcurrency((c) => Math.max(1, c - 1))}
+                  className="rounded-md px-1.5 py-0.5 text-[11px] font-bold text-slate-500 hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-30 cursor-pointer"
+                  title="Decrease worker count"
+                >
+                  -
+                </button>
+                <span className="min-w-[28px] text-center font-mono text-[11px] font-extrabold text-purple-600 dark:text-purple-400" title={`Current worker concurrency: ${concurrency} parallel streams`}>
+                  {concurrency}w
+                </span>
+                <button
+                  type="button"
+                  disabled={running || concurrency >= 25}
+                  onClick={() => setConcurrency((c) => Math.min(25, c + 1))}
+                  className="rounded-md px-1.5 py-0.5 text-[11px] font-bold text-slate-500 hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-30 cursor-pointer"
+                  title="Increase worker count (up to 25 parallel streams)"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+
+            <button
+              onClick={clearAll}
+              disabled={running}
+              className="rounded-full px-3 py-1 text-xs font-medium text-slate-500 hover:bg-slate-200/60 dark:hover:bg-slate-800 hover:text-red-600 dark:hover:text-red-400 transition-colors disabled:opacity-40 cursor-pointer"
+            >
+              Clear all
+            </button>
+          </div>
         </div>
       )}
 
@@ -342,6 +434,17 @@ export default function BatchUploadZone() {
                 </div>
 
                 <div className="flex shrink-0 items-center gap-2">
+                  {typeof job.assignedKeyIndex === 'number' && job.status === 'processing' && (
+                    <span className="flex items-center gap-1 rounded-full bg-blue-50 dark:bg-blue-950/80 border border-blue-200/80 dark:border-blue-800/80 px-2 py-0.5 text-[10px] font-mono font-bold text-blue-600 dark:text-blue-400 animate-pulse">
+                      <Sparkles className="h-2.5 w-2.5 text-blue-500" />
+                      <span>Key #{job.assignedKeyIndex + 1}</span>
+                    </span>
+                  )}
+                  {typeof job.assignedKeyIndex === 'number' && job.status === 'complete' && (
+                    <span className="hidden sm:inline-block rounded-full bg-slate-100 dark:bg-slate-800/80 px-2 py-0.5 text-[10px] font-mono font-medium text-slate-500 dark:text-slate-400">
+                      Key #{job.assignedKeyIndex + 1}
+                    </span>
+                  )}
                   <StatusBadge status={job.status} />
                   {job.status === 'queued' && !running && (
                     <button
@@ -458,14 +561,14 @@ export default function BatchUploadZone() {
           {running ? (
             <>
               <Loader2 className="h-5 w-5 animate-spin" />
-              <span>Processing Queue in Parallel…</span>
+              <span>Processing Queue ({concurrency} Parallel Workers Active)…</span>
             </>
           ) : (
             <>
               <Sparkles className="h-5 w-5 animate-pulse" />
               <span>
                 Transcribe {jobs.filter((job) => job.status === 'queued' || job.status === 'error').length} Queue Item
-                {jobs.filter((job) => job.status === 'queued' || job.status === 'error').length === 1 ? '' : 's'}
+                {jobs.filter((job) => job.status === 'queued' || job.status === 'error').length === 1 ? '' : 's'} ({concurrency}x Parallel)
               </span>
             </>
           )}
