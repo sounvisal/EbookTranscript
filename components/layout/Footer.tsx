@@ -62,7 +62,7 @@ export default function Footer() {
               </li>
               <li>
                 <a
-                  href="https://t.me/SignalTranscriptBot"
+                  href="https://t.me/transcript_signal_bot"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1.5 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"

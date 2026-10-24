@@ -236,18 +236,18 @@ export default function Home() {
                 Telegram Voice Transcriber
               </h3>
               <p className="mt-2 text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
-                Forward any voice note or video clip to @SignalTranscriptBot and receive formatted transcripts & .SRT subtitle files right inside your chat.
+                Forward any voice note or video clip to @transcript_signal_bot and receive formatted transcripts & .SRT subtitle files right inside your chat.
               </p>
             </div>
             <div className="mt-6 pt-4 border-t border-slate-200/60 dark:border-slate-800">
               <a
-                href="https://t.me/SignalTranscriptBot"
+                href="https://t.me/transcript_signal_bot"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="w-full inline-flex items-center justify-center gap-1.5 rounded-xl bg-slate-900 text-white dark:bg-slate-800 hover:bg-slate-800 dark:hover:bg-slate-700 py-2 text-xs font-bold transition-all cursor-pointer"
               >
                 <Bot className="h-3.5 w-3.5 text-blue-400" />
-                Open @SignalTranscriptBot
+                Open @transcript_signal_bot
               </a>
             </div>
           </div>
@@ -543,19 +543,19 @@ export default function Home() {
 
               <p className="text-sm sm:text-base text-slate-300 leading-relaxed">
                 On your phone? Simply forward voice messages, audio tracks, or video notes to{' '}
-                <strong className="text-white">@SignalTranscriptBot</strong>.
+                <strong className="text-white">@transcript_signal_bot</strong>.
                 Receive formatted transcripts, clickable timestamps, and .SRT subtitle files right inside your chat.
               </p>
 
               <div className="pt-2 flex flex-wrap items-center gap-4">
                 <a
-                  href="https://t.me/SignalTranscriptBot"
+                  href="https://t.me/transcript_signal_bot"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-2 rounded-2xl bg-white px-5 py-3 text-sm font-bold text-slate-950 shadow-md hover:bg-slate-100 transition-all active:scale-95 cursor-pointer"
                 >
                   <Bot className="h-4 w-4 text-blue-600" />
-                  Open @SignalTranscriptBot
+                  Open @transcript_signal_bot
                   <ExternalLink className="h-3.5 w-3.5 text-slate-500" />
                 </a>
 
@@ -593,7 +593,7 @@ export default function Home() {
                       Signal Transcript Bot
                       <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
                     </div>
-                    <div className="text-[10px] text-slate-400">@SignalTranscriptBot · bot</div>
+                    <div className="text-[10px] text-slate-400">@transcript_signal_bot · bot</div>
                   </div>
                 </div>
 
@@ -664,7 +664,7 @@ export default function Home() {
             },
             {
               q: 'How does the Telegram bot companion work?',
-              a: 'Open @SignalTranscriptBot in Telegram, tap Start, and forward any voice message, audio file, or video note. The bot transcribes it in real time and replies with formatted text, timestamps, and downloadable .SRT files right inside your chat.'
+              a: 'Open @transcript_signal_bot in Telegram, tap Start, and forward any voice message, audio file, or video note. The bot transcribes it in real time and replies with formatted text, timestamps, and downloadable .SRT files right inside your chat.'
             }
           ].map((item, idx) => (
             <div
@@ -719,7 +719,7 @@ export default function Home() {
             </Link>
 
             <a
-              href="https://t.me/SignalTranscriptBot"
+              href="https://t.me/transcript_signal_bot"
               target="_blank"
               rel="noopener noreferrer"
               className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-2xl bg-white/15 hover:bg-white/20 px-6 py-3.5 text-sm font-semibold text-white transition-all backdrop-blur-md cursor-pointer"
