@@ -385,7 +385,7 @@ export async function transcribeWithProgress(
         mimeType: uploadedFile.mimeType || fileToUpload.type || 'audio/wav',
         displayName: input.file.name,
         duration: mediaDuration,
-        keyIndex: preferredKeyIndex ?? keyIndex,
+        keyIndex: keyIndex,
         options
       })
     }

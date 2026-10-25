@@ -142,8 +142,17 @@ export function recordKeySuccess(index: number, latencyMs?: number) {
 export function recordKeyFailure(index: number, error: unknown) {
   const record = getOrInitKeyRecord(index)
   const message = error instanceof Error ? error.message : String(error)
+
+  // File permission or non-existent file errors (403 on Files API) are object-level errors,
+  // not key outages; do not mark key as degraded.
+  if (/permission to access the file|does not exist|file.*not found/i.test(message)) {
+    return
+  }
+
   const is429 = /429|resource_exhausted|rate limit|quota/i.test(message)
-  const isInvalid = /api_key_invalid|invalid api key|api key not found|permission_denied/i.test(message)
+  const isInvalid =
+    /api_key_invalid|invalid api key|api key not found|\bpermission_denied\b/i.test(message) &&
+    !/permission to access the file/i.test(message)
 
   record.errorCountToday += 1
   record.lastError = message

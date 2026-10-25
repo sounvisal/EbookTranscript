@@ -967,11 +967,24 @@ async function runTranscriptionPipeline(
 
   // Fast direct path for files uploaded directly from browser to Gemini Files API
   if (mediaInput.fileUri) {
-    const orderedKeys = getOptimalKeyOrder(mediaInput.keyIndex, keys)
+    const assignedIndex =
+      typeof mediaInput.keyIndex === 'number' &&
+      mediaInput.keyIndex >= 0 &&
+      mediaInput.keyIndex < keys.length
+        ? mediaInput.keyIndex
+        : 0
+
+    // Files in Google Files API are strictly private to the specific API key that created them.
+    // The assigned key MUST be tried first. If there was an index discrepancy between client & server,
+    // we can probe other fleet keys without marking them as degraded.
+    const candidateKeys = [
+      { key: keys[assignedIndex], index: assignedIndex },
+      ...keys.map((k, i) => ({ key: k, index: i })).filter((e) => e.index !== assignedIndex)
+    ]
 
     let lastError: unknown
-    for (let k = 0; k < orderedKeys.length; k += 1) {
-      const { key: currentKey, index: actualKeyIndex } = orderedKeys[k]
+    for (let k = 0; k < candidateKeys.length; k += 1) {
+      const { key: currentKey, index: actualKeyIndex } = candidateKeys[k]
       try {
         const result = await transcribeWithKey(
           currentKey,
@@ -991,9 +1004,16 @@ async function runTranscriptionPipeline(
         return result
       } catch (err) {
         lastError = err
-        recordKeyFailure(actualKeyIndex, err)
-        if (k < orderedKeys.length - 1) {
-          console.warn(`Key attempt #${actualKeyIndex + 1} failed for fileUri; rotating immediately to next fleet key...`, err)
+        const errMsg = err instanceof Error ? err.message : String(err)
+        const isFilePermission403 = /permission to access the file|does not exist|403/i.test(errMsg)
+
+        // Only record key failure if it's an actual key/quota error, NOT a cross-key file permission error
+        if (!isFilePermission403) {
+          recordKeyFailure(actualKeyIndex, err)
+        }
+
+        if (k < candidateKeys.length - 1) {
+          console.warn(`Key #${actualKeyIndex + 1} cannot access fileUri; attempting next candidate key in fleet...`, err)
           continue
         }
         throw err
