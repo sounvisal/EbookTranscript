@@ -118,8 +118,7 @@ async function geminiRequest<T>(
       const responseText = await res.text()
       if (!res.ok) {
         const errorMessage = parseGeminiErrorMessage(responseText)
-        const isGeoOrProxyErr = /user location is not supported|location/i.test(errorMessage) || res.status >= 500
-        if (isGeoOrProxyErr && targetHost !== 'generativelanguage.googleapis.com') {
+        if (targetHost !== 'generativelanguage.googleapis.com' && targetHost !== hosts[hosts.length - 1]) {
           console.warn(`Host ${targetHost} failed (${res.status}: ${errorMessage.slice(0, 80)}); trying Google direct...`)
           continue
         }
@@ -194,22 +193,32 @@ function sleep(ms: number) {
 }
 
 export async function waitForGeminiFile(apiKey: string, fileName: string, input?: { attempts?: number; intervalMs?: number }) {
-  const attempts = input?.attempts || 30
-  const intervalMs = input?.intervalMs || 2000
-  let mediaFile = await getGeminiFile(apiKey, fileName)
+  const attempts = input?.attempts || 35
+  const intervalMs = input?.intervalMs || 1500
 
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    if (mediaFile.state === GEMINI_FILE_STATE_ACTIVE) {
-      return mediaFile
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const mediaFile = await getGeminiFile(apiKey, fileName)
+      if (mediaFile.state === GEMINI_FILE_STATE_ACTIVE) {
+        return mediaFile
+      }
+
+      if (mediaFile.state === GEMINI_FILE_STATE_FAILED) {
+        const remoteError = mediaFile.error?.message || 'Gemini failed to process the uploaded file.'
+        throw new Error(remoteError)
+      }
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err)
+      const isTransientPropagation = /permission to access the file|does not exist|403|404|not found/i.test(errMsg)
+      if (isTransientPropagation && attempt <= 5) {
+        console.warn(`[GeminiFile] Initial propagation sync for ${fileName} (attempt ${attempt}/${attempts}): ${errMsg.slice(0, 80)}. Waiting...`)
+      } else if (!isTransientPropagation || attempt >= attempts) {
+        throw err
+      }
     }
 
-    if (mediaFile.state === GEMINI_FILE_STATE_FAILED) {
-      const remoteError = mediaFile.error?.message || 'Gemini failed to process the uploaded file.'
-      throw new Error(remoteError)
-    }
-
-    await sleep(intervalMs)
-    mediaFile = await getGeminiFile(apiKey, fileName)
+    const waitTime = attempt < 4 ? 1000 : intervalMs
+    await sleep(waitTime)
   }
 
   throw new Error('Timed out while preparing file for analysis.')
@@ -350,98 +359,118 @@ export async function streamGeminiTranscript(
 
   const host = getGeminiApiHost()
   const cleanKey = (apiKey || '').trim().replace(/["'\r\n]/g, '')
-  const url = `https://${host}/${GEMINI_API_VERSION}/models/${cleanModel}:streamGenerateContent?alt=sse`
+  const hosts = host !== 'generativelanguage.googleapis.com'
+    ? [host, 'generativelanguage.googleapis.com']
+    : [host]
 
-  const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), GENERATION_TIMEOUT_MS)
+  let lastError: unknown
 
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-client': GEMINI_API_CLIENT,
-        'x-goog-api-key': cleanKey
-      },
-      body,
-      signal: controller.signal
-    })
+  for (const targetHost of hosts) {
+    const url = `https://${targetHost}/${GEMINI_API_VERSION}/models/${cleanModel}:streamGenerateContent?alt=sse`
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), GENERATION_TIMEOUT_MS)
 
-    if (!res.ok) {
-      const responseText = await res.text().catch(() => '')
-      const errorMessage = parseGeminiErrorMessage(responseText)
-      throw new Error(
-        errorMessage
-          ? `Gemini API request failed (${res.status} ${res.statusText}): ${errorMessage}`
-          : `Gemini API request failed (${res.status} ${res.statusText}).`
-      )
-    }
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-client': GEMINI_API_CLIENT,
+          'x-goog-api-key': cleanKey
+        },
+        body,
+        signal: controller.signal
+      })
 
-    if (!res.body) {
-      throw new Error('Gemini returned an empty response body.')
-    }
-
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-    let accumulatedText = ''
-    let lastBlockReason: string | undefined
-
-    const processLine = (line: string) => {
-      const trimmed = line.trim()
-      if (!trimmed || !trimmed.startsWith('data:')) return
-      const jsonStr = trimmed.slice(5).trim()
-      if (!jsonStr) return
-
-      try {
-        const chunk = JSON.parse(jsonStr) as GeminiGenerateContentResponse
-        if (chunk.promptFeedback?.blockReason) {
-          lastBlockReason = chunk.promptFeedback.blockReason
+      if (!res.ok) {
+        const responseText = await res.text().catch(() => '')
+        const errorMessage = parseGeminiErrorMessage(responseText)
+        if (targetHost !== 'generativelanguage.googleapis.com' && targetHost !== hosts[hosts.length - 1]) {
+          console.warn(`Host ${targetHost} stream failed (${res.status}: ${errorMessage.slice(0, 80)}); trying Google direct...`)
+          continue
         }
-        const textParts = chunk.candidates
-          ?.flatMap((c) => c.content?.parts || [])
-          .map((p) => p.text || '')
-          .join('')
+        throw new Error(
+          errorMessage
+            ? `Gemini API request failed (${res.status} ${res.statusText}): ${errorMessage}`
+            : `Gemini API request failed (${res.status} ${res.statusText}).`
+        )
+      }
 
-        if (textParts) {
-          accumulatedText += textParts
-          input.onText?.(accumulatedText)
+      if (!res.body) {
+        throw new Error('Gemini returned an empty response body.')
+      }
+
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let accumulatedText = ''
+      let lastBlockReason: string | undefined
+
+      const processLine = (line: string) => {
+        const trimmed = line.trim()
+        if (!trimmed || !trimmed.startsWith('data:')) return
+        const jsonStr = trimmed.slice(5).trim()
+        if (!jsonStr) return
+
+        try {
+          const chunk = JSON.parse(jsonStr) as GeminiGenerateContentResponse
+          if (chunk.promptFeedback?.blockReason) {
+            lastBlockReason = chunk.promptFeedback.blockReason
+          }
+          const textParts = chunk.candidates
+            ?.flatMap((c) => c.content?.parts || [])
+            .map((p) => p.text || '')
+            .join('')
+
+          if (textParts) {
+            accumulatedText += textParts
+            input.onText?.(accumulatedText)
+          }
+        } catch {
+          // Ignore partial JSON or parse errors in individual SSE lines
         }
-      } catch {
-        // Ignore partial JSON or parse errors in individual SSE lines
       }
-    }
 
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
 
-      let newlineIndex: number
-      while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
-        processLine(buffer.slice(0, newlineIndex))
-        buffer = buffer.slice(newlineIndex + 1)
+        let newlineIndex: number
+        while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
+          processLine(buffer.slice(0, newlineIndex))
+          buffer = buffer.slice(newlineIndex + 1)
+        }
       }
-    }
 
-    if (buffer.trim()) {
-      processLine(buffer)
-    }
+      if (buffer.trim()) {
+        processLine(buffer)
+      }
 
-    const trimmedResult = accumulatedText.trim()
-    if (trimmedResult) {
-      return trimmedResult
-    }
+      const trimmedResult = accumulatedText.trim()
+      if (trimmedResult) {
+        return trimmedResult
+      }
 
-    if (lastBlockReason) {
-      throw new Error(`Gemini blocked the transcription request: ${lastBlockReason}.`)
-    }
+      if (lastBlockReason) {
+        throw new Error(`Gemini blocked the transcription request: ${lastBlockReason}.`)
+      }
 
-    // Return clean empty structure if media contained no discernable speech/text
-    return JSON.stringify({ language: 'auto', segments: [] })
-  } finally {
-    clearTimeout(timeoutId)
+      // Return clean empty structure if media contained no discernable speech/text
+      return JSON.stringify({ language: 'auto', segments: [] })
+    } catch (err) {
+      lastError = err
+      if (targetHost !== hosts[hosts.length - 1]) {
+        console.warn(`Stream on ${targetHost} exception; falling back to direct Google...`, err)
+        continue
+      }
+      throw err
+    } finally {
+      clearTimeout(timeoutId)
+    }
   }
+
+  throw lastError instanceof Error ? lastError : new Error('Gemini streaming request failed.')
 }
 
 export async function generateGeminiText(apiKey: string, input: { modelName: string; prompt: string }) {

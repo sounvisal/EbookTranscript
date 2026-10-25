@@ -223,13 +223,22 @@ async function getMediaInputFromRequest(req: Request): Promise<MediaInput> {
             ? body.durationSeconds
             : 0
 
+      const rawKeyIndex = body?.keyIndex
+      const parsedKeyIndex =
+        typeof rawKeyIndex === 'number'
+          ? rawKeyIndex
+          : typeof rawKeyIndex === 'string' && rawKeyIndex.trim() !== ''
+            ? Number(rawKeyIndex)
+            : undefined
+      const keyIndex = typeof parsedKeyIndex === 'number' && Number.isFinite(parsedKeyIndex) ? parsedKeyIndex : undefined
+
       return {
         fileUri: body.fileUri.trim(),
         mimeType,
         displayName: body.displayName || 'uploaded-media',
         sourceName: body.displayName || 'uploaded-media',
         durationSeconds,
-        keyIndex: typeof body?.keyIndex === 'number' ? body.keyIndex : undefined,
+        keyIndex,
         options: body?.options
       }
     }
@@ -345,21 +354,33 @@ async function withGeminiRetry<T>(operation: () => Promise<T>, label: string) {
 }
 
 async function waitForUploadedFile(apiKey: string, fileName: string) {
-  let mediaFile = await getGeminiFile(apiKey, fileName)
+  const maxAttempts = 35
 
-  for (let attempt = 0; attempt < 35; attempt += 1) {
-    if (mediaFile.state === GEMINI_FILE_STATE_ACTIVE) {
-      return mediaFile
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const mediaFile = await getGeminiFile(apiKey, fileName)
+      if (mediaFile.state === GEMINI_FILE_STATE_ACTIVE) {
+        return mediaFile
+      }
+
+      if (mediaFile.state === GEMINI_FILE_STATE_FAILED) {
+        const remoteError = mediaFile.error?.message || 'Gemini failed to process the media file.'
+        throw new Error(remoteError)
+      }
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err)
+      const isTransientPropagation = /permission to access the file|does not exist|403|404|not found/i.test(errMsg)
+      // Newly finalized uploads on Google's Files API can take 1-3 seconds to synchronize permissions
+      // across Google Cloud regional frontends. Allow brief propagation retry before aborting.
+      if (isTransientPropagation && attempt <= 5) {
+        console.warn(`[waitForUploadedFile] Initial propagation sync for ${fileName} (attempt ${attempt}/${maxAttempts}): ${errMsg.slice(0, 80)}. Retrying in 1.2s...`)
+      } else if (!isTransientPropagation || attempt >= maxAttempts) {
+        throw err
+      }
     }
 
-    if (mediaFile.state === GEMINI_FILE_STATE_FAILED) {
-      const remoteError = mediaFile.error?.message || 'Gemini failed to process the media file.'
-      throw new Error(remoteError)
-    }
-
-    const waitTime = attempt < 4 ? 800 : 1500
+    const waitTime = attempt < 4 ? 1200 : 2000
     await sleep(waitTime)
-    mediaFile = await getGeminiFile(apiKey, fileName)
   }
 
   throw new Error('Timed out while preparing media for transcription.')
@@ -604,7 +625,7 @@ async function transcribeWithKey(
   promptText: string = TRANSCRIPTION_PROMPT,
   keyIndex: number = 0
 ): Promise<TranscriptResultPayload> {
-  let uploadedFileName = ''
+  let serverUploadedFileName = ''
 
   try {
     let mediaMimeType = audioInput.mimeType
@@ -612,9 +633,12 @@ async function transcribeWithKey(
     let metadataDuration = 0
 
     if (fileUri) {
-      const match = fileUri.match(/files\/[a-z0-9]+/i)
+      const match = fileUri.match(/files\/[a-z0-9_-]+/i)
       const fileName = match ? match[0] : fileUri
-      uploadedFileName = fileName
+      // Note: serverUploadedFileName is intentionally NOT set here.
+      // This file was pre-uploaded by the client browser directly to Gemini Files API.
+      // Deleting it inside finally on transient error would destroy the file and cause
+      // permanent 403 "file may not exist" errors on retries!
 
       emit({ type: 'status', phase: 'processing' })
       const uploadedFile = await waitForUploadedFile(apiKey, fileName)
@@ -640,9 +664,9 @@ async function transcribeWithKey(
             }),
           'upload'
         )
-        uploadedFileName = uploadResult.file.name
+        serverUploadedFileName = uploadResult.file.name
 
-        const uploadedFile = await waitForUploadedFile(apiKey, uploadedFileName)
+        const uploadedFile = await waitForUploadedFile(apiKey, serverUploadedFileName)
         mediaMimeType = uploadedFile.mimeType
         fileUri = uploadedFile.uri
         metadataDuration = parseDurationSeconds(uploadedFile.videoMetadata?.videoDuration)
@@ -881,6 +905,13 @@ async function transcribeWithKey(
           const latencyMs = Date.now() - modelCallStart
           recordModelSuccess(modelName, latencyMs)
 
+          if (audioInput.fileUri) {
+            const match = audioInput.fileUri.match(/files\/[a-z0-9_-]+/i)
+            if (match) {
+              deleteGeminiFile(apiKey, match[0]).catch(() => {})
+            }
+          }
+
           return {
             text: finalText,
             segments: emptySegments,
@@ -895,6 +926,14 @@ async function transcribeWithKey(
 
         const latencyMs = Date.now() - modelCallStart
         recordModelSuccess(modelName, latencyMs)
+
+        // Asynchronously clean up pre-uploaded client file after successful transcription
+        if (audioInput.fileUri) {
+          const match = audioInput.fileUri.match(/files\/[a-z0-9_-]+/i)
+          if (match) {
+            deleteGeminiFile(apiKey, match[0]).catch(() => {})
+          }
+        }
 
         return {
           text: finalText,
@@ -944,9 +983,9 @@ async function transcribeWithKey(
 
     throw lastError instanceof Error ? lastError : new Error('All models failed.')
   } finally {
-    if (uploadedFileName) {
+    if (serverUploadedFileName) {
       try {
-        await deleteGeminiFile(apiKey, uploadedFileName)
+        await deleteGeminiFile(apiKey, serverUploadedFileName)
       } catch (cleanupError) {
         console.warn('Unable to delete uploaded Gemini file:', cleanupError)
       }
@@ -987,52 +1026,45 @@ async function runTranscriptionPipeline(
         ? mediaInput.keyIndex
         : 0
 
-    // Try the designated key first. If client-server index desync ever happens,
-    // candidateKeys probes the other fleet keys without marking them as degraded.
-    const candidateKeys = [
-      { key: keys[assignedIndex], index: assignedIndex },
-      ...keys.map((k, i) => ({ key: k, index: i })).filter((e) => e.index !== assignedIndex)
-    ]
+    // Google Gemini Files API strictly isolates files to the specific API key that created them.
+    // Cross-key access is impossible and will always return 403 Forbidden.
+    // We strictly pin execution to the key that owns this file upload session.
+    const assignedKey = keys[assignedIndex]
 
-    let lastError: unknown
-    for (let k = 0; k < candidateKeys.length; k += 1) {
-      const { key: currentKey, index: actualKeyIndex } = candidateKeys[k]
-      try {
-        const result = await transcribeWithKey(
-          currentKey,
-          {
-            fileUri: mediaInput.fileUri,
-            mimeType: mediaInput.mimeType,
-            displayName: mediaInput.displayName,
-            durationSeconds: mediaInput.durationSeconds || 0
-          },
-          mediaInput.sourceName,
-          models,
-          emit,
-          promptText,
-          actualKeyIndex
-        )
-        recordKeySuccess(actualKeyIndex, result.latencyMs)
-        return result
-      } catch (err) {
-        lastError = err
-        const errMsg = err instanceof Error ? err.message : String(err)
-        const isFilePermission403 = /permission to access the file|does not exist|403\b/i.test(errMsg)
+    try {
+      const result = await transcribeWithKey(
+        assignedKey,
+        {
+          fileUri: mediaInput.fileUri,
+          mimeType: mediaInput.mimeType,
+          displayName: mediaInput.displayName,
+          durationSeconds: mediaInput.durationSeconds || 0
+        },
+        mediaInput.sourceName,
+        models,
+        emit,
+        promptText,
+        assignedIndex
+      )
+      recordKeySuccess(assignedIndex, result.latencyMs)
+      return result
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err)
+      const isFilePermission403 = /permission to access the file|does not exist|403\b/i.test(errMsg)
 
-        // Only record key failure if it's an actual key/quota error, NOT a cross-key file permission error
-        if (!isFilePermission403) {
-          recordKeyFailure(actualKeyIndex, err)
-        }
-
-        if (k < candidateKeys.length - 1) {
-          console.warn(`Key #${actualKeyIndex + 1} cannot access fileUri; attempting next candidate key in fleet...`, err)
-          continue
-        }
-        throw err
+      // Only record key failure if it's an actual key/quota error, NOT a cross-key file permission error
+      if (!isFilePermission403) {
+        recordKeyFailure(assignedIndex, err)
       }
-    }
 
-    throw lastError instanceof Error ? lastError : new Error('Transcription failed across all keys.')
+      if (isRateLimitError(err)) {
+        throw new Error(
+          `Google API Rate Limit reached on Key #${assignedIndex + 1}. Please wait a minute and try again.`
+        )
+      }
+
+      throw err
+    }
   }
 
   const audioInput = await extractSpeechAudio({
