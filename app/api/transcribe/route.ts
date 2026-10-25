@@ -23,7 +23,15 @@ import {
 } from '@/lib/transcript'
 import { MAX_MEDIA_UPLOAD_BYTES } from '@/lib/uploadLimits'
 import { trackUsage, trackError } from '@/lib/telemetry'
-import { getOptimalModelOrder, recordModelSuccess, recordModelFailure } from '@/lib/fleet'
+import {
+  getOptimalModelOrder,
+  recordModelSuccess,
+  recordModelFailure,
+  getOptimalKeyOrder,
+  recordKeySuccess,
+  recordKeyFailure,
+  getNextRoundRobinKeyIndex
+} from '@/lib/fleet'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -309,7 +317,7 @@ function isRetryableGeminiError(error: unknown) {
 }
 
 async function withGeminiRetry<T>(operation: () => Promise<T>, label: string) {
-  const maxAttempts = 4
+  const maxAttempts = 2
   let lastError: unknown
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -322,10 +330,8 @@ async function withGeminiRetry<T>(operation: () => Promise<T>, label: string) {
         throw error
       }
 
-      // Rate-limit (429) errors need a longer, growing wait so the per-minute
-      // quota has time to refill; other transient errors retry quickly.
-      const backoffMs = isRateLimitError(error) ? attempt * 5000 : attempt * 1000
-      console.warn(`Gemini ${label} failed on attempt ${attempt}. Retrying in ${backoffMs}ms...`, error)
+      const backoffMs = attempt * 500
+      console.warn(`Gemini ${label} transient network retry #${attempt} in ${backoffMs}ms...`, error)
       await sleep(backoffMs)
     }
   }
@@ -908,7 +914,15 @@ async function transcribeWithKey(
         })
 
         if (shouldRotate(error) && modelIndex < models.length - 1) {
-          console.warn(`Model "${modelName}" unavailable or rate-limited on Key #${keyIndex + 1}; failover to "${nextModel}"...`)
+          // If this key hit 429 rate limit / quota exhaustion, testing subsequent models
+          // on the SAME exhausted key will only waste 3-5s making calls that will also fail with 429.
+          // Instantly throw to let the caller rotate to a fresh, standby API key in 0ms!
+          if (isRateLimitError(error)) {
+            console.warn(`Key #${keyIndex + 1} hit 429 rate limit. Bypassing remaining models on this key to rotate immediately to next standby key.`)
+            throw error
+          }
+
+          console.warn(`Model "${modelName}" unavailable or high demand on Key #${keyIndex + 1}; failover to "${nextModel}"...`)
           continue
         }
         throw error
@@ -953,24 +967,13 @@ async function runTranscriptionPipeline(
 
   // Fast direct path for files uploaded directly from browser to Gemini Files API
   if (mediaInput.fileUri) {
-    // If the browser uploaded under a specific keyIndex, prioritize trying that key first
-    const keyOrder = [...keys]
-    if (
-      typeof mediaInput.keyIndex === 'number' &&
-      mediaInput.keyIndex >= 0 &&
-      mediaInput.keyIndex < keys.length
-    ) {
-      const preferredKey = keys[mediaInput.keyIndex]
-      const otherKeys = keys.filter((_, i) => i !== mediaInput.keyIndex)
-      keyOrder.splice(0, keyOrder.length, preferredKey, ...otherKeys)
-    }
+    const orderedKeys = getOptimalKeyOrder(mediaInput.keyIndex, keys)
 
     let lastError: unknown
-    for (let k = 0; k < keyOrder.length; k += 1) {
-      const currentKey = keyOrder[k]
-      const actualKeyIndex = keys.indexOf(currentKey)
+    for (let k = 0; k < orderedKeys.length; k += 1) {
+      const { key: currentKey, index: actualKeyIndex } = orderedKeys[k]
       try {
-        return await transcribeWithKey(
+        const result = await transcribeWithKey(
           currentKey,
           {
             fileUri: mediaInput.fileUri,
@@ -982,12 +985,15 @@ async function runTranscriptionPipeline(
           models,
           emit,
           promptText,
-          actualKeyIndex >= 0 ? actualKeyIndex : 0
+          actualKeyIndex
         )
+        recordKeySuccess(actualKeyIndex, result.latencyMs)
+        return result
       } catch (err) {
         lastError = err
-        if (k < keyOrder.length - 1) {
-          console.warn(`Key attempt #${k + 1} failed for fileUri; trying next configured key...`, err)
+        recordKeyFailure(actualKeyIndex, err)
+        if (k < orderedKeys.length - 1) {
+          console.warn(`Key attempt #${actualKeyIndex + 1} failed for fileUri; rotating immediately to next fleet key...`, err)
           continue
         }
         throw err
@@ -1026,24 +1032,36 @@ async function runTranscriptionPipeline(
 
   const runAcrossKeys = async (
     audio: { buffer: Buffer; mimeType: string; displayName: string; durationSeconds: number },
-    onEvent: (event: ProgressEvent) => void
+    onEvent: (event: ProgressEvent) => void,
+    overrideKeyIndex?: number
   ) => {
-    const startKey =
-      typeof mediaInput.keyIndex === 'number' && mediaInput.keyIndex >= 0
-        ? mediaInput.keyIndex % keys.length
-        : 0
+    const preferred = typeof overrideKeyIndex === 'number' && overrideKeyIndex >= 0
+      ? overrideKeyIndex
+      : mediaInput.keyIndex
 
+    const orderedKeys = getOptimalKeyOrder(preferred, keys)
     let lastError: unknown
-    for (let offset = 0; offset < keys.length; offset += 1) {
-      const index = (startKey + offset) % keys.length
+
+    for (let k = 0; k < orderedKeys.length; k += 1) {
+      const { key: currentKey, index } = orderedKeys[k]
       try {
-        return await transcribeWithKey(keys[index], audio, mediaInput.sourceName, models, onEvent, promptText, index)
+        const result = await transcribeWithKey(
+          currentKey,
+          audio,
+          mediaInput.sourceName,
+          models,
+          onEvent,
+          promptText,
+          index
+        )
+        recordKeySuccess(index, result.latencyMs)
+        return result
       } catch (error) {
         lastError = error
-        // A key throws only after ALL its models were exhausted (rate-limited or
-        // unavailable), so rotate to the next key.
-        if (shouldRotate(error) && offset < keys.length - 1) {
-          console.warn(`Gemini key #${index + 1} exhausted all models; rotating to next fleet key.`)
+        recordKeyFailure(index, error)
+        // Rotate immediately to next fleet key when a key is exhausted or rate-limited
+        if (shouldRotate(error) && k < orderedKeys.length - 1) {
+          console.warn(`Gemini key #${index + 1} exhausted; rotating immediately to next fleet key...`)
           continue
         }
         throw error
@@ -1067,8 +1085,14 @@ async function runTranscriptionPipeline(
     if (chunks.length > 1) {
       emit({ type: 'status', phase: 'processing', duration: audioInput.durationSeconds || chunks.length * CHUNK_DURATION_SECONDS })
 
+      const baseKeyIndex = typeof mediaInput.keyIndex === 'number' && mediaInput.keyIndex >= 0
+        ? mediaInput.keyIndex
+        : getNextRoundRobinKeyIndex(keys.length)
+
       let completed = 0
-      const partials = await mapWithConcurrency(chunks, MAX_PARALLEL_CHUNKS, async (chunk) => {
+      const partials = await mapWithConcurrency(chunks, MAX_PARALLEL_CHUNKS, async (chunk, chunkIndex) => {
+        // Distribute chunks across distinct keys in the fleet so parallel requests do not compete on one key
+        const chunkKeyIndex = (baseKeyIndex + chunkIndex) % keys.length
         const result = await runAcrossKeys(
           {
             buffer: chunk.buffer,
@@ -1077,7 +1101,8 @@ async function runTranscriptionPipeline(
             durationSeconds: CHUNK_DURATION_SECONDS
           },
           // Suppress per-chunk status noise; report overall chunk progress instead.
-          () => {}
+          () => {},
+          chunkKeyIndex
         )
         completed += 1
         emit({ type: 'progress', progress: Math.min(99, Math.round((completed / chunks.length) * 100)) })

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
+import { getOptimalKeyOrder, recordKeySuccess, recordKeyFailure } from '@/lib/fleet'
 
 function getGeminiApiHost(): string {
   const raw = process.env.GEMINI_API_HOST || 'generativelanguage.googleapis.com'
@@ -78,17 +79,10 @@ export async function POST(req: Request) {
   }
 
   if (fileName && mimeType && typeof fileSize === 'number' && fileSize > 0) {
-    // If a preferred keyIndex was requested (e.g. from parallel batch workers), start from that key!
-    const startingIndex =
-      typeof preferredKeyIndex === 'number' && preferredKeyIndex >= 0
-        ? preferredKeyIndex % keys.length
-        : keyIndex
+    const orderedKeys = getOptimalKeyOrder(preferredKeyIndex, keys)
 
-    // Try up to keys.length times to establish an authorized resumable session
-    for (let attempt = 0; attempt < keys.length; attempt++) {
-      const idx = (startingIndex + attempt) % keys.length
-      const candidateKey = keys[idx]
-
+    // Try healthy keys in optimal order to establish an authorized resumable session
+    for (const { key: candidateKey, index: idx } of orderedKeys) {
       try {
         const startHeaders: Record<string, string> = {
           'x-goog-api-key': candidateKey,
@@ -119,15 +113,17 @@ export async function POST(req: Request) {
             uploadUrl = retrievedUrl
             assignedKey = candidateKey
             assignedIndex = idx
-            keyIndex = (idx + 1) % keys.length
+            recordKeySuccess(idx)
             break
           }
         } else {
           const errText = await startRes.text().catch(() => '')
-          console.warn(`Gemini key #${idx} failed resumable session start (${startRes.status}):`, errText.slice(0, 200))
+          recordKeyFailure(idx, new Error(`HTTP ${startRes.status}: ${errText.slice(0, 100)}`))
+          console.warn(`Gemini key #${idx + 1} failed resumable session start (${startRes.status}):`, errText.slice(0, 200))
         }
       } catch (err) {
-        console.warn(`Gemini key #${idx} exception starting resumable session:`, err)
+        recordKeyFailure(idx, err)
+        console.warn(`Gemini key #${idx + 1} exception starting resumable session:`, err)
       }
     }
 

@@ -435,6 +435,8 @@ export async function generateGeminiFileAnalysis(apiKey: string, input: { modelN
   return generateGeminiTranscript(apiKey, input)
 }
 
+let bufferTranscribeKeyCounter = 0
+
 /**
  * Transcribes an in-memory audio or video buffer using Gemini.
  * Supports inline transmission for files <= 8MB, and automatic
@@ -473,8 +475,11 @@ export async function transcribeAudioBufferWithGemini(
   ].join(' ')
 
   let lastError: Error | null = null
+  const startIndex = Math.abs(bufferTranscribeKeyCounter++) % keys.length
 
-  for (const apiKey of keys) {
+  for (let offset = 0; offset < keys.length; offset++) {
+    const keyIdx = (startIndex + offset) % keys.length
+    const apiKey = keys[keyIdx]
     for (const modelName of models) {
       try {
         let rawResponseText = ''
@@ -551,6 +556,11 @@ export async function transcribeAudioBufferWithGemini(
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err))
         console.warn(`[Gemini Transcribe] Failover from ${modelName}:`, lastError.message)
+        const is429 = /429|resource_exhausted|rate limit|quota/i.test(lastError.message)
+        if (is429 && keys.length > 1) {
+          console.warn(`[Gemini Transcribe] Key #${keyIdx + 1} hit 429 rate limit. Rotating immediately to next fleet key.`)
+          break
+        }
       }
     }
   }

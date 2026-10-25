@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions, isUserAdmin } from '@/lib/auth'
+import { recordKeySuccess, recordKeyFailure } from '@/lib/fleet'
 
 export const dynamic = 'force-dynamic'
 
@@ -65,6 +66,7 @@ export async function POST(req: Request) {
         const data = await res.json().catch(() => ({}))
         const modelsCount = Array.isArray(data.models) ? data.models.length : 0
         const status = latencyMs > 2500 ? 'warning' : 'healthy'
+        recordKeySuccess(index, latencyMs)
         return {
           index,
           masked,
@@ -79,6 +81,7 @@ export async function POST(req: Request) {
 
       // Handle specific HTTP error codes
       if (res.status === 429) {
+        recordKeyFailure(index, new Error('Rate limit or quota exhausted (429)'))
         return {
           index,
           masked,
@@ -93,6 +96,7 @@ export async function POST(req: Request) {
       if (res.status === 400 || res.status === 403) {
         const errJson = await res.json().catch(() => ({}))
         const apiErrMsg = errJson.error?.message || 'Invalid or revoked API key'
+        recordKeyFailure(index, new Error(`Invalid API key: ${apiErrMsg}`))
         return {
           index,
           masked,

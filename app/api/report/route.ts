@@ -9,10 +9,11 @@ import {
   waitForGeminiFile
 } from '@/lib/gemini'
 import { MAX_MEDIA_UPLOAD_BYTES } from '@/lib/uploadLimits'
+import { getOptimalKeyOrder, recordKeySuccess, recordKeyFailure } from '@/lib/fleet'
 
 export const runtime = 'nodejs'
 
-const DEFAULT_FALLBACK_MODELS = ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-1.5-flash']
+const DEFAULT_FALLBACK_MODELS = ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.6-flash']
 const MAX_LOCAL_FILE_BYTES = MAX_MEDIA_UPLOAD_BYTES
 const TEXT_INPUT_LIMIT = 120000
 
@@ -96,8 +97,11 @@ function shouldRotate(error: unknown) {
 }
 
 function isRetryableGeminiError(error: unknown) {
+  if (isRateLimitError(error) || isServiceUnavailableError(error) || isModelUnavailableError(error)) {
+    return false
+  }
   const message = error instanceof Error ? error.message : String(error)
-  return /network error|timed out|socket hang up|econnreset|econnrefused|enotfound|eai_again|etimedout|503|service unavailable|high demand/i.test(message)
+  return /network error|timed out|socket hang up|econnreset|econnrefused|enotfound|eai_again|etimedout/i.test(message)
 }
 
 function sleep(ms: number) {
@@ -132,7 +136,7 @@ function getGeminiModels(): string[] {
 }
 
 async function withGeminiRetry<T>(operation: () => Promise<T>, label: string) {
-  const maxAttempts = 3
+  const maxAttempts = 2
   let lastError: unknown
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -145,8 +149,8 @@ async function withGeminiRetry<T>(operation: () => Promise<T>, label: string) {
         throw error
       }
 
-      const backoffMs = isRateLimitError(error) ? attempt * 5000 : attempt * 1000
-      console.warn(`Gemini ${label} failed on attempt ${attempt}. Retrying in ${backoffMs}ms...`, error)
+      const backoffMs = attempt * 500
+      console.warn(`Gemini ${label} transient network retry #${attempt} in ${backoffMs}ms...`, error)
       await sleep(backoffMs)
     }
   }
@@ -287,8 +291,10 @@ export async function POST(req: Request) {
       }
 
       let lastError: unknown
-      for (let kIndex = 0; kIndex < keys.length; kIndex += 1) {
-        const apiKey = keys[kIndex]
+      const orderedKeys = getOptimalKeyOrder(undefined, keys)
+
+      for (let kIndex = 0; kIndex < orderedKeys.length; kIndex += 1) {
+        const { key: apiKey, index: actualKeyIndex } = orderedKeys[kIndex]
         for (let mIndex = 0; mIndex < models.length; mIndex += 1) {
           const modelName = models[mIndex]
           try {
@@ -299,6 +305,7 @@ export async function POST(req: Request) {
               }),
               `meeting report generation (${modelName})`
             )
+            recordKeySuccess(actualKeyIndex)
 
             return NextResponse.json({
               kind: 'meeting-report',
@@ -307,9 +314,14 @@ export async function POST(req: Request) {
             }, { status: 200 })
           } catch (error) {
             lastError = error
+            recordKeyFailure(actualKeyIndex, error)
+            if (isRateLimitError(error) && orderedKeys.length > 1) {
+              // Rate limit is key-specific: break inner model loop immediately to rotate key!
+              break
+            }
             if (shouldRotate(error)) {
               if (mIndex < models.length - 1) continue
-              if (kIndex < keys.length - 1) break
+              if (kIndex < orderedKeys.length - 1) break
             }
             throw error
           }
@@ -349,9 +361,10 @@ export async function POST(req: Request) {
 
     const fileBuffer = Buffer.from(await file.arrayBuffer())
     let lastError: unknown
+    const orderedKeys = getOptimalKeyOrder(undefined, keys)
 
-    for (let kIndex = 0; kIndex < keys.length; kIndex += 1) {
-      const apiKey = keys[kIndex]
+    for (let kIndex = 0; kIndex < orderedKeys.length; kIndex += 1) {
+      const { key: apiKey, index: actualKeyIndex } = orderedKeys[kIndex]
       let uploadedFileName = ''
 
       try {
@@ -381,6 +394,7 @@ export async function POST(req: Request) {
                 }),
               `summary report generation (${modelName})`
             )
+            recordKeySuccess(actualKeyIndex)
 
             return NextResponse.json({
               kind: 'summary',
@@ -389,6 +403,10 @@ export async function POST(req: Request) {
             }, { status: 200 })
           } catch (error) {
             lastError = error
+            recordKeyFailure(actualKeyIndex, error)
+            if (isRateLimitError(error) && orderedKeys.length > 1) {
+              break
+            }
             if (shouldRotate(error) && mIndex < models.length - 1) {
               continue
             }
@@ -397,7 +415,8 @@ export async function POST(req: Request) {
         }
       } catch (error) {
         lastError = error
-        if (shouldRotate(error) && kIndex < keys.length - 1) {
+        recordKeyFailure(actualKeyIndex, error)
+        if (shouldRotate(error) && kIndex < orderedKeys.length - 1) {
           continue
         }
         throw error

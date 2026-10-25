@@ -26,6 +26,8 @@ export type KeyHealthRecord = {
   tokensToday: number
   lastUsed: string
   errorCountToday: number
+  cooldownUntil: number // timestamp in ms when quarantine/cooldown expires
+  lastError?: string
 }
 
 export type FleetProbeSummary = {
@@ -89,6 +91,146 @@ export function getConfiguredKeys(): string[] {
   const single = (process.env.GEMINI_API_KEY || '').trim().replace(/["'\r\n]/g, '')
   return single && single !== 'AIzaSyYourGoogleApiKeyHere' ? [single] : []
 }
+
+// Global in-memory health and quarantine table for the API key fleet
+const keyHealthTable = new Map<number, KeyHealthRecord>()
+let globalKeyCounter = 0
+
+export function getOrInitKeyRecord(index: number, keyString?: string): KeyHealthRecord {
+  let record = keyHealthTable.get(index)
+  if (!record) {
+    const masked = keyString
+      ? `${keyString.slice(0, 6)}...${keyString.slice(-4)}`
+      : `Key #${index + 1}`
+    record = {
+      index,
+      masked,
+      status: 'HEALTHY',
+      latencyMs: 0,
+      requestsToday: 0,
+      tokensToday: 0,
+      lastUsed: new Date().toISOString(),
+      errorCountToday: 0,
+      cooldownUntil: 0
+    }
+    keyHealthTable.set(index, record)
+  }
+  return record
+}
+
+/**
+ * Records a successful key transaction, clears any quarantine,
+ * updates request count, and tracks real latency.
+ */
+export function recordKeySuccess(index: number, latencyMs?: number) {
+  const record = getOrInitKeyRecord(index)
+  record.status = 'HEALTHY'
+  record.cooldownUntil = 0
+  record.requestsToday += 1
+  record.lastUsed = new Date().toISOString()
+  if (typeof latencyMs === 'number' && latencyMs > 0) {
+    record.latencyMs = latencyMs
+  }
+}
+
+/**
+ * Records a key failure.
+ * If 429 (Resource Exhausted / Rate Limit), quarantines the key for 60 seconds
+ * (Gemini's per-minute quota reset window) so no user requests are stalled by it.
+ * If API Key Invalid (400/403), quarantines for 1 hour.
+ */
+export function recordKeyFailure(index: number, error: unknown) {
+  const record = getOrInitKeyRecord(index)
+  const message = error instanceof Error ? error.message : String(error)
+  const is429 = /429|resource_exhausted|rate limit|quota/i.test(message)
+  const isInvalid = /api_key_invalid|invalid api key|api key not found|permission_denied/i.test(message)
+
+  record.errorCountToday += 1
+  record.lastError = message
+  record.lastUsed = new Date().toISOString()
+
+  if (is429) {
+    record.status = 'RATE_LIMITED'
+    // 60-second cooldown: Gemini per-minute quotas reset every 60s
+    record.cooldownUntil = Date.now() + 60 * 1000
+    console.warn(`[Key Fleet] Key #${index + 1} hit 429 rate limit. Quarantining for 60s (auto-routing traffic to remaining fleet keys).`)
+  } else if (isInvalid) {
+    record.status = 'INVALID'
+    record.cooldownUntil = Date.now() + 60 * 60 * 1000 // 1 hour
+    console.error(`[Key Fleet] Key #${index + 1} is INVALID. Quarantined for 1 hour.`)
+  } else {
+    record.status = 'WARNING'
+    // Brief 5-second transient cooldown to allow other keys to take precedence
+    record.cooldownUntil = Date.now() + 5 * 1000
+  }
+}
+
+/**
+ * Returns the next round-robin key index across all requests.
+ * Balances traffic uniformly across all available keys so no single key
+ * is overwhelmed by concurrent or repeated single uploads.
+ */
+export function getNextRoundRobinKeyIndex(totalKeys: number): number {
+  if (totalKeys <= 0) return 0
+  const chosen = Math.abs(globalKeyCounter++) % totalKeys
+  return chosen
+}
+
+/**
+ * High-Speed Dynamic Key Router:
+ * Returns all configured keys ordered to maximize speed and eliminate disruption:
+ * 1. Healthy keys starting from preferred offset or round-robin offset come FIRST.
+ * 2. Rate-limited/cooldown keys are pushed to the END.
+ * Guarantees zero latency hit from known rate-limited keys.
+ */
+export function getOptimalKeyOrder(
+  preferredIndex?: number,
+  explicitKeys?: string[]
+): { index: number; key: string }[] {
+  const keys = explicitKeys || getConfiguredKeys()
+  if (keys.length === 0) return []
+
+  const totalKeys = keys.length
+  const now = Date.now()
+
+  // Ensure all keys are in health table
+  keys.forEach((k, i) => getOrInitKeyRecord(i, k))
+
+  const startIndex =
+    typeof preferredIndex === 'number' && preferredIndex >= 0
+      ? preferredIndex % totalKeys
+      : getNextRoundRobinKeyIndex(totalKeys)
+
+  const healthyKeys: { index: number; key: string }[] = []
+  const quarantinedKeys: { index: number; key: string; cooldownUntil: number }[] = []
+
+  for (let offset = 0; offset < totalKeys; offset++) {
+    const idx = (startIndex + offset) % totalKeys
+    const record = getOrInitKeyRecord(idx, keys[idx])
+    if (record.cooldownUntil > now) {
+      quarantinedKeys.push({ index: idx, key: keys[idx], cooldownUntil: record.cooldownUntil })
+    } else {
+      healthyKeys.push({ index: idx, key: keys[idx] })
+    }
+  }
+
+  // Quarantined keys are appended in order of earliest cooldown recovery
+  quarantinedKeys.sort((a, b) => a.cooldownUntil - b.cooldownUntil)
+
+  return [
+    ...healthyKeys,
+    ...quarantinedKeys.map((q) => ({ index: q.index, key: q.key }))
+  ]
+}
+
+/**
+ * Returns a live snapshot of all key health records in memory.
+ */
+export function getKeyHealthSnapshot(): KeyHealthRecord[] {
+  const keys = getConfiguredKeys()
+  return keys.map((k, i) => getOrInitKeyRecord(i, k))
+}
+
 
 /**
  * Adaptive Dynamic Router (Self-Healing Routing):
@@ -265,6 +407,7 @@ export function recordModelFailure(params: {
  */
 export function getFleetStatusSnapshot(): {
   models: ModelHealthRecord[]
+  keys: KeyHealthRecord[]
   optimalModel: string
   optimalOrder: string[]
 } {
@@ -273,6 +416,7 @@ export function getFleetStatusSnapshot(): {
   const optimalOrder = getOptimalModelOrder()
   return {
     models: models.map(getOrInitModelRecord),
+    keys: getKeyHealthSnapshot(),
     optimalModel: optimalOrder[0] || models[0],
     optimalOrder
   }
@@ -333,16 +477,7 @@ export async function probeFleet(apiKey?: string): Promise<FleetProbeSummary> {
   const now = Date.now()
   const optimalOrder = getOptimalModelOrder()
 
-  const keyRecords: KeyHealthRecord[] = keys.map((k, index) => ({
-    index,
-    masked: `${k.slice(0, 6)}...${k.slice(-4)}`,
-    status: 'HEALTHY',
-    latencyMs: 0,
-    requestsToday: 0,
-    tokensToday: 0,
-    lastUsed: new Date().toISOString(),
-    errorCountToday: 0
-  }))
+  const keyRecords: KeyHealthRecord[] = getKeyHealthSnapshot()
 
   return {
     timestamp: new Date().toISOString(),
