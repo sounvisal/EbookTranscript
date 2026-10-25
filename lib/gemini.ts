@@ -216,6 +216,31 @@ const PERMISSIVE_SAFETY_SETTINGS = [
   { category: 'HARM_CATEGORY_CIVIC_INTEGRITY', threshold: 'BLOCK_NONE' }
 ]
 
+export function buildGeminiGenerationConfig(modelName: string, responseMimeType?: string) {
+  const config: Record<string, any> = {
+    maxOutputTokens: 65536,
+    temperature: 0.1
+  }
+
+  if (responseMimeType) {
+    config.responseMimeType = responseMimeType
+  }
+
+  // Disable expensive reasoning tokens for models with thinking budgets (e.g. Gemini 2.5 Flash / 3.6 Flash).
+  // Audio transcription is an acoustic task and does NOT require chain-of-thought mathematical reasoning.
+  // Setting thinkingBudget: 0 cuts out 50-80 seconds of artificial thinking delay!
+  const lower = modelName.toLowerCase()
+  if (
+    (lower.includes('2.5-flash') || lower.includes('3.6-flash') || lower.includes('flash-latest')) &&
+    !lower.includes('3.5') &&
+    !lower.includes('flash-lite-latest')
+  ) {
+    config.thinkingConfig = { thinkingBudget: 0 }
+  }
+
+  return config
+}
+
 export async function generateGeminiTranscript(apiKey: string, input: { modelName: string; prompt: string; fileUri: string; mimeType: string }) {
   const response = await geminiRequest<GeminiGenerateContentResponse>(
     apiKey,
@@ -240,10 +265,7 @@ export async function generateGeminiTranscript(apiKey: string, input: { modelNam
           }
         ],
         safetySettings: PERMISSIVE_SAFETY_SETTINGS,
-        generationConfig: {
-          maxOutputTokens: 65536,
-          temperature: 0.1
-        }
+        generationConfig: buildGeminiGenerationConfig(input.modelName)
       }),
       timeoutMs: GENERATION_TIMEOUT_MS
     }
@@ -282,11 +304,7 @@ export async function streamGeminiTranscript(
       }
     ],
     safetySettings: PERMISSIVE_SAFETY_SETTINGS,
-    generationConfig: {
-      maxOutputTokens: 65536,
-      temperature: 0.1,
-      responseMimeType: 'application/json'
-    }
+    generationConfig: buildGeminiGenerationConfig(input.modelName, 'application/json')
   })
 
   const host = getGeminiApiHost()
@@ -437,7 +455,7 @@ export async function transcribeAudioBufferWithGemini(
     throw new Error('No Gemini API keys configured in environment.')
   }
 
-  const models = (process.env.GEMINI_MODELS || 'gemini-3.6-flash,gemini-flash-latest,gemini-2.5-flash,gemini-3.5-flash-lite')
+  const models = (process.env.GEMINI_MODELS || 'gemini-2.5-flash-lite,gemini-2.5-flash,gemini-3.5-flash-lite,gemini-3.6-flash')
     .split(',')
     .map((m) => m.trim())
     .filter(Boolean)
@@ -488,11 +506,7 @@ export async function transcribeAudioBufferWithGemini(
                 }
               ],
               safetySettings: PERMISSIVE_SAFETY_SETTINGS,
-              generationConfig: {
-                maxOutputTokens: 65536,
-                temperature: 0.1,
-                responseMimeType: 'application/json'
-              }
+              generationConfig: buildGeminiGenerationConfig(modelName, 'application/json')
             })
           })
 

@@ -38,9 +38,9 @@ export type FleetProbeSummary = {
 }
 
 const DEFAULT_MODELS = [
+  'gemini-2.5-flash-lite',
+  'gemini-2.5-flash',
   'gemini-3.5-flash-lite',
-  'gemini-3.8-flash',
-  'gemini-3.5-flash',
   'gemini-3.6-flash'
 ]
 
@@ -131,9 +131,9 @@ export function getOptimalModelOrder(durationSeconds?: number): string[] {
   ]
 
   // For long recordings (>= 90s), prioritize models with superior sustained long-audio attention
-  // (gemini-3.6-flash, gemini-flash-latest) ahead of lightweight sub-minute models to prevent premature cutoff
+  // (gemini-2.5-flash, gemini-3.6-flash) ahead of lightweight sub-minute models to prevent premature cutoff
   if (durationSeconds && durationSeconds >= 90) {
-    const longContextModels = ['gemini-3.8-flash', 'gemini-3.6-flash']
+    const longContextModels = ['gemini-2.5-flash', 'gemini-3.6-flash']
     unquarantined.sort((a, b) => {
       const aIsLong = longContextModels.includes(a) ? 1 : 0
       const bIsLong = longContextModels.includes(b) ? 1 : 0

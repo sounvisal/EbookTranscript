@@ -30,10 +30,10 @@ export const dynamic = 'force-dynamic'
 export const maxDuration = 300
 
 const MAX_LOCAL_FILE_BYTES = MAX_MEDIA_UPLOAD_BYTES
-// Flash-Lite has the highest free-tier limits (15 RPM / 1000 RPD vs Flash's
-// 10 RPM / 250 RPD), which is why it's the default. Override with GEMINI_MODEL.
-const MODEL_NAME = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite'
-const DEFAULT_FALLBACK_MODELS = ['gemini-3.5-flash-lite', 'gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-3.6-flash']
+// Gemini 2.5 Flash-Lite & 3.5 Flash-Lite provide sub-second to 3s latency and high free-tier limits (15 RPM / 1000 RPD).
+// Gemini 2.5 Flash with thinkingBudget=0 provides instant high-attention failover without reasoning delays.
+const MODEL_NAME = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite'
+const DEFAULT_FALLBACK_MODELS = ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.6-flash']
 
 // Audio at or below this size is sent inline in the transcribe request.
 // Video files or audio larger than 8MB always use the Files API (supports up to 2GB).
@@ -711,8 +711,11 @@ async function transcribeWithKey(
         // If the media has known duration (>= 15s) and the transcribed speech stopped early
         // (e.g. at an intro pause, sound effect, musical break, or token pause),
         // automatically issue continuation requests from the last detected timestamp to capture all remaining speech.
+        // FAST CONTINUATION CHECK:
+        // If the media has known duration (>= 15s) and the transcribed speech stopped early
+        // (e.g. at an intro pause or speech pause), perform at most 1 fast continuation scan.
         let continuationPass = 0
-        const MAX_CONTINUATION_PASSES = 4
+        const MAX_CONTINUATION_PASSES = totalDuration > 300 ? 2 : 1
 
         while (
           totalDuration >= 15 &&
@@ -727,7 +730,7 @@ async function transcribeWithKey(
           emit({
             type: 'status',
             phase: 'processing',
-            message: `Continuing transcription past pause (${Math.round(currentMaxEnd)}s / ${roundedTotal}s)...`
+            message: `Scanning audio continuation (${Math.round(currentMaxEnd)}s / ${roundedTotal}s)...`
           })
 
           const isCountdownInProgress =
@@ -739,12 +742,10 @@ async function transcribeWithKey(
             `Speech from 0:00 up to ${startOffset} seconds has already been transcribed.`,
             lastWords ? `The transcribed speech so far ended around ${startOffset}s with: "...${lastWords}".` : '',
             isCountdownInProgress ? `A countdown list is in progress! The final reveal (#1 / Number One / លេខ ១) and concluding dialogue occur between ${startOffset}s and ${roundedTotal}s. Transcribe all remaining entries and conclusion without stopping.` : '',
-            `Viral social media clips (TikTok, Facebook, Reels) frequently feature dramatic mid-video sound effects (crashes, laughter, music stingers) and action pauses between scenes. You MUST continue listening past any mid-video sound effects or pauses all the way to ${roundedTotal}s. Dialogue resumes after scene transitions.`,
-            `Now listen carefully to all audio from ${startOffset}s to the absolute end (${roundedTotal}s) and transcribe ALL remaining spoken dialogue verbatim into the native script.`,
-            'Do NOT stop at music breaks, sound effects, or pauses. Transcribe every remaining word until the end.',
+            `Listen carefully to all audio from ${startOffset}s to ${roundedTotal}s and transcribe any remaining spoken dialogue verbatim into the native script.`,
             'Format strictly as JSON with this exact shape:',
             `{"language":"${parsedTranscript.language || 'auto'}","text":"Remaining continuous transcript text here","segments":[{"start":${startOffset},"end":${startOffset + 5},"text":"phrase"}]}`,
-            `Crucial: Start timestamps must continue from ${startOffset}s (or provide numeric timestamps for each phrase).`
+            `Start timestamps must continue from ${startOffset}s.`
           ].filter(Boolean).join(' ')
 
           let rawContSegments: TranscriptSegment[] = []
@@ -789,71 +790,7 @@ async function transcribeWithKey(
             }))
           }
 
-          let newSegments = rawContSegments.filter((s) => s.start >= currentMaxEnd - 2)
-
-          // RESILIENT CONTINUATION PASS:
-          // If continuationPass yields no new segments on current model,
-          // automatically retry the continuation pass with another model in the fleet with maximum acoustic sensitivity
-          // instead of breaking prematurely.
-          const fallbackModel = activeModels.find((m) => m !== modelName) || (modelName === 'gemini-2.5-flash' ? 'gemini-3.6-flash' : 'gemini-2.5-flash')
-          if (newSegments.length === 0 && !contParsedText.trim()) {
-            console.warn(
-              `Continuation pass ${continuationPass} on ${modelName} yielded no new segments; retrying with ${fallbackModel} with maximum acoustic sensitivity...`
-            )
-            emit({
-              type: 'status',
-              phase: 'processing',
-              message: `Acoustic sensitivity continuation scan past pause (${Math.round(currentMaxEnd)}s / ${roundedTotal}s)...`
-            })
-
-            const acousticSensitivePrompt = [
-              contPrompt,
-              `MAXIMUM ACOUSTIC SENSITIVITY OVERRIDE: Human speech, dialogue, or voiceover resumes after the sound effect, scene transition, or pause. Isolate vocal channels from background crashes, laughter, music stingers, or ambient noise. Detect and transcribe all remaining utterances verbatim from ${startOffset}s to ${roundedTotal}s.`
-            ].join(' ')
-
-            try {
-              const fallbackResponseText = await withGeminiRetry(
-                () =>
-                  streamGeminiTranscript(apiKey, {
-                    modelName: fallbackModel,
-                    prompt: acousticSensitivePrompt,
-                    mimeType: mediaMimeType,
-                    ...(fileUri ? { fileUri } : { inlineData: audioInput.buffer }),
-                    onText: (accumulated) => {
-                      if (totalDuration <= 0) return
-                      const latestEnd = extractLatestEndSeconds(accumulated)
-                      const effectiveEnd = Math.max(currentMaxEnd, latestEnd)
-                      const percent = Math.min(99, Math.round((effectiveEnd / totalDuration) * 100))
-                      if (percent > lastProgress) {
-                        lastProgress = percent
-                        emit({ type: 'progress', progress: percent })
-                      }
-                    }
-                  }),
-                `transcription continuation fallback pass ${continuationPass} (${fallbackModel})`
-              )
-
-              const fallbackParsed = parseGeminiTranscriptResponse(fallbackResponseText)
-              let fallbackRawSegments = (fallbackParsed.segments || []) as TranscriptSegment[]
-              const fbMinStart = fallbackRawSegments.length > 0 ? Math.min(...fallbackRawSegments.map((s) => s.start)) : 0
-              if (startOffset > 5 && fallbackRawSegments.length > 0 && fbMinStart < (startOffset / 2)) {
-                fallbackRawSegments = fallbackRawSegments.map((s) => ({
-                  ...s,
-                  start: Math.round((s.start + startOffset) * 10) / 10,
-                  ...(typeof s.end === 'number' ? { end: Math.round((s.end + startOffset) * 10) / 10 } : {})
-                }))
-              }
-
-              const fallbackNewSegments = fallbackRawSegments.filter((s) => s.start >= currentMaxEnd - 2)
-              if (fallbackNewSegments.length > 0) {
-                newSegments = fallbackNewSegments
-              } else if (fallbackParsed.text && fallbackParsed.text.trim()) {
-                contParsedText = fallbackParsed.text.trim()
-              }
-            } catch (fallbackErr) {
-              console.warn(`Fallback continuation pass on ${fallbackModel} failed:`, fallbackErr)
-            }
-          }
+          const newSegments = rawContSegments.filter((s) => s.start >= currentMaxEnd - 2)
 
           if (newSegments.length > 0) {
             accumulatedSegments.push(...newSegments)
@@ -867,7 +804,6 @@ async function transcribeWithKey(
             }
             currentMaxEnd = newMaxEnd
           } else if (contParsedText && contParsedText.trim()) {
-            // Model returned remaining text without structured timestamps:
             const newText = contParsedText.trim()
             accumulatedSegments.push({
               start: startOffset,
@@ -877,16 +813,7 @@ async function transcribeWithKey(
             currentMaxEnd = totalDuration
             break
           } else {
-            // Gap jumping: if speech paused for an action sequence or sound effect but significant duration remains
-            const remainingGap = totalDuration - currentMaxEnd
-            if (remainingGap > 15 && continuationPass < MAX_CONTINUATION_PASSES) {
-              const jumpOffset = Math.min(totalDuration - 5, currentMaxEnd + 6)
-              console.warn(
-                `Continuation at ${Math.round(currentMaxEnd)}s detected no immediate speech; advancing past scene transition to ${Math.round(jumpOffset)}s (${Math.round(remainingGap)}s remaining)...`
-              )
-              currentMaxEnd = jumpOffset
-              continue
-            }
+            // No additional speech detected in remainder of audio; naturally concluded
             break
           }
         }
