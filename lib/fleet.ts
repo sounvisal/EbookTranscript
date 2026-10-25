@@ -145,13 +145,13 @@ export function recordKeyFailure(index: number, error: unknown) {
 
   // File permission or non-existent file errors (403 on Files API) are object-level errors,
   // not key outages; do not mark key as degraded.
-  if (/permission to access the file|does not exist|file.*not found/i.test(message)) {
+  if (/permission to access the file|does not exist|file.*not found|403\b/i.test(message)) {
     return
   }
 
   const is429 = /429|resource_exhausted|rate limit|quota/i.test(message)
   const isInvalid =
-    /api_key_invalid|invalid api key|api key not found|\bpermission_denied\b/i.test(message) &&
+    /api_key_invalid|invalid api key|api key not found/i.test(message) &&
     !/permission to access the file/i.test(message)
 
   record.errorCountToday += 1
@@ -165,8 +165,8 @@ export function recordKeyFailure(index: number, error: unknown) {
     console.warn(`[Key Fleet] Key #${index + 1} hit 429 rate limit. Quarantining for 60s (auto-routing traffic to remaining fleet keys).`)
   } else if (isInvalid) {
     record.status = 'INVALID'
-    record.cooldownUntil = Date.now() + 60 * 60 * 1000 // 1 hour
-    console.error(`[Key Fleet] Key #${index + 1} is INVALID. Quarantined for 1 hour.`)
+    record.cooldownUntil = Date.now() + 30 * 1000 // 30s transient cooldown
+    console.error(`[Key Fleet] Key #${index + 1} is INVALID. Quarantined for 30s.`)
   } else {
     record.status = 'WARNING'
     // Brief 5-second transient cooldown to allow other keys to take precedence
@@ -188,9 +188,9 @@ export function getNextRoundRobinKeyIndex(totalKeys: number): number {
 /**
  * High-Speed Dynamic Key Router:
  * Returns all configured keys ordered to maximize speed and eliminate disruption:
- * 1. Healthy keys starting from preferred offset or round-robin offset come FIRST.
- * 2. Rate-limited/cooldown keys are pushed to the END.
- * Guarantees zero latency hit from known rate-limited keys.
+ * 1. If preferredIndex is designated, that key is ALWAYS first.
+ * 2. Healthy keys starting from round-robin offset come FIRST.
+ * 3. Rate-limited/cooldown keys are pushed to the END.
  */
 export function getOptimalKeyOrder(
   preferredIndex?: number,
@@ -205,10 +205,17 @@ export function getOptimalKeyOrder(
   // Ensure all keys are in health table
   keys.forEach((k, i) => getOrInitKeyRecord(i, k))
 
-  const startIndex =
-    typeof preferredIndex === 'number' && preferredIndex >= 0
-      ? preferredIndex % totalKeys
-      : getNextRoundRobinKeyIndex(totalKeys)
+  // If a preferred key was explicitly designated (e.g. for batch workers or file uploads),
+  // that preferred key MUST ALWAYS be the primary candidate!
+  if (typeof preferredIndex === 'number' && preferredIndex >= 0) {
+    const designated = preferredIndex % totalKeys
+    return [
+      { index: designated, key: keys[designated] },
+      ...keys.map((k, i) => ({ index: i, key: k })).filter((e) => e.index !== designated)
+    ]
+  }
+
+  const startIndex = getNextRoundRobinKeyIndex(totalKeys)
 
   const healthyKeys: { index: number; key: string }[] = []
   const quarantinedKeys: { index: number; key: string; cooldownUntil: number }[] = []

@@ -96,18 +96,33 @@ export async function POST(req: Request) {
           startHeaders['Origin'] = clientOrigin
         }
 
-        const startRes = await fetch(`https://${host}/upload/v1beta/files`, {
-          method: 'POST',
-          headers: startHeaders,
-          body: JSON.stringify({
-            file: {
-              displayName: fileName,
-              mimeType: mimeType
-            }
-          })
-        })
+        const targetHosts = host !== 'generativelanguage.googleapis.com'
+          ? [host, 'generativelanguage.googleapis.com']
+          : [host]
 
-        if (startRes.ok) {
+        let startRes: Response | null = null
+        for (const targetHost of targetHosts) {
+          try {
+            const res = await fetch(`https://${targetHost}/upload/v1beta/files`, {
+              method: 'POST',
+              headers: startHeaders,
+              body: JSON.stringify({
+                file: {
+                  displayName: fileName,
+                  mimeType: mimeType
+                }
+              })
+            })
+            if (res.ok || targetHost === targetHosts[targetHosts.length - 1]) {
+              startRes = res
+              break
+            }
+          } catch (fetchErr) {
+            if (targetHost === targetHosts[targetHosts.length - 1]) throw fetchErr
+          }
+        }
+
+        if (startRes && startRes.ok) {
           const retrievedUrl = startRes.headers.get('x-goog-upload-url')
           if (retrievedUrl) {
             uploadUrl = retrievedUrl
@@ -116,7 +131,7 @@ export async function POST(req: Request) {
             recordKeySuccess(idx)
             break
           }
-        } else {
+        } else if (startRes) {
           const errText = await startRes.text().catch(() => '')
           recordKeyFailure(idx, new Error(`HTTP ${startRes.status}: ${errText.slice(0, 100)}`))
           console.warn(`Gemini key #${idx + 1} failed resumable session start (${startRes.status}):`, errText.slice(0, 200))

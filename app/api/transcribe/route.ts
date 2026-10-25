@@ -982,47 +982,52 @@ async function runTranscriptionPipeline(
         ? mediaInput.keyIndex
         : 0
 
-    // FILES API KEY AFFINITY RULE:
-    // Files in Google Files API are strictly private to the API key that uploaded them.
-    // ONLY the assigned key can access this file — any other key will always get 403 Forbidden.
-    // Do NOT rotate to other fleet keys; they cannot access this file.
-    const assignedKey = keys[assignedIndex]
+    // Try the designated key first. If client-server index desync ever happens,
+    // candidateKeys probes the other fleet keys without marking them as degraded.
+    const candidateKeys = [
+      { key: keys[assignedIndex], index: assignedIndex },
+      ...keys.map((k, i) => ({ key: k, index: i })).filter((e) => e.index !== assignedIndex)
+    ]
 
-    try {
-      const result = await transcribeWithKey(
-        assignedKey,
-        {
-          fileUri: mediaInput.fileUri,
-          mimeType: mediaInput.mimeType,
-          displayName: mediaInput.displayName,
-          durationSeconds: mediaInput.durationSeconds || 0
-        },
-        mediaInput.sourceName,
-        models,
-        emit,
-        promptText,
-        assignedIndex
-      )
-      recordKeySuccess(assignedIndex, result.latencyMs)
-      return result
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err)
-      const isFilePermission = /permission to access the file|does not exist/i.test(errMsg)
-
-      // File permission errors are object-level issues, not key-level outages
-      if (!isFilePermission) {
-        recordKeyFailure(assignedIndex, err)
-      }
-
-      // Provide a clear user-facing error for rate-limit failures on the file-owning key
-      if (isRateLimitError(err)) {
-        throw new Error(
-          'The API key that uploaded this file is temporarily rate-limited. Please wait a minute and try again.'
+    let lastError: unknown
+    for (let k = 0; k < candidateKeys.length; k += 1) {
+      const { key: currentKey, index: actualKeyIndex } = candidateKeys[k]
+      try {
+        const result = await transcribeWithKey(
+          currentKey,
+          {
+            fileUri: mediaInput.fileUri,
+            mimeType: mediaInput.mimeType,
+            displayName: mediaInput.displayName,
+            durationSeconds: mediaInput.durationSeconds || 0
+          },
+          mediaInput.sourceName,
+          models,
+          emit,
+          promptText,
+          actualKeyIndex
         )
-      }
+        recordKeySuccess(actualKeyIndex, result.latencyMs)
+        return result
+      } catch (err) {
+        lastError = err
+        const errMsg = err instanceof Error ? err.message : String(err)
+        const isFilePermission403 = /permission to access the file|does not exist|403\b/i.test(errMsg)
 
-      throw err
+        // Only record key failure if it's an actual key/quota error, NOT a cross-key file permission error
+        if (!isFilePermission403) {
+          recordKeyFailure(actualKeyIndex, err)
+        }
+
+        if (k < candidateKeys.length - 1) {
+          console.warn(`Key #${actualKeyIndex + 1} cannot access fileUri; attempting next candidate key in fleet...`, err)
+          continue
+        }
+        throw err
+      }
     }
+
+    throw lastError instanceof Error ? lastError : new Error('Transcription failed across all keys.')
   }
 
   const audioInput = await extractSpeechAudio({

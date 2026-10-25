@@ -90,39 +90,62 @@ async function geminiRequest<T>(
   const host = getGeminiApiHost()
   const cleanKey = (apiKey || '').trim().replace(/["'\r\n]/g, '')
   const cleanPath = path.startsWith('/') ? path : `/${path}`
-  const url = `https://${host}${cleanPath}`
 
-  const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+  const hosts = host !== 'generativelanguage.googleapis.com'
+    ? [host, 'generativelanguage.googleapis.com']
+    : [host]
 
-  try {
-    const res = await fetch(url, {
-      method,
-      headers: {
-        Accept: 'application/json',
-        'x-goog-api-client': GEMINI_API_CLIENT,
-        'x-goog-api-key': cleanKey,
-        ...headers
-      },
-      body: (body as BodyInit) || undefined,
-      signal: controller.signal
-    })
+  let lastError: unknown
 
-    const responseText = await res.text()
-    if (!res.ok) {
-      const errorMessage = parseGeminiErrorMessage(responseText)
-      throw new Error(
-        errorMessage
-          ? `Gemini API request failed (${res.status} ${res.statusText}): ${errorMessage}`
-          : `Gemini API request failed (${res.status} ${res.statusText}).`
-      )
+  for (const targetHost of hosts) {
+    const url = `https://${targetHost}${cleanPath}`
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: {
+          Accept: 'application/json',
+          'x-goog-api-client': GEMINI_API_CLIENT,
+          'x-goog-api-key': cleanKey,
+          ...headers
+        },
+        body: (body as BodyInit) || undefined,
+        signal: controller.signal
+      })
+
+      const responseText = await res.text()
+      if (!res.ok) {
+        const errorMessage = parseGeminiErrorMessage(responseText)
+        const isGeoOrProxyErr = /user location is not supported|location/i.test(errorMessage) || res.status >= 500
+        if (isGeoOrProxyErr && targetHost !== 'generativelanguage.googleapis.com') {
+          console.warn(`Host ${targetHost} failed (${res.status}: ${errorMessage.slice(0, 80)}); trying Google direct...`)
+          continue
+        }
+
+        throw new Error(
+          errorMessage
+            ? `Gemini API request failed (${res.status} ${res.statusText}): ${errorMessage}`
+            : `Gemini API request failed (${res.status} ${res.statusText}).`
+        )
+      }
+
+      if (!responseText) return undefined as T
+      return JSON.parse(responseText) as T
+    } catch (err) {
+      lastError = err
+      if (targetHost !== hosts[hosts.length - 1]) {
+        console.warn(`Request on ${targetHost} failed; falling back to direct Google...`, err)
+        continue
+      }
+      throw err
+    } finally {
+      clearTimeout(timeoutId)
     }
-
-    if (!responseText) return undefined as T
-    return JSON.parse(responseText) as T
-  } finally {
-    clearTimeout(timeoutId)
   }
+
+  throw lastError instanceof Error ? lastError : new Error('Gemini API request failed.')
 }
 
 function parseFileId(fileId: string) {
