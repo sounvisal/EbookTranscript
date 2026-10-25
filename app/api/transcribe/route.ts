@@ -5,6 +5,7 @@ import { authOptions } from '@/lib/auth'
 import { extractSpeechAudio, splitAudioIntoChunks } from '@/lib/audio'
 import { prisma } from '@/lib/prisma'
 import {
+  cleanGeminiModelName,
   deleteGeminiFile,
   GEMINI_FILE_STATE_ACTIVE,
   GEMINI_FILE_STATE_FAILED,
@@ -38,15 +39,9 @@ export const dynamic = 'force-dynamic'
 export const maxDuration = 300
 
 const MAX_LOCAL_FILE_BYTES = MAX_MEDIA_UPLOAD_BYTES
-// Gemini 2.5 Flash-Lite & 3.5 Flash-Lite provide sub-second to 3s latency and high free-tier limits (15 RPM / 1000 RPD).
-// Gemini 2.5 Flash with thinkingBudget=0 provides instant high-attention failover without reasoning delays.
-const MODEL_NAME =
-  (process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite')
-    .trim()
-    .replace(/["'\r\n\t]/g, '')
-    .replace(/^models\//i, '')
-    .trim() || 'gemini-2.5-flash-lite'
-const DEFAULT_FALLBACK_MODELS = ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.6-flash']
+// Gemini 2.5 Flash with thinkingBudget=0 and Gemini 3.5/3.6 Flash provide production-grade throughput & 1500 RPD.
+const MODEL_NAME = cleanGeminiModelName(process.env.GEMINI_MODEL) || 'gemini-2.5-flash'
+const DEFAULT_FALLBACK_MODELS = ['gemini-2.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.6-flash', 'gemini-2.5-flash-lite']
 
 // Audio at or below this size is sent inline in the transcribe request.
 // Video files or audio larger than 8MB always use the Files API (supports up to 2GB).
@@ -305,7 +300,7 @@ function isRateLimitError(error: unknown) {
 // users", not found). We skip to the next model when this happens.
 function isModelUnavailableError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error)
-  return /404|not found|no longer available|not available|does not exist|not supported|user location|failed_precondition/i.test(message)
+  return /404|not found|no longer available|not available|does not exist|not supported|user location|failed_precondition|unexpected model name format|invalid argument|400\b/i.test(message)
 }
 
 function isServiceUnavailableError(error: unknown) {
@@ -958,20 +953,12 @@ async function transcribeWithKey(
         })
 
         if (shouldRotate(error) && modelIndex < models.length - 1) {
-          // If this key hit 429 rate limit / quota exhaustion, testing subsequent models
-          // on the SAME exhausted key will only waste 3-5s making calls that will also fail with 429.
-          // Instantly throw to let the caller rotate to a fresh, standby API key in 0ms!
-          //
-          // EXCEPTION: For pre-uploaded files (fileUri), the file is PRIVATE to this API key.
-          // Rotating to another key will always produce a 403 Forbidden file permission error.
-          // Continue trying remaining models on the same key instead.
+          // If this key hit 429 rate limit or quota exhaustion on this model,
+          // continue to next model on the same key because Google quotas are scoped per-model
+          // (e.g. gemini-2.5-flash and gemini-3.5-flash-lite have independent quotas from gemini-2.5-flash-lite).
           if (isRateLimitError(error)) {
-            if (audioInput.fileUri) {
-              console.warn(`Key #${keyIndex + 1} hit 429 on model "${modelName}" with pre-uploaded file. Cannot rotate key (file is key-private). Trying next model...`)
-              continue
-            }
-            console.warn(`Key #${keyIndex + 1} hit 429 rate limit. Bypassing remaining models on this key to rotate immediately to next standby key.`)
-            throw error
+            console.warn(`Key #${keyIndex + 1} hit 429 on model "${modelName}". Trying next model "${nextModel}" on this key...`)
+            continue
           }
 
           console.warn(`Model "${modelName}" unavailable or high demand on Key #${keyIndex + 1}; failover to "${nextModel}"...`)

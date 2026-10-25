@@ -250,17 +250,25 @@ const PERMISSIVE_SAFETY_SETTINGS = [
 
 /**
  * Sanitizes model name strings:
- * - Strips leading/trailing quotes, spaces, tabs, and newlines (prevents "unexpected model name format" 400 errors)
- * - Strips redundant "models/" prefixes so path interpolation (/models/${cleanModel}) remains valid
+ * - Decodes URL-encoded entities (e.g. %20, %22, %2F)
+ * - Strips trailing method colons and query parameters (e.g. :streamGenerateContent, :generateContent)
+ * - Strips quotes, backslashes, backticks, spaces, tabs, and newlines (prevents "unexpected model name format" 400 errors)
+ * - Strips single or repeated "models/" prefixes so path interpolation (/models/${cleanModel}) remains valid
+ * - Restricts characters strictly to [a-zA-Z0-9_.-]
+ * - Defaults safely to 'gemini-2.5-flash'
  */
 export function cleanGeminiModelName(modelName?: string | null): string {
-  if (!modelName) return 'gemini-2.5-flash-lite'
-  const cleaned = String(modelName)
-    .trim()
-    .replace(/["'\r\n\t]/g, '')
-    .replace(/^models\//i, '')
-    .trim()
-  return cleaned || 'gemini-2.5-flash-lite'
+  if (!modelName) return 'gemini-2.5-flash'
+  let cleaned = String(modelName).trim()
+  try {
+    cleaned = decodeURIComponent(cleaned)
+  } catch {}
+  cleaned = cleaned
+    .replace(/:.*$/, '')
+    .replace(/["'\\`\s\r\n\t]/g, '')
+    .replace(/^(models\/)+/i, '')
+    .replace(/[^a-zA-Z0-9_.-]/g, '')
+  return cleaned || 'gemini-2.5-flash'
 }
 
 export function buildGeminiGenerationConfig(modelName: string, responseMimeType?: string) {
@@ -528,7 +536,7 @@ export async function transcribeAudioBufferWithGemini(
     throw new Error('No Gemini API keys configured in environment.')
   }
 
-  const models = (process.env.GEMINI_MODELS || 'gemini-2.5-flash-lite,gemini-2.5-flash,gemini-3.5-flash-lite,gemini-3.6-flash')
+  const models = (process.env.GEMINI_MODELS || 'gemini-2.5-flash,gemini-3.5-flash-lite,gemini-3.6-flash,gemini-2.5-flash-lite')
     .split(',')
     .map((m) => cleanGeminiModelName(m))
     .filter(Boolean)

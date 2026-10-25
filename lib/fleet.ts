@@ -1,4 +1,5 @@
 import { sendTelegramFleetEmergencyAlert, sendTelegramFleetRecoveryAlert } from './telegram'
+import { cleanGeminiModelName } from './gemini'
 
 export type ModelHealthStatus = 'HEALTHY' | 'DEGRADED' | 'HIGH_DEMAND_503' | 'RATE_LIMITED_429'
 
@@ -40,10 +41,10 @@ export type FleetProbeSummary = {
 }
 
 const DEFAULT_MODELS = [
-  'gemini-2.5-flash-lite',
   'gemini-2.5-flash',
   'gemini-3.5-flash-lite',
-  'gemini-3.6-flash'
+  'gemini-3.6-flash',
+  'gemini-2.5-flash-lite'
 ]
 
 // Global in-memory health table for the AI model fleet
@@ -75,16 +76,12 @@ export function getOrInitModelRecord(model: string): ModelHealthRecord {
 export function getConfiguredModels(): string[] {
   const envModels = (process.env.GEMINI_MODELS || '')
     .split(',')
-    .map((m) => m.trim().replace(/["'\r\n\t]/g, '').replace(/^models\//i, '').trim())
+    .map((m) => cleanGeminiModelName(m))
     .filter(Boolean)
   if (envModels.length > 0) return envModels
 
-  const single = (process.env.GEMINI_MODEL || '')
-    .trim()
-    .replace(/["'\r\n\t]/g, '')
-    .replace(/^models\//i, '')
-    .trim()
-  if (single) {
+  const single = cleanGeminiModelName(process.env.GEMINI_MODEL)
+  if (single && single !== DEFAULT_MODELS[0]) {
     return [single, ...DEFAULT_MODELS.filter((m) => m !== single)]
   }
 

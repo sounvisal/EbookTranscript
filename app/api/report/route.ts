@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import {
+  cleanGeminiModelName,
   deleteGeminiFile,
   generateGeminiFileAnalysis,
   generateGeminiText,
@@ -13,7 +14,7 @@ import { getOptimalKeyOrder, recordKeySuccess, recordKeyFailure } from '@/lib/fl
 
 export const runtime = 'nodejs'
 
-const DEFAULT_FALLBACK_MODELS = ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.6-flash']
+const DEFAULT_FALLBACK_MODELS = ['gemini-2.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.6-flash', 'gemini-2.5-flash-lite']
 const MAX_LOCAL_FILE_BYTES = MAX_MEDIA_UPLOAD_BYTES
 const TEXT_INPUT_LIMIT = 120000
 
@@ -123,17 +124,13 @@ function getGeminiApiKeys(): string[] {
 function getGeminiModels(): string[] {
   const multi = (process.env.GEMINI_MODELS || '')
     .split(',')
-    .map((model) => model.trim().replace(/["'\r\n\t]/g, '').replace(/^models\//i, '').trim())
+    .map((model) => cleanGeminiModelName(model))
     .filter(Boolean)
   if (multi.length) {
     return multi
   }
-  const single = (process.env.GEMINI_MODEL || '')
-    .trim()
-    .replace(/["'\r\n\t]/g, '')
-    .replace(/^models\//i, '')
-    .trim()
-  if (single) {
+  const single = cleanGeminiModelName(process.env.GEMINI_MODEL)
+  if (single && single !== DEFAULT_FALLBACK_MODELS[0]) {
     return [single, ...DEFAULT_FALLBACK_MODELS.filter((m) => m !== single)]
   }
   return DEFAULT_FALLBACK_MODELS
