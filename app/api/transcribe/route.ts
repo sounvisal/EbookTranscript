@@ -39,9 +39,10 @@ export const dynamic = 'force-dynamic'
 export const maxDuration = 300
 
 const MAX_LOCAL_FILE_BYTES = MAX_MEDIA_UPLOAD_BYTES
-// Gemini 2.5 Flash with thinkingBudget=0 and Gemini 3.5/3.6 Flash provide production-grade throughput & 1500 RPD.
-const MODEL_NAME = cleanGeminiModelName(process.env.GEMINI_MODEL) || 'gemini-2.5-flash'
-const DEFAULT_FALLBACK_MODELS = ['gemini-2.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.6-flash', 'gemini-2.5-flash-lite']
+// Gemini 3.5 Flash-Lite provides sub-second to 2s latency and 1500 RPD with zero 503 high-demand spikes.
+// Gemini 2.5 Flash and 3.6 Flash provide instant high-attention failover without reasoning delays.
+const MODEL_NAME = cleanGeminiModelName(process.env.GEMINI_MODEL) || 'gemini-3.5-flash-lite'
+const DEFAULT_FALLBACK_MODELS = ['gemini-3.5-flash-lite', 'gemini-2.5-flash', 'gemini-3.6-flash', 'gemini-2.5-flash-lite']
 
 // Audio at or below this size is sent inline in the transcribe request.
 // Video files or audio larger than 8MB always use the Files API (supports up to 2GB).
@@ -315,14 +316,15 @@ function shouldRotate(error: unknown) {
 }
 
 function isRetryableGeminiError(error: unknown) {
-  // Rate-limit (429) and high-demand (503) errors are intentionally NOT retried here on
-  // the same model — they bubble up immediately to shouldRotate() so the caller rotates
-  // to the next available model in 0ms instead of waiting through 20+ seconds of retry sleeps.
-  if (isRateLimitError(error) || isServiceUnavailableError(error) || isModelUnavailableError(error)) {
+  // Rate-limit (429) errors are intentionally NOT retried here on the same model - they
+  // bubble up immediately to model/key rotation in 0ms.
+  if (isRateLimitError(error) || isModelUnavailableError(error)) {
     return false
   }
   const message = error instanceof Error ? error.message : String(error)
-  return /network error|timed out|socket hang up|econnreset|econnrefused|enotfound|eai_again|etimedout/i.test(message)
+  // 503 high demand spikes on Google are usually momentary (<1s). Retrying once with 500ms backoff
+  // absorbs transient glitches instantly before resorting to model failover.
+  return /503|service unavailable|high demand|network error|timed out|socket hang up|econnreset|econnrefused|enotfound|eai_again|etimedout/i.test(message)
 }
 
 async function withGeminiRetry<T>(operation: () => Promise<T>, label: string) {
@@ -943,7 +945,7 @@ async function transcribeWithKey(
       } catch (error) {
         lastError = error
         const latencyMs = Date.now() - modelCallStart
-        const nextModel = modelIndex < models.length - 1 ? models[modelIndex + 1] : undefined
+        const nextModel = modelIndex < activeModels.length - 1 ? activeModels[modelIndex + 1] : undefined
         recordModelFailure({
           model: modelName,
           error,
@@ -952,16 +954,16 @@ async function transcribeWithKey(
           failoverModel: nextModel
         })
 
-        if (shouldRotate(error) && modelIndex < models.length - 1) {
+        if (shouldRotate(error) && modelIndex < activeModels.length - 1) {
           // If this key hit 429 rate limit or quota exhaustion on this model,
           // continue to next model on the same key because Google quotas are scoped per-model
-          // (e.g. gemini-2.5-flash and gemini-3.5-flash-lite have independent quotas from gemini-2.5-flash-lite).
+          // (e.g. gemini-3.5-flash-lite and gemini-2.5-flash have independent quotas).
           if (isRateLimitError(error)) {
             console.warn(`Key #${keyIndex + 1} hit 429 on model "${modelName}". Trying next model "${nextModel}" on this key...`)
             continue
           }
 
-          console.warn(`Model "${modelName}" unavailable or high demand on Key #${keyIndex + 1}; failover to "${nextModel}"...`)
+          console.warn(`Model "${modelName}" unavailable or high demand (503) on Key #${keyIndex + 1}; failover immediately to "${nextModel}"...`)
           continue
         }
         throw error
@@ -1038,9 +1040,10 @@ async function runTranscriptionPipeline(
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err)
       const isFilePermission403 = /permission to access the file|does not exist|403\b/i.test(errMsg)
+      const is503 = isServiceUnavailableError(err)
 
-      // Only record key failure if it's an actual key/quota error, NOT a cross-key file permission error
-      if (!isFilePermission403) {
+      // Only record key failure if it's an actual key/quota error, NOT a cross-key file permission error or model 503 spike
+      if (!isFilePermission403 && !is503) {
         recordKeyFailure(assignedIndex, err)
       }
 
@@ -1110,7 +1113,9 @@ async function runTranscriptionPipeline(
         return result
       } catch (error) {
         lastError = error
-        recordKeyFailure(index, error)
+        if (!isServiceUnavailableError(error)) {
+          recordKeyFailure(index, error)
+        }
         // Rotate immediately to next fleet key when a key is exhausted or rate-limited
         if (shouldRotate(error) && k < orderedKeys.length - 1) {
           console.warn(`Gemini key #${index + 1} exhausted; rotating immediately to next fleet key...`)

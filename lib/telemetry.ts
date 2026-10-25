@@ -54,7 +54,7 @@ export async function trackUsage(params: TrackUsageParams) {
     await prisma.usageMetric.create({
       data: {
         userId: params.userId || null,
-        model: params.model || 'gemini-2.5-flash',
+        model: params.model || 'gemini-3.5-flash-lite',
         inputType: params.inputType,
         fileFormat: params.fileFormat || null,
         fileSizeBytes: params.fileSizeBytes || null,

@@ -41,8 +41,8 @@ export type FleetProbeSummary = {
 }
 
 const DEFAULT_MODELS = [
-  'gemini-2.5-flash',
   'gemini-3.5-flash-lite',
+  'gemini-2.5-flash',
   'gemini-3.6-flash',
   'gemini-2.5-flash-lite'
 ]
@@ -78,14 +78,18 @@ export function getConfiguredModels(): string[] {
     .split(',')
     .map((m) => cleanGeminiModelName(m))
     .filter(Boolean)
-  if (envModels.length > 0) return envModels
 
   const single = cleanGeminiModelName(process.env.GEMINI_MODEL)
-  if (single && single !== DEFAULT_MODELS[0]) {
-    return [single, ...DEFAULT_MODELS.filter((m) => m !== single)]
-  }
+  const preferred = envModels.length > 0 ? envModels : (single ? [single] : [])
 
-  return DEFAULT_MODELS
+  // ALWAYS merge preferred with DEFAULT_MODELS so the fleet NEVER has a single point of failure!
+  // Any user-configured preference leads the chain, followed by healthy fallback models.
+  const combined = [
+    ...preferred,
+    ...DEFAULT_MODELS
+  ]
+
+  return Array.from(new Set(combined))
 }
 
 // Reads configured API keys from environment
@@ -154,6 +158,12 @@ export function recordKeyFailure(index: number, error: unknown) {
   // File permission or non-existent file errors (403 on Files API) are object-level errors,
   // not key outages; do not mark key as degraded.
   if (/permission to access the file|does not exist|file.*not found|403\b/i.test(message)) {
+    return
+  }
+
+  // 503 Service Unavailable / high demand is a Google model-level capacity spike,
+  // not an API key failure. Do not penalize or quarantine healthy API keys for model spikes.
+  if (/503|service unavailable|high demand|overloaded/i.test(message)) {
     return
   }
 
