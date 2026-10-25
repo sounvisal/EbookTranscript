@@ -592,7 +592,12 @@ export async function sendTelegramDailyReport(
 
     const trackedModelRequests = Object.values(modelCounts).reduce((a, b) => a + b, 0)
     if (successfulJobs > trackedModelRequests) {
-      const defaultModel = process.env.GEMINI_MODEL || 'gemini-3.6-flash'
+      const defaultModel =
+        (process.env.GEMINI_MODEL || 'gemini-3.6-flash')
+          .trim()
+          .replace(/["'\r\n\t]/g, '')
+          .replace(/^models\//i, '')
+          .trim() || 'gemini-3.6-flash'
       modelCounts[defaultModel] = (modelCounts[defaultModel] || 0) + (successfulJobs - trackedModelRequests)
     }
 

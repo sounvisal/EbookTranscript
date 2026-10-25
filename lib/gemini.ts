@@ -239,7 +239,23 @@ const PERMISSIVE_SAFETY_SETTINGS = [
   { category: 'HARM_CATEGORY_CIVIC_INTEGRITY', threshold: 'BLOCK_NONE' }
 ]
 
+/**
+ * Sanitizes model name strings:
+ * - Strips leading/trailing quotes, spaces, tabs, and newlines (prevents "unexpected model name format" 400 errors)
+ * - Strips redundant "models/" prefixes so path interpolation (/models/${cleanModel}) remains valid
+ */
+export function cleanGeminiModelName(modelName?: string | null): string {
+  if (!modelName) return 'gemini-2.5-flash-lite'
+  const cleaned = String(modelName)
+    .trim()
+    .replace(/["'\r\n\t]/g, '')
+    .replace(/^models\//i, '')
+    .trim()
+  return cleaned || 'gemini-2.5-flash-lite'
+}
+
 export function buildGeminiGenerationConfig(modelName: string, responseMimeType?: string) {
+  const cleanModel = cleanGeminiModelName(modelName)
   const config: Record<string, any> = {
     maxOutputTokens: 65536,
     temperature: 0.1
@@ -252,7 +268,7 @@ export function buildGeminiGenerationConfig(modelName: string, responseMimeType?
   // Disable expensive reasoning tokens for models with thinking budgets (e.g. Gemini 2.5 Flash / 3.6 Flash).
   // Audio transcription is an acoustic task and does NOT require chain-of-thought mathematical reasoning.
   // Setting thinkingBudget: 0 cuts out 50-80 seconds of artificial thinking delay!
-  const lower = modelName.toLowerCase()
+  const lower = cleanModel.toLowerCase()
   if (
     (lower.includes('2.5-flash') || lower.includes('3.6-flash') || lower.includes('flash-latest')) &&
     !lower.includes('3.5') &&
@@ -265,9 +281,10 @@ export function buildGeminiGenerationConfig(modelName: string, responseMimeType?
 }
 
 export async function generateGeminiTranscript(apiKey: string, input: { modelName: string; prompt: string; fileUri: string; mimeType: string }) {
+  const cleanModel = cleanGeminiModelName(input.modelName)
   const response = await geminiRequest<GeminiGenerateContentResponse>(
     apiKey,
-    `/${GEMINI_API_VERSION}/models/${input.modelName}:generateContent`,
+    `/${GEMINI_API_VERSION}/models/${cleanModel}:generateContent`,
     {
       method: 'POST',
       headers: {
@@ -288,7 +305,7 @@ export async function generateGeminiTranscript(apiKey: string, input: { modelNam
           }
         ],
         safetySettings: PERMISSIVE_SAFETY_SETTINGS,
-        generationConfig: buildGeminiGenerationConfig(input.modelName)
+        generationConfig: buildGeminiGenerationConfig(cleanModel)
       }),
       timeoutMs: GENERATION_TIMEOUT_MS
     }
@@ -320,6 +337,7 @@ export async function streamGeminiTranscript(
     ? { inlineData: { mimeType: input.mimeType, data: input.inlineData.toString('base64') } }
     : { fileData: { mimeType: input.mimeType, fileUri: input.fileUri as string } }
 
+  const cleanModel = cleanGeminiModelName(input.modelName)
   const body = JSON.stringify({
     contents: [
       {
@@ -327,12 +345,12 @@ export async function streamGeminiTranscript(
       }
     ],
     safetySettings: PERMISSIVE_SAFETY_SETTINGS,
-    generationConfig: buildGeminiGenerationConfig(input.modelName, 'application/json')
+    generationConfig: buildGeminiGenerationConfig(cleanModel, 'application/json')
   })
 
   const host = getGeminiApiHost()
   const cleanKey = (apiKey || '').trim().replace(/["'\r\n]/g, '')
-  const url = `https://${host}/${GEMINI_API_VERSION}/models/${input.modelName}:streamGenerateContent?alt=sse`
+  const url = `https://${host}/${GEMINI_API_VERSION}/models/${cleanModel}:streamGenerateContent?alt=sse`
 
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), GENERATION_TIMEOUT_MS)
@@ -427,9 +445,10 @@ export async function streamGeminiTranscript(
 }
 
 export async function generateGeminiText(apiKey: string, input: { modelName: string; prompt: string }) {
+  const cleanModel = cleanGeminiModelName(input.modelName)
   const response = await geminiRequest<GeminiGenerateContentResponse>(
     apiKey,
-    `/${GEMINI_API_VERSION}/models/${input.modelName}:generateContent`,
+    `/${GEMINI_API_VERSION}/models/${cleanModel}:generateContent`,
     {
       method: 'POST',
       headers: {
@@ -482,7 +501,7 @@ export async function transcribeAudioBufferWithGemini(
 
   const models = (process.env.GEMINI_MODELS || 'gemini-2.5-flash-lite,gemini-2.5-flash,gemini-3.5-flash-lite,gemini-3.6-flash')
     .split(',')
-    .map((m) => m.trim())
+    .map((m) => cleanGeminiModelName(m))
     .filter(Boolean)
 
   const prompt = [

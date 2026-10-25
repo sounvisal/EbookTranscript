@@ -40,7 +40,12 @@ export const maxDuration = 300
 const MAX_LOCAL_FILE_BYTES = MAX_MEDIA_UPLOAD_BYTES
 // Gemini 2.5 Flash-Lite & 3.5 Flash-Lite provide sub-second to 3s latency and high free-tier limits (15 RPM / 1000 RPD).
 // Gemini 2.5 Flash with thinkingBudget=0 provides instant high-attention failover without reasoning delays.
-const MODEL_NAME = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite'
+const MODEL_NAME =
+  (process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite')
+    .trim()
+    .replace(/["'\r\n\t]/g, '')
+    .replace(/^models\//i, '')
+    .trim() || 'gemini-2.5-flash-lite'
 const DEFAULT_FALLBACK_MODELS = ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.6-flash']
 
 // Audio at or below this size is sent inline in the transcribe request.

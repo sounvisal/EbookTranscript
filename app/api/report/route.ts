@@ -123,12 +123,16 @@ function getGeminiApiKeys(): string[] {
 function getGeminiModels(): string[] {
   const multi = (process.env.GEMINI_MODELS || '')
     .split(',')
-    .map((model) => model.trim().replace(/["'\r\n]/g, ''))
+    .map((model) => model.trim().replace(/["'\r\n\t]/g, '').replace(/^models\//i, '').trim())
     .filter(Boolean)
   if (multi.length) {
     return multi
   }
-  const single = (process.env.GEMINI_MODEL || '').trim().replace(/["'\r\n]/g, '')
+  const single = (process.env.GEMINI_MODEL || '')
+    .trim()
+    .replace(/["'\r\n\t]/g, '')
+    .replace(/^models\//i, '')
+    .trim()
   if (single) {
     return [single, ...DEFAULT_FALLBACK_MODELS.filter((m) => m !== single)]
   }

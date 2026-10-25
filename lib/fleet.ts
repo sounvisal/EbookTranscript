@@ -75,9 +75,20 @@ export function getOrInitModelRecord(model: string): ModelHealthRecord {
 export function getConfiguredModels(): string[] {
   const envModels = (process.env.GEMINI_MODELS || '')
     .split(',')
-    .map((m) => m.trim().replace(/["'\r\n]/g, ''))
+    .map((m) => m.trim().replace(/["'\r\n\t]/g, '').replace(/^models\//i, '').trim())
     .filter(Boolean)
-  return envModels.length > 0 ? envModels : DEFAULT_MODELS
+  if (envModels.length > 0) return envModels
+
+  const single = (process.env.GEMINI_MODEL || '')
+    .trim()
+    .replace(/["'\r\n\t]/g, '')
+    .replace(/^models\//i, '')
+    .trim()
+  if (single) {
+    return [single, ...DEFAULT_MODELS.filter((m) => m !== single)]
+  }
+
+  return DEFAULT_MODELS
 }
 
 // Reads configured API keys from environment
