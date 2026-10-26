@@ -20,6 +20,9 @@
   "author": "",
   "license": "ISC",
   "description": "",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "dependencies": {
     "@auth/prisma-adapter": "^2.11.1",
     "@distube/ytdl-core": "^4.16.12",
