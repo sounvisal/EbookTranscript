@@ -12,14 +12,14 @@ export default function NavBar() {
   const pathname = usePathname()
 
   const linkClass = (href: string) =>
-    `relative rounded-full px-3 sm:px-4 py-1.5 text-xs sm:text-sm font-medium transition-all duration-200 ${
+    `relative rounded-full px-3 sm:px-4 py-1.5 text-xs sm:text-sm font-medium transition-colors duration-150 ${
       pathname === href
         ? 'bg-slate-900 text-white dark:bg-blue-600 shadow-xs'
         : 'text-slate-600 hover:text-slate-950 dark:text-slate-300 dark:hover:text-white hover:bg-slate-100/70 dark:hover:bg-slate-800/70'
     }`
 
   return (
-    <nav className="sticky top-0 z-40 border-b border-slate-200/60 bg-white/75 backdrop-blur-2xl dark:border-slate-800/60 dark:bg-slate-950/75 transition-colors">
+    <nav className="sticky top-0 z-40 border-b border-slate-200/60 bg-white/85 backdrop-blur-md dark:border-slate-800/60 dark:bg-slate-950/85 transition-colors">
       <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:px-6">
         {/* Brand */}
         <Link href="/" className="flex items-center gap-2.5 group">

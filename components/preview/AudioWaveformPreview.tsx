@@ -10,11 +10,40 @@ export function AudioWaveformPreview({ file }: { file: File }) {
 
   useEffect(() => {
     let isCancelled = false
+
+    const drawFallbackWaveform = () => {
+      if (canvasRef.current) {
+        const ctx = canvasRef.current.getContext('2d')
+        if (ctx) {
+          const width = canvasRef.current.width
+          const height = canvasRef.current.height
+          const bars = 44
+          ctx.clearRect(0, 0, width, height)
+          for (let i = 0; i < bars; i++) {
+            const h = Math.max(8, Math.sin(i * 0.35) * 18 + 26)
+            const x = i * (width / bars) + 1.5
+            const y = (height - h) / 2
+            ctx.fillStyle = '#6366f1'
+            ctx.fillRect(x, y, (width / bars) - 3, h)
+          }
+        }
+      }
+    }
+
     const generateWaveform = async () => {
       try {
         setLoading(true)
+
+        // For large media files (> 20MB), avoid decoding full PCM into browser memory to prevent tab freezing
+        if (file.size > 20 * 1024 * 1024) {
+          drawFallbackWaveform()
+          setLoading(false)
+          return
+        }
+
         const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
         if (!AudioCtx) {
+          drawFallbackWaveform()
           setLoading(false)
           return
         }
@@ -64,9 +93,9 @@ export function AudioWaveformPreview({ file }: { file: File }) {
 
           // Smooth modern gradient
           const gradient = ctx.createLinearGradient(0, y, 0, y + barHeight)
-          gradient.addColorStop(0, '#3b82f6') // blue-500
-          gradient.addColorStop(0.5, '#6366f1') // indigo-500
-          gradient.addColorStop(1, '#06b6d4') // cyan-500
+          gradient.addColorStop(0, '#3b82f6')
+          gradient.addColorStop(0.5, '#6366f1')
+          gradient.addColorStop(1, '#06b6d4')
 
           ctx.fillStyle = gradient
           ctx.beginPath()
@@ -77,23 +106,7 @@ export function AudioWaveformPreview({ file }: { file: File }) {
         setLoading(false)
       } catch (err) {
         console.warn('Audio waveform preview fallback:', err)
-        // Draw synthetic pleasant waveform fallback
-        if (canvasRef.current) {
-          const ctx = canvasRef.current.getContext('2d')
-          if (ctx) {
-            const width = canvasRef.current.width
-            const height = canvasRef.current.height
-            const bars = 40
-            ctx.clearRect(0, 0, width, height)
-            for (let i = 0; i < bars; i++) {
-              const h = Math.max(6, Math.sin(i * 0.4) * 20 + 26)
-              const x = i * (width / bars) + 1.5
-              const y = (height - h) / 2
-              ctx.fillStyle = '#6366f1'
-              ctx.fillRect(x, y, (width / bars) - 3, h)
-            }
-          }
-        }
+        drawFallbackWaveform()
         setLoading(false)
       }
     }
@@ -128,7 +141,7 @@ export function AudioWaveformPreview({ file }: { file: File }) {
       <div className="relative w-full h-16 rounded-xl bg-white/60 dark:bg-slate-950/60 ring-1 ring-slate-200/60 dark:ring-slate-800 overflow-hidden flex items-center justify-center">
         {loading ? (
           <div className="flex items-center gap-2 text-xs text-slate-400">
-            <Music className="h-4 w-4 animate-pulse text-blue-500" />
+            <Music className="h-4 w-4 text-blue-500" />
             <span>Analyzing audio tracks...</span>
           </div>
         ) : (

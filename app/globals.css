@@ -41,7 +41,6 @@ body::before {
     radial-gradient(circle at 50% 0%, rgba(224, 242, 254, 0.75) 0%, transparent 40rem),
     radial-gradient(circle at 100% 20%, rgba(238, 242, 255, 0.7) 0%, transparent 30rem),
     radial-gradient(circle at 0% 80%, rgba(243, 232, 255, 0.4) 0%, transparent 35rem);
-  transform: translateZ(0);
 }
 
 .dark body,
@@ -58,66 +57,103 @@ html.dark body::before {
     radial-gradient(circle at 10% 75%, rgba(168, 85, 247, 0.06) 0%, transparent 40rem);
 }
 
-/* Apple Liquid Glass Material - GPU Optimized */
+/* High-Performance Apple Material with hardware-efficient blur */
 .apple-glass {
-  background: rgba(255, 255, 255, 0.88);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.8);
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(226, 232, 240, 0.85);
   box-shadow: 
-    0 10px 30px -5px rgba(0, 0, 0, 0.04),
-    0 20px 40px -15px rgba(15, 23, 42, 0.03),
-    inset 0 1px 0 0 rgba(255, 255, 255, 0.9);
+    0 4px 20px -2px rgba(15, 23, 42, 0.03),
+    0 1px 3px 0 rgba(15, 23, 42, 0.02);
+}
+
+@supports (backdrop-filter: blur(8px)) or (-webkit-backdrop-filter: blur(8px)) {
+  .apple-glass {
+    background: rgba(255, 255, 255, 0.86);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+  }
 }
 
 .dark .apple-glass,
 html.dark .apple-glass {
-  background: rgba(18, 20, 29, 0.82);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: rgba(15, 18, 28, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: 
-    0 20px 40px -10px rgba(0, 0, 0, 0.5),
-    0 25px 50px -15px rgba(0, 0, 0, 0.6),
-    inset 0 1px 0 0 rgba(255, 255, 255, 0.12);
+    0 10px 30px -10px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.08);
+}
+
+@supports (backdrop-filter: blur(8px)) or (-webkit-backdrop-filter: blur(8px)) {
+  .dark .apple-glass,
+  html.dark .apple-glass {
+    background: rgba(18, 20, 29, 0.82);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+  }
 }
 
 .apple-glass-card {
-  background: rgba(255, 255, 255, 0.92);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(226, 232, 240, 0.75);
-  box-shadow: 
-    0 4px 16px -2px rgba(15, 23, 42, 0.03),
-    0 8px 25px -4px rgba(15, 23, 42, 0.02),
-    inset 0 1px 0 0 rgba(255, 255, 255, 0.95);
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  box-shadow: 0 2px 8px -2px rgba(15, 23, 42, 0.04);
+}
+
+@supports (backdrop-filter: blur(6px)) or (-webkit-backdrop-filter: blur(6px)) {
+  .apple-glass-card {
+    background: rgba(255, 255, 255, 0.90);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+  }
 }
 
 .dark .apple-glass-card,
 html.dark .apple-glass-card {
-  background: rgba(24, 27, 38, 0.78);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 
-    0 8px 20px -3px rgba(0, 0, 0, 0.4),
-    0 12px 30px -5px rgba(0, 0, 0, 0.5),
-    inset 0 1px 0 0 rgba(255, 255, 255, 0.1);
+  background: rgba(24, 27, 38, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: 0 4px 14px -3px rgba(0, 0, 0, 0.3);
+}
+
+@supports (backdrop-filter: blur(6px)) or (-webkit-backdrop-filter: blur(6px)) {
+  .dark .apple-glass-card,
+  html.dark .apple-glass-card {
+    background: rgba(24, 27, 38, 0.85);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+  }
 }
 
 .apple-glass-subtle {
-  background: rgba(248, 250, 252, 0.82);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border: 1px solid rgba(226, 232, 240, 0.6);
+  background: rgba(248, 250, 252, 0.95);
+  border: 1px solid rgba(226, 232, 240, 0.7);
+}
+
+@supports (backdrop-filter: blur(6px)) or (-webkit-backdrop-filter: blur(6px)) {
+  .apple-glass-subtle {
+    background: rgba(248, 250, 252, 0.85);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+  }
 }
 
 .dark .apple-glass-subtle,
 html.dark .apple-glass-subtle {
-  background: rgba(20, 22, 32, 0.7);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  background: rgba(20, 22, 32, 0.95);
   border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+@supports (backdrop-filter: blur(6px)) or (-webkit-backdrop-filter: blur(6px)) {
+  .dark .apple-glass-subtle,
+  html.dark .apple-glass-subtle {
+    background: rgba(20, 22, 32, 0.8);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+  }
+}
+
+/* Content Visibility Optimization - Skips layout/paint of offscreen cards */
+.content-visibility-auto {
+  content-visibility: auto;
+  contain-intrinsic-size: 1px 320px;
 }
 
 /* Apple Button & Tactile Press */
@@ -145,7 +181,7 @@ html.dark .apple-glass-subtle {
 /* Apple Segmented Control Pill */
 .apple-segmented {
   background: rgba(226, 232, 240, 0.65);
-  backdrop-filter: blur(10px);
+  backdrop-filter: blur(8px);
   border-radius: 1rem;
   padding: 0.25rem;
 }

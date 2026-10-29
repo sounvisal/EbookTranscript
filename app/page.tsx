@@ -43,7 +43,7 @@ export default function Home() {
           animate={{ opacity: 1, y: 0 }}
           className="mb-4 inline-flex items-center gap-2 rounded-full border border-blue-200/80 bg-white/80 dark:border-blue-900/60 dark:bg-blue-950/40 px-3.5 py-1 text-xs font-semibold text-blue-700 dark:text-blue-300 shadow-xs backdrop-blur-md"
         >
-          <Sparkles className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400 animate-pulse" />
+          <Sparkles className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" />
           <span>Next-Gen Audio & Video Intelligence</span>
         </motion.div>
 
@@ -150,7 +150,7 @@ export default function Home() {
       </section>
 
       {/* Inline Welcome & Quick Guide Section (No Popups!) */}
-      <section id="welcome-guide" className="scroll-mt-20">
+      <section id="welcome-guide" className="scroll-mt-20 content-visibility-auto">
         <div className="text-center max-w-xl mx-auto mb-10">
           <span className="rounded-full bg-blue-100 dark:bg-blue-950/60 px-3 py-1 text-xs font-semibold text-blue-700 dark:text-blue-300 ring-1 ring-blue-500/20">
             Welcome to Signal AI
@@ -255,7 +255,7 @@ export default function Home() {
       </section>
 
       {/* Live Telemetry & Trust Metrics Bar */}
-      <section className="grid grid-cols-2 gap-3 sm:grid-cols-4 sm:gap-4">
+      <section className="grid grid-cols-2 gap-3 sm:grid-cols-4 sm:gap-4 content-visibility-auto">
         <div className="apple-glass rounded-2xl p-4 sm:p-5 text-center transition-all hover:scale-[1.02]">
           <div className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-950 dark:text-white">
             500K+
@@ -288,7 +288,7 @@ export default function Home() {
             Fleet Latency
           </div>
           <div className="mt-2 inline-flex items-center gap-1 text-[11px] font-medium text-indigo-600 dark:text-indigo-400">
-            <Radio className="h-3 w-3 animate-pulse" /> Self-Healing Routing
+            <Radio className="h-3 w-3" /> Self-Healing Routing
           </div>
         </div>
 
@@ -306,7 +306,7 @@ export default function Home() {
       </section>
 
       {/* How It Works (3-Step Visual Workflow) */}
-      <section id="how-it-works" className="scroll-mt-20">
+      <section id="how-it-works" className="scroll-mt-20 content-visibility-auto">
         <div className="text-center max-w-xl mx-auto mb-10">
           <span className="rounded-full bg-blue-100 dark:bg-blue-950/60 px-3 py-1 text-xs font-semibold text-blue-700 dark:text-blue-300 ring-1 ring-blue-500/20">
             Seamless Workflow
@@ -389,7 +389,7 @@ export default function Home() {
       </section>
 
       {/* Feature Bento Grid */}
-      <section id="features" className="scroll-mt-20">
+      <section id="features" className="scroll-mt-20 content-visibility-auto">
         <div className="text-center max-w-xl mx-auto mb-10">
           <span className="rounded-full bg-indigo-100 dark:bg-indigo-950/60 px-3 py-1 text-xs font-semibold text-indigo-700 dark:text-indigo-300 ring-1 ring-indigo-500/20">
             Engineered for Precision
@@ -436,7 +436,7 @@ export default function Home() {
           <div className="apple-glass rounded-3xl p-7 relative overflow-hidden flex flex-col justify-between group">
             <div>
               <div className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 dark:bg-amber-950/60 px-3 py-1 text-xs font-semibold text-amber-700 dark:text-amber-300 ring-1 ring-amber-500/20 mb-3">
-                <Radio className="h-3.5 w-3.5 animate-pulse" />
+                <Radio className="h-3.5 w-3.5" />
                 High Availability
               </div>
               <h3 className="text-xl font-bold text-slate-950 dark:text-white">
@@ -525,10 +525,10 @@ export default function Home() {
       </section>
 
       {/* Telegram Bot Showcase */}
-      <section id="telegram-bot" className="scroll-mt-20">
+      <section id="telegram-bot" className="scroll-mt-20 content-visibility-auto">
         <div className="relative overflow-hidden rounded-3xl border border-indigo-200/70 dark:border-indigo-900/60 bg-gradient-to-br from-indigo-900/90 via-slate-900 to-slate-950 p-8 sm:p-12 text-white shadow-xl">
-          <div className="absolute top-0 right-0 -mr-16 -mt-16 w-80 h-80 rounded-full bg-blue-500/10 blur-3xl pointer-events-none" />
-          <div className="absolute bottom-0 left-0 -ml-16 -mb-16 w-80 h-80 rounded-full bg-violet-500/10 blur-3xl pointer-events-none" />
+          <div className="absolute top-0 right-0 -mr-16 -mt-16 w-80 h-80 rounded-full bg-blue-500/10 blur-xl pointer-events-none" />
+          <div className="absolute bottom-0 left-0 -ml-16 -mb-16 w-80 h-80 rounded-full bg-violet-500/10 blur-xl pointer-events-none" />
 
           <div className="relative z-10 grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
             <div className="lg:col-span-7 space-y-4">
@@ -631,7 +631,7 @@ export default function Home() {
       </section>
 
       {/* Interactive FAQ Accordion */}
-      <section id="faq" className="scroll-mt-20">
+      <section id="faq" className="scroll-mt-20 content-visibility-auto">
         <div className="text-center max-w-xl mx-auto mb-10">
           <span className="rounded-full bg-slate-200 dark:bg-slate-800 px-3 py-1 text-xs font-semibold text-slate-700 dark:text-slate-300 ring-1 ring-slate-300 dark:ring-slate-700">
             Frequently Asked Questions

@@ -40,7 +40,7 @@ export default function HeroSoundwaveVisualizer() {
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const animFrameRef = useRef<number | null>(null)
 
-  // Animation loop for pulsing soundwave bars during playback
+  // Throttled 25 FPS animation loop for soundwave bars during playback (0% CPU when idle)
   useEffect(() => {
     if (!isPlaying) {
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
@@ -48,9 +48,15 @@ export default function HeroSoundwaveVisualizer() {
     }
 
     let frame = 0
-    const loop = () => {
-      frame++
-      setWaveSeed(frame)
+    let lastTimestamp = 0
+    const frameInterval = 40 // 25 FPS throttle to prevent main-thread blocking
+
+    const loop = (timestamp: number) => {
+      if (timestamp - lastTimestamp >= frameInterval) {
+        lastTimestamp = timestamp
+        frame++
+        setWaveSeed(frame)
+      }
       animFrameRef.current = requestAnimationFrame(loop)
     }
 
@@ -115,14 +121,14 @@ export default function HeroSoundwaveVisualizer() {
     <motion.div
       initial={{ opacity: 0, y: 15 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: 0.18, duration: 0.4 }}
+      transition={{ delay: 0.1, duration: 0.3 }}
       className="apple-glass rounded-3xl p-5 sm:p-7 relative overflow-hidden border border-blue-200/70 dark:border-blue-900/50 shadow-xl"
     >
       {/* Real HTML5 Audio Element */}
       <audio
         ref={audioRef}
         src="/audio/demo_visualizer.mp3"
-        preload="auto"
+        preload="metadata"
         playsInline
         onTimeUpdate={handleTimeUpdate}
         onPlay={() => setIsPlaying(true)}
@@ -135,23 +141,23 @@ export default function HeroSoundwaveVisualizer() {
         }}
       />
 
-      {/* Background dynamic ambient glow */}
-      <div className="absolute top-0 right-1/4 -mt-10 w-64 h-32 bg-blue-500/10 dark:bg-blue-400/10 rounded-full blur-3xl pointer-events-none" />
-      <div className="absolute bottom-0 left-1/4 -mb-10 w-64 h-32 bg-indigo-500/10 dark:bg-indigo-400/10 rounded-full blur-3xl pointer-events-none" />
+      {/* Background ambient glow - hardware efficient */}
+      <div className="absolute top-0 right-1/4 -mt-10 w-64 h-32 bg-blue-500/10 dark:bg-blue-400/10 rounded-full blur-xl pointer-events-none" />
+      <div className="absolute bottom-0 left-1/4 -mb-10 w-64 h-32 bg-indigo-500/10 dark:bg-indigo-400/10 rounded-full blur-xl pointer-events-none" />
 
       {/* Header Bar */}
       <div className="relative z-10 flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-200/60 dark:border-slate-800">
         <div className="flex items-center gap-2.5">
           <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 text-white shadow-xs">
-            <Sparkles className="h-4 w-4 animate-pulse" />
+            <Sparkles className="h-4 w-4" />
           </span>
           <div>
             <div className="flex items-center gap-2">
               <span className="text-xs sm:text-sm font-bold text-slate-950 dark:text-white">
                 Live Speech & Subtitle Visualizer
               </span>
-              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 dark:text-emerald-300 ring-1 ring-emerald-500/20">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-ping" />
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 dark:text-emerald-300 ring-1 ring-emerald-500/20">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 shadow-xs shadow-emerald-500/50" />
                 Spoken Voice Audio
               </span>
             </div>
@@ -164,7 +170,7 @@ export default function HeroSoundwaveVisualizer() {
         {/* Diarization Badge & Audio Mute */}
         <div className="flex items-center gap-2">
           <span
-            className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition-all duration-300 ${
+            className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition-colors duration-200 ${
               currentSpeaker === 'Speaker 1'
                 ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 ring-1 ring-indigo-500/30'
                 : 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 ring-1 ring-emerald-500/30'
@@ -193,17 +199,17 @@ export default function HeroSoundwaveVisualizer() {
             <div
               key={i}
               style={{ height: `${height}%` }}
-              className={`w-1.5 sm:w-2 rounded-full transition-all duration-75 ${
+              className={`w-1.5 sm:w-2 rounded-full ${
                 isPlaying
                   ? 'bg-gradient-to-t from-blue-600 via-indigo-500 to-cyan-400 dark:from-blue-500 dark:via-indigo-400 dark:to-cyan-300 shadow-xs'
-                  : 'bg-slate-200 dark:bg-slate-800'
+                  : 'bg-slate-200 dark:bg-slate-800 transition-all duration-300'
               }`}
             />
           ))}
         </div>
 
         {/* Live Synchronized Glowing Subtitle Bar */}
-        <div className="rounded-2xl bg-white/80 dark:bg-slate-900/80 p-4 sm:p-5 ring-1 ring-slate-200/80 dark:ring-slate-800 backdrop-blur-md shadow-xs">
+        <div className="rounded-2xl bg-white/90 dark:bg-slate-900/90 p-4 sm:p-5 ring-1 ring-slate-200/80 dark:ring-slate-800 shadow-xs">
           <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-2 text-sm sm:text-base font-medium">
             {DEMO_WORDS.map((item, idx) => {
               const isActive = activeWordIdx === idx
@@ -212,16 +218,13 @@ export default function HeroSoundwaveVisualizer() {
                   key={idx}
                   className={`relative px-2 py-0.5 rounded-lg transition-all duration-150 ${
                     isActive
-                      ? 'bg-blue-600 text-white font-bold scale-110 shadow-md ring-2 ring-blue-400'
+                      ? 'bg-blue-600 text-white font-bold scale-105 shadow-md ring-2 ring-blue-400'
                       : 'text-slate-700 dark:text-slate-300 hover:text-slate-950 dark:hover:text-white'
                   } ${item.isKhmer ? 'font-sans text-base sm:text-lg' : ''}`}
                 >
                   {item.word}
                   {isActive && (
-                    <motion.span
-                      layoutId="karaoke-glow"
-                      className="absolute inset-0 rounded-lg bg-blue-500/20 blur-xs -z-10"
-                    />
+                    <span className="absolute inset-0 rounded-lg bg-blue-500/20 -z-10" />
                   )}
                 </span>
               )
