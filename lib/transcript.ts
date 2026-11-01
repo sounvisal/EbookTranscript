@@ -720,6 +720,8 @@ export type IncompletenessReport = {
   remainingSeconds?: number
   wordCount?: number
   maxSegmentEnd?: number
+  isCountdownCutoff?: boolean
+  isCliffhanger?: boolean
 }
 
 /**
@@ -777,30 +779,49 @@ export function checkTranscriptIncompleteness(
       coverageRatio,
       remainingSeconds,
       wordCount,
-      maxSegmentEnd
+      maxSegmentEnd,
+      isCountdownCutoff: true
     }
   }
 
   // 2. Dangling Mid-Sentence Cliffhanger Check:
+  // IMPORTANT: Viral TikTok/social media videos often intentionally end with cliffhangers ("...") for engagement.
+  // Only flag as incomplete if BOTH conditions are true:
+  // - Ends with suspicious punctuation/word AND
+  // - Has significant remaining audio (>6s) AND poor coverage (<75%)
   const endsWithPunctuationCliffhanger = /[,\-—–]\s*$/s.test(cleanText) || /\.{3,}\s*$/s.test(cleanText) || /…\s*$/s.test(cleanText)
-  const endsWithDanglingWord = /\b(?:the|a|an|and|or|but|that|with|in|to|when|which|because|after|before|during|while|into|onto|of|for|at|by|from|as|so|than|about)\s*$/i.test(cleanText.replace(/[.!?។៕]+$/, ''))
+  const endsWithDanglingWord = /\b(?:the|a|an|and|or|but|that|with|in|to|when|which|because|after|before|during|while|into|onto|of|for|at|by|from|as|so|than|about|like|such|turn|turns|become|becomes|is|are|was|were|their|my|his|her|its)\s*$/i.test(cleanText.replace(/[.!?។៕]+$/, '')) ||
+    /(?:និង|ឬ|ដែល|ជាមួយ|ក្នុង|ទៅ|ពេល|ព្រោះ|បន្ទាប់ពី|មុន|អំឡុង|ខណៈ|ចូល|នៃ|សម្រាប់|នៅ|ដោយ|ពី|ដូច|ដូចជា|គឺ|ជា)\s*$/.test(cleanText.replace(/[.!?។៕]+$/, ''))
 
-  if ((endsWithPunctuationCliffhanger || endsWithDanglingWord) && (remainingSeconds > 4 || totalDuration === 0)) {
+  // Flag cliffhangers if dialogue ends mid-thought with uncaptured remaining audio or unknown duration
+  const hasCliffhangerEnd = endsWithPunctuationCliffhanger || endsWithDanglingWord
+  const isCliffhangerIncomplete =
+    hasCliffhangerEnd &&
+    (
+      totalDuration === 0 ||
+      remainingSeconds > 4 ||
+      (totalDuration >= 15 && coverageRatio < 0.88)
+    )
+
+  if (isCliffhangerIncomplete) {
     const lastWords = words.slice(-4).join(' ')
     return {
       isIncomplete: true,
-      reason: `Sentence cut off mid-thought at ending ("...${lastWords}") with ~${Math.round(remainingSeconds)}s remaining`,
+      reason: `Sentence cut off mid-thought at ending ("...${lastWords}")${totalDuration > 0 ? ` with ~${Math.round(remainingSeconds)}s remaining (${(coverageRatio * 100).toFixed(0)}% coverage)` : ''}`,
       coverageRatio,
       remainingSeconds,
       wordCount,
-      maxSegmentEnd
+      maxSegmentEnd,
+      isCliffhanger: true
     }
   }
 
   // 3. Duration & Audio Coverage Check:
+  // RELAXED THRESHOLDS: TikTok/viral videos often have long music outros, intros, or dead space.
+  // Focus on SEVERE issues, not minor gaps.
   if (totalDuration >= 20) {
-    // Severe cut-off: less than 50% coverage on any video >= 20s
-    if (coverageRatio < 0.50) {
+    // Severe cut-off: less than 40% coverage on any video >= 20s (RELAXED from 50%)
+    if (coverageRatio < 0.40) {
       return {
         isIncomplete: true,
         reason: `Severe cut-off: captured only ${(coverageRatio * 100).toFixed(0)}% of duration (${Math.round(maxSegmentEnd)}s / ${Math.round(totalDuration)}s)`,
@@ -811,8 +832,8 @@ export function checkTranscriptIncompleteness(
       }
     }
 
-    // Long media (>= 120s): more than 18 seconds missing at the end and < 92% coverage
-    if (totalDuration >= 120 && remainingSeconds > 18 && coverageRatio < 0.92) {
+    // Long media (>= 120s): more than 25 seconds missing at the end and < 85% coverage (RELAXED from 18s/92%)
+    if (totalDuration >= 120 && remainingSeconds > 25 && coverageRatio < 0.85) {
       return {
         isIncomplete: true,
         reason: `Missing ending speech (~${Math.round(remainingSeconds)}s uncaptured at end of ${Math.round(totalDuration)}s video, coverage ${(coverageRatio * 100).toFixed(0)}%)`,
@@ -823,8 +844,8 @@ export function checkTranscriptIncompleteness(
       }
     }
 
-    // Medium-long media (60s - 120s): more than 14 seconds missing at the end and < 85% coverage
-    if (totalDuration >= 60 && totalDuration < 120 && remainingSeconds > 14 && coverageRatio < 0.85) {
+    // Medium-long media (60s - 120s): more than 20 seconds missing at the end and < 75% coverage (RELAXED from 14s/85%)
+    if (totalDuration >= 60 && totalDuration < 120 && remainingSeconds > 20 && coverageRatio < 0.75) {
       return {
         isIncomplete: true,
         reason: `Premature stop: ~${Math.round(remainingSeconds)}s uncaptured at end of ${Math.round(totalDuration)}s media`,
@@ -835,8 +856,8 @@ export function checkTranscriptIncompleteness(
       }
     }
 
-    // Short-medium media (25s - 60s): more than 10 seconds missing at the end and < 80% coverage
-    if (totalDuration >= 25 && totalDuration < 60 && remainingSeconds > 10 && coverageRatio < 0.80) {
+    // Short-medium media (25s - 60s): more than 15 seconds missing at the end and < 70% coverage (RELAXED from 10s/80%)
+    if (totalDuration >= 25 && totalDuration < 60 && remainingSeconds > 15 && coverageRatio < 0.70) {
       return {
         isIncomplete: true,
         reason: `Premature stop: ~${Math.round(remainingSeconds)}s uncaptured at end of ${Math.round(totalDuration)}s media`,
@@ -848,7 +869,8 @@ export function checkTranscriptIncompleteness(
     }
 
     // Abnormally low word count with deficient coverage (e.g. stopped on opening hook)
-    if (coverageRatio < 0.65 && ((totalDuration >= 25 && wordCount < 16) || (totalDuration >= 60 && wordCount < 30))) {
+    // RELAXED: Only flag if word count is EXTREMELY low AND coverage is terrible
+    if (coverageRatio < 0.50 && ((totalDuration >= 25 && wordCount < 12) || (totalDuration >= 60 && wordCount < 20))) {
       return {
         isIncomplete: true,
         reason: `Abnormally low word count and coverage (${wordCount} words, ${(coverageRatio * 100).toFixed(0)}% coverage for ${Math.round(totalDuration)}s audio)`,

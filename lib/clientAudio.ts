@@ -98,8 +98,27 @@ export async function prepareMediaForUpload(file: File): Promise<{ file: File; d
     const duration = Number.isFinite(audioBuffer.duration) ? Math.round(audioBuffer.duration * 10) / 10 : 0
     audioCtx.close().catch(() => {})
 
+    // Resample natively to mono 16kHz using fast OfflineAudioContext
+    const targetSampleRate = 16000
+    const OfflineCtxClass = window.OfflineAudioContext || (window as unknown as { webkitOfflineAudioContext?: typeof OfflineAudioContext }).webkitOfflineAudioContext
+    let targetBuffer = audioBuffer
+
+    if (OfflineCtxClass && audioBuffer.sampleRate !== targetSampleRate) {
+      try {
+        const targetFrames = Math.ceil(audioBuffer.duration * targetSampleRate)
+        const offlineCtx = new OfflineCtxClass(1, targetFrames, targetSampleRate)
+        const source = offlineCtx.createBufferSource()
+        source.buffer = audioBuffer
+        source.connect(offlineCtx.destination)
+        source.start(0)
+        targetBuffer = await offlineCtx.startRendering()
+      } catch (resampleErr) {
+        console.warn('Native 16kHz resampling fallback:', resampleErr)
+      }
+    }
+
     // Encode to compact mono 16kHz WAV
-    const wavBlob = audioBufferToMonoWav(audioBuffer)
+    const wavBlob = audioBufferToMonoWav(targetBuffer)
     const baseName = file.name.replace(/\.[^/.]+$/, '')
     const wavFile = new File([wavBlob], `${baseName}.wav`, { type: 'audio/wav' })
     return { file: wavFile, duration }

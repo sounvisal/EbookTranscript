@@ -285,11 +285,11 @@ export function buildGeminiGenerationConfig(modelName: string, responseMimeType?
   // Disable expensive reasoning tokens for models with thinking budgets (e.g. Gemini 2.5 Flash / 3.6 Flash).
   // Audio transcription is an acoustic task and does NOT require chain-of-thought mathematical reasoning.
   // Setting thinkingBudget: 0 cuts out 50-80 seconds of artificial thinking delay!
+  // Note: Only non-lite Flash models support thinkingConfig; Flash-Lite models do not.
   const lower = cleanModel.toLowerCase()
   if (
-    (lower.includes('2.5-flash') || lower.includes('3.6-flash') || lower.includes('flash-latest')) &&
-    !lower.includes('3.5') &&
-    !lower.includes('flash-lite-latest')
+    !lower.includes('lite') &&
+    (lower.includes('2.5-flash') || lower.includes('3.6-flash') || lower.includes('flash-latest'))
   ) {
     config.thinkingConfig = { thinkingBudget: 0 }
   }

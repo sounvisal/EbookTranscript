@@ -261,6 +261,9 @@ export async function transcribeWithProgress(
     if (fileToUpload.size <= 25 * 1024 * 1024) {
       const formData = new FormData()
       formData.append('file', fileToUpload)
+      if (mediaDuration > 0) {
+        formData.append('duration', String(mediaDuration))
+      }
       if (options) {
         formData.append('options', JSON.stringify(options))
       }
@@ -271,6 +274,9 @@ export async function transcribeWithProgress(
       try {
         const directHeaders: Record<string, string> = {
           'x-stream': '1'
+        }
+        if (mediaDuration > 0) {
+          directHeaders['x-duration'] = String(mediaDuration)
         }
         if (typeof preferredKeyIndex === 'number') {
           directHeaders['x-key-index'] = String(preferredKeyIndex)

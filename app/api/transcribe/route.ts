@@ -189,6 +189,20 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+function parseWavDuration(buffer: Buffer): number {
+  if (!buffer || buffer.length < 44) return 0
+  try {
+    if (buffer.toString('ascii', 0, 4) !== 'RIFF' || buffer.toString('ascii', 8, 12) !== 'WAVE') return 0
+    const byteRate = buffer.readUInt32LE(28)
+    const dataSize = buffer.readUInt32LE(40)
+    if (byteRate > 0 && dataSize > 0) {
+      const sec = dataSize / byteRate
+      return Number.isFinite(sec) && sec > 0 ? Math.round(sec * 10) / 10 : 0
+    }
+  } catch {}
+  return 0
+}
+
 async function getMediaInputFromRequest(req: Request): Promise<MediaInput> {
   const contentType = req.headers.get('content-type') || ''
 
@@ -267,6 +281,11 @@ async function getMediaInputFromRequest(req: Request): Promise<MediaInput> {
   const parsedKeyIndex = keyIndexHeader !== null ? Number(keyIndexHeader) : (keyIndexForm !== null ? Number(keyIndexForm) : undefined)
   const keyIndex = typeof parsedKeyIndex === 'number' && Number.isFinite(parsedKeyIndex) ? parsedKeyIndex : undefined
 
+  const durationHeader = req.headers.get('x-duration')
+  const durationForm = formData.get('duration')
+  const rawDuration = durationHeader !== null ? Number(durationHeader) : (durationForm !== null ? Number(durationForm) : undefined)
+  const clientDuration = typeof rawDuration === 'number' && Number.isFinite(rawDuration) && rawDuration > 0 ? rawDuration : undefined
+
   if (file && file.size > 0) {
     const fileName = 'name' in file && typeof file.name === 'string' ? file.name : 'uploaded-media'
     const mimeType = normalizeMimeType(file.type) || inferMimeTypeFromName(fileName)
@@ -279,11 +298,18 @@ async function getMediaInputFromRequest(req: Request): Promise<MediaInput> {
       throw new Error(`Local uploads are limited to ${Math.round(MAX_LOCAL_FILE_BYTES / 1024 / 1024)}MB.`)
     }
 
+    const buffer = Buffer.from(await file.arrayBuffer())
+    let durationSeconds = clientDuration
+    if (!durationSeconds && (mimeType === 'audio/wav' || mimeType === 'audio/x-wav')) {
+      durationSeconds = parseWavDuration(buffer)
+    }
+
     return {
-      buffer: Buffer.from(await file.arrayBuffer()),
+      buffer,
       mimeType,
       displayName: fileName,
       sourceName: fileName,
+      durationSeconds: durationSeconds || 0,
       options,
       keyIndex
     }
@@ -391,8 +417,9 @@ const BASE_TRANSCRIPTION_PROMPT = [
   '3. HIGH-SENSITIVITY ACOUSTIC EXTRACTION: Listen with maximum sensitivity to all audio channels. Even if the voice is quiet, muffled, whispered, speaking fast, singing, chanting, talking over an intro, or partially masked by background music, sound effects, beats, or ambient noise, you MUST detect and transcribe all spoken words verbatim.',
   '4. COMPLETE RECORDING CONTINUITY & VIRAL VIDEO HOOKS: Transcribe the entire duration verbatim from start to finish without stopping. Viral social media videos (TikTok, Snaptik, Facebook Reels, Shorts) frequently begin with a 1-sentence opening hook, followed by a dramatic sound effect, laugh track, musical break, or scene transition, after which the narration continues. You MUST NOT STOP after the opening hook sentence. Keep listening past all pauses, music stingers, and sound effects all the way to the absolute end of the media.',
   '5. COMPILATIONS, COUNTDOWNS & MULTI-SCENE CONTINUITY: For countdowns and list videos (e.g. "Number 10" or "Number 9" down to "Number 1"), you MUST transcribe every single entry all the way through the final #1 reveal and outro conclusion. Never stop early at an intermediate number like #2 or #3. There are often 5-15 second transition pauses, action clips, or music between list numbers; continue listening past any pauses and transcribe all speech to the absolute end of the media.',
-  '6. NUMERIC SECONDS TIMESTAMPS: Every start and end timestamp in "segments" must be a raw number in seconds (e.g. 0.0, 4.5, 38.2, 145.6). Do NOT use formatted colon strings like "2:30".',
-  '7. QUOTATION MARKS: Inside transcript text strings, use single quotes (\'quote\') or properly escaped quotes (\\"quote\\") for spoken dialogue so that JSON formatting is strictly valid.',
+  '6. MULTI-ITEM COMMENTARY & ANIMAL / MEME COMPILATIONS: Videos showcasing multiple examples, animals, people, or stories often pause for dramatic effect or laughter after each item setup (e.g., "they turn into..."). Never stop transcribing when one item pauses or ends mid-thought. Spoken narration continues for all subsequent items and punchlines throughout the full video. Continue transcribing every single item until the recording ends completely.',
+  '7. NUMERIC SECONDS TIMESTAMPS: Every start and end timestamp in "segments" must be a raw number in seconds (e.g. 0.0, 4.5, 38.2, 145.6). Do NOT use formatted colon strings like "2:30".',
+  '8. QUOTATION MARKS: Inside transcript text strings, use single quotes (\'quote\') or properly escaped quotes (\\"quote\\") for spoken dialogue so that JSON formatting is strictly valid.',
   'Format strictly as JSON with this exact shape:',
   '{"language":"Khmer","text":"Full continuous transcript text here","segments":[{"start":0.0,"end":4.5,"text":"phrase"}]}',
   'Ensure "text" contains the complete continuous transcript, and "segments" contains all timestamped phrases.',
@@ -423,29 +450,30 @@ function buildTranscriptionPrompt(options?: TranscribeOptions): string {
     '3. HIGH-SENSITIVITY ACOUSTIC EXTRACTION: Listen with maximum sensitivity to all audio channels. Even if the voice is quiet, muffled, whispered, speaking fast, singing, chanting, talking over an intro, or partially masked by background music, sound effects, beats, or ambient noise, you MUST detect and transcribe all spoken words verbatim.',
     '4. COMPLETE RECORDING CONTINUITY & VIRAL VIDEO HOOKS: Transcribe the entire duration verbatim from start to finish without stopping. Viral social media videos (TikTok, Snaptik, Facebook Reels, Shorts) frequently begin with a 1-sentence opening hook, followed by a dramatic sound effect, laugh track, musical break, or scene transition, after which the narration continues. You MUST NOT STOP after the opening hook sentence. Keep listening past all pauses, music stingers, and sound effects all the way to the absolute end of the media.',
     '5. COMPILATIONS, COUNTDOWNS & MULTI-SCENE CONTINUITY: For countdowns and list videos (e.g. "Number 10" or "Number 9" down to "Number 1"), you MUST transcribe every single entry all the way through the final #1 reveal and outro conclusion. Never stop early at an intermediate number like #2 or #3. There are often 5-15 second transition pauses, action clips, or music between list numbers; continue listening past any pauses and transcribe all speech to the absolute end of the media.',
-    '6. NUMERIC SECONDS TIMESTAMPS: Every start and end timestamp in "segments" must be a raw number in seconds (e.g. 0.0, 4.5, 38.2, 145.6). Do NOT use formatted colon strings like "2:30".'
+    '6. MULTI-ITEM COMMENTARY & ANIMAL / MEME COMPILATIONS: Videos showcasing multiple examples, animals, people, or stories often pause for dramatic effect or laughter after each item setup (e.g., "they turn into..."). Never stop transcribing when one item pauses or ends mid-thought. Spoken narration continues for all subsequent items and punchlines throughout the full video. Continue transcribing every single item until the recording ends completely.',
+    '7. NUMERIC SECONDS TIMESTAMPS: Every start and end timestamp in "segments" must be a raw number in seconds (e.g. 0.0, 4.5, 38.2, 145.6). Do NOT use formatted colon strings like "2:30".'
   ]
 
   if (diarization) {
     promptParts.push(
-      '7. SPEAKER DIARIZATION: Identify and differentiate distinct speakers across the audio. Prefix each speaker turn or dialogue with speaker labels (e.g., "Speaker 1: ...", "Speaker 2: ..."). Maintain consistent speaker tags across consecutive segments.'
+      '8. SPEAKER DIARIZATION: Identify and differentiate distinct speakers across the audio. Prefix each speaker turn or dialogue with speaker labels (e.g., "Speaker 1: ...", "Speaker 2: ..."). Maintain consistent speaker tags across consecutive segments.'
     )
   }
 
   if (customVocab.length > 0) {
     promptParts.push(
-      `8. DOMAIN VOCABULARY & KEYWORD HINTS: Pay special attention to the following specific proper nouns, technical terms, and keywords: ${customVocab.map((v) => `"${v}"`).join(', ')}. Whenever words sounding like or referring to these terms are spoken, transcribe them with these exact spellings.`
+      `9. DOMAIN VOCABULARY & KEYWORD HINTS: Pay special attention to the following specific proper nouns, technical terms, and keywords: ${customVocab.map((v) => `"${v}"`).join(', ')}. Whenever words sounding like or referring to these terms are spoken, transcribe them with these exact spellings.`
     )
   }
 
   if (options.highSensitivity) {
     promptParts.push(
-      '9. MAXIMUM AUDIO SENSITIVITY ACTIVE: The recording contains quiet dialogue, whispering, lyrics, or speech over background music/beats. Boost vocal channel detection and transcribe all audible utterances verbatim without omitting any words.'
+      '10. MAXIMUM AUDIO SENSITIVITY ACTIVE: The recording contains quiet dialogue, whispering, lyrics, or speech over background music/beats. Boost vocal channel detection and transcribe all audible utterances verbatim without omitting any words.'
     )
   }
 
   promptParts.push(
-    '10. QUOTATION MARKS: Inside transcript text strings, use single quotes (\'quote\') or properly escaped quotes (\\"quote\\") for spoken dialogue so that JSON formatting is strictly valid.',
+    '11. QUOTATION MARKS: Inside transcript text strings, use single quotes (\'quote\') or properly escaped quotes (\\"quote\\") for spoken dialogue so that JSON formatting is strictly valid.',
     'Format strictly as JSON with this exact shape:',
     '{"language":"Khmer","text":"Full continuous transcript text here","segments":[{"start":0.0,"end":4.5,"text":"phrase"}]}',
     'Ensure "text" contains the complete continuous transcript, and "segments" contains all timestamped phrases.',
@@ -672,6 +700,14 @@ async function transcribeWithKey(
 
     let totalDuration = audioInput.durationSeconds || metadataDuration
 
+    // Fallback: if duration is still 0 and we have a WAV buffer, parse directly from WAV header
+    if (totalDuration <= 0 && audioInput.buffer && (mediaMimeType === 'audio/wav' || mediaMimeType === 'audio/x-wav')) {
+      const wavDur = parseWavDuration(audioInput.buffer)
+      if (wavDur > 0) {
+        totalDuration = wavDur
+      }
+    }
+
     // If total duration is unknown, probe duration quickly
     if (totalDuration <= 0 && (fileUri || audioInput.buffer)) {
       try {
@@ -707,7 +743,7 @@ async function transcribeWithKey(
       const roundedDuration = Math.round(totalDuration)
       const effectivePrompt = totalDuration > 0
         ? `${promptText} CRITICAL FULL-DURATION REQUIREMENT: Total recording duration is exactly ${roundedDuration} seconds. Spoken dialogue occurs across the full recording. Viral social media clips (TikTok, Facebook, Reels) frequently feature dramatic mid-video sound effects (crashes, laughter, music stingers) and action pauses between scenes. You MUST continue listening past any mid-video sound effects or pauses all the way to ${roundedDuration}s. For compilations and countdowns (e.g., Number 10 down to Number 1), you MUST transcribe all entries completely all the way through the final #1 item and conclusion. Dialogue resumes after scene transitions. You MUST transcribe all spoken dialogue from 0.0s all the way to ${roundedDuration}s without stopping. Do NOT stop after introductory phrases, sound effects, or musical pauses.`
-        : promptText
+        : `${promptText} CRITICAL FULL-DURATION REQUIREMENT: Listen attentively to the absolute end of the recording without stopping prematurely. Multi-part commentary, meme compilations, and social media videos often have pauses, laugh tracks, or sound effects between items. Spoken dialogue continues after pauses. You MUST transcribe all spoken dialogue all the way to the end of the recording without stopping.`
 
       try {
         const responseText = await withGeminiRetry(
@@ -739,42 +775,56 @@ async function transcribeWithKey(
           return Math.max(max, end)
         }, 0)
 
+        // Evaluate whether initial transcript is incomplete (e.g. countdown cut off, cliffhanger mid-thought, or coverage gap)
+        const initialIncomplete = checkTranscriptIncompleteness(
+          parsedTranscript.text || accumulatedSegments.map((s) => s.text).join(' '),
+          accumulatedSegments,
+          totalDuration
+        )
+
         // AUTOMATIC CONTINUATION LOOP:
-        // If the media has known duration (>= 15s) and the transcribed speech stopped early
-        // (e.g. at an intro pause, sound effect, musical break, or token pause),
+        // If the media has known duration (>= 15s) and speech stopped early, OR transcript ended mid-thought / cliffhanger,
         // automatically issue continuation requests from the last detected timestamp to capture all remaining speech.
-        // FAST CONTINUATION CHECK:
-        // If the media has known duration (>= 15s) and the transcribed speech stopped early
-        // (e.g. at an intro pause or speech pause), perform at most 1 fast continuation scan.
         let continuationPass = 0
-        const MAX_CONTINUATION_PASSES = totalDuration > 300 ? 2 : 1
+        const MAX_CONTINUATION_PASSES = 3
+        let consecutiveEmptyPasses = 0
 
         while (
-          totalDuration >= 15 &&
-          currentMaxEnd < totalDuration - 6 &&
-          continuationPass < MAX_CONTINUATION_PASSES
+          continuationPass < MAX_CONTINUATION_PASSES &&
+          (
+            (totalDuration >= 15 && currentMaxEnd < totalDuration - 4) ||
+            (initialIncomplete.isIncomplete && currentMaxEnd > 0)
+          )
         ) {
           continuationPass++
           const startOffset = Math.max(0, Math.floor(currentMaxEnd))
           const lastWords = accumulatedSegments.slice(-2).map((s) => s.text).join(' ').slice(-100).trim()
-          const roundedTotal = Math.round(totalDuration)
+          const durationText = totalDuration > 0 ? `(total duration: ${Math.round(totalDuration)} seconds)` : '(full recording duration)'
+          const targetEndText = totalDuration > 0 ? `${Math.round(totalDuration)}s` : 'the absolute end of the recording'
 
           emit({
             type: 'status',
             phase: 'processing',
-            message: `Scanning audio continuation (${Math.round(currentMaxEnd)}s / ${roundedTotal}s)...`
+            message: `Scanning audio continuation (${Math.round(currentMaxEnd)}s${totalDuration > 0 ? ` / ${Math.round(totalDuration)}s` : ''})...`
           })
 
           const isCountdownInProgress =
             /\b(?:number|no\.?|#)\s*(?:10|ten|9|nine|8|eight|7|seven|6|six|5|five|4|four|3|three|2|two)\b/i.test(accumulatedSegments.map((s) => s.text).join(' ')) ||
             /(?:លេខ|ចំណាត់ថ្នាក់(?:លេខ)?)\s*(?:១០|៩|៨|៧|៦|៥|៤|៣|២|10|9|8|7|6|5|4|3|2)/.test(accumulatedSegments.map((s) => s.text).join(' '))
 
+          const currentIncompleteness = checkTranscriptIncompleteness(
+            accumulatedSegments.map((s) => s.text).join(' '),
+            accumulatedSegments,
+            totalDuration
+          )
+
           const contPrompt = [
-            `CRITICAL RECORDING CONTINUATION: You are continuing the verbatim transcription of this media recording (total duration: ${roundedTotal} seconds).`,
+            `CRITICAL RECORDING CONTINUATION: You are continuing the verbatim transcription of this media recording ${durationText}.`,
             `Speech from 0:00 up to ${startOffset} seconds has already been transcribed.`,
             lastWords ? `The transcribed speech so far ended around ${startOffset}s with: "...${lastWords}".` : '',
-            isCountdownInProgress ? `A countdown list is in progress! The final reveal (#1 / Number One / លេខ ១) and concluding dialogue occur between ${startOffset}s and ${roundedTotal}s. Transcribe all remaining entries and conclusion without stopping.` : '',
-            `Listen carefully to all audio from ${startOffset}s to ${roundedTotal}s and transcribe any remaining spoken dialogue verbatim into the native script.`,
+            currentIncompleteness.isCliffhanger ? `CRITICAL SENTENCE CUT-OFF: The speech ended abruptly mid-sentence ("...${lastWords}"). The narrator's sentence or thought was cut off by a pause, sound effect, or laugh track. Listen starting at ${startOffset}s to complete the sentence and continue transcribing subsequent commentary.` : '',
+            isCountdownInProgress ? `A countdown list is in progress! The final reveal (#1 / Number One / លេខ ១) and concluding dialogue occur between ${startOffset}s and ${targetEndText}. Transcribe all remaining entries and conclusion without stopping.` : '',
+            `Listen carefully to all audio from ${startOffset}s to ${targetEndText} and transcribe any remaining spoken dialogue verbatim into the native script.`,
             'Format strictly as JSON with this exact shape:',
             `{"language":"${parsedTranscript.language || 'auto'}","text":"Remaining continuous transcript text here","segments":[{"start":${startOffset},"end":${startOffset + 5},"text":"phrase"}]}`,
             `Start timestamps must continue from ${startOffset}s.`
@@ -835,16 +885,25 @@ async function transcribeWithKey(
               break
             }
             currentMaxEnd = newMaxEnd
+            consecutiveEmptyPasses = 0
           } else if (contParsedText && contParsedText.trim()) {
             const newText = contParsedText.trim()
             accumulatedSegments.push({
               start: startOffset,
-              end: totalDuration,
+              end: totalDuration > 0 ? totalDuration : startOffset + 5,
               text: newText
             })
-            currentMaxEnd = totalDuration
+            currentMaxEnd = totalDuration > 0 ? totalDuration : startOffset + 5
             break
           } else {
+            consecutiveEmptyPasses++
+            // AUDIO GAP-JUMPING:
+            // Viral videos frequently have a 3-6 second pause, laugh track, or meme sound effect between items.
+            // If Gemini returned no segments immediately after the sound effect, jump 5 seconds forward once to check for subsequent scenes.
+            if (consecutiveEmptyPasses <= 1 && totalDuration > 0 && currentMaxEnd + 8 < totalDuration) {
+              currentMaxEnd += 5
+              continue
+            }
             // No additional speech detected in remainder of audio; naturally concluded
             break
           }
@@ -879,7 +938,10 @@ async function transcribeWithKey(
             failoverModel: nextModel,
             skipTelegramAlert: true
           })
-          promptText = `${promptText} CRITICAL FULL DURATION COMPLETION: The previous model attempt stopped prematurely (${incompleteness.reason}). You MUST listen all the way to ${Math.round(totalDuration)}s and capture the complete dialogue, every countdown item down to Number 1, and the conclusion.`
+          const targetDurationMsg = totalDuration > 0
+            ? `all the way to ${Math.round(totalDuration)}s`
+            : 'all the way to the absolute end of the recording'
+          promptText = `${promptText} CRITICAL FULL DURATION COMPLETION: The previous model attempt stopped prematurely (${incompleteness.reason}). You MUST listen ${targetDurationMsg} and capture the complete dialogue, every animal/example/item in the compilation, every countdown item down to Number 1, and the conclusion.`
           continue
         }
 
@@ -1147,15 +1209,20 @@ async function runTranscriptionPipeline(
         : getNextRoundRobinKeyIndex(keys.length)
 
       let completed = 0
+      const totalMediaDuration = audioInput.durationSeconds || (chunks.length * CHUNK_DURATION_SECONDS)
       const partials = await mapWithConcurrency(chunks, MAX_PARALLEL_CHUNKS, async (chunk, chunkIndex) => {
         // Distribute chunks across distinct keys in the fleet so parallel requests do not compete on one key
         const chunkKeyIndex = (baseKeyIndex + chunkIndex) % keys.length
+        const chunkDuration = Math.min(
+          CHUNK_DURATION_SECONDS,
+          Math.max(1, totalMediaDuration - chunk.startOffsetSeconds)
+        )
         const result = await runAcrossKeys(
           {
             buffer: chunk.buffer,
             mimeType: chunk.mimeType,
             displayName: chunk.displayName,
-            durationSeconds: CHUNK_DURATION_SECONDS
+            durationSeconds: chunkDuration
           },
           // Suppress per-chunk status noise; report overall chunk progress instead.
           () => {},
