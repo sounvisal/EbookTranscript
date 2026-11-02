@@ -45,6 +45,8 @@ export type AdminStats = {
     startTime: string
     endTime: string
     daysCount: number
+    timeZone?: string
+    timeZoneLabel?: string
   }
   overview: {
     totalUsers: number

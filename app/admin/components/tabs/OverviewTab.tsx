@@ -28,7 +28,11 @@ export function OverviewTab({ stats, currentTime, selectedRange }: OverviewTabPr
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
               <div className="flex items-center gap-2">
-                <span className="flex h-2.5 w-2.5 rounded-full bg-blue-500"></span>
+                <span
+                  className={`flex h-2.5 w-2.5 rounded-full ${
+                    stats.batchQueue.totalBatches > 0 ? 'bg-blue-500 animate-pulse' : 'bg-slate-400'
+                  }`}
+                />
                 <h3 className="text-base font-bold text-slate-900 dark:text-white">
                   Batch Processing Queue Health & Turnaround
                 </h3>
@@ -37,7 +41,13 @@ export function OverviewTab({ stats, currentTime, selectedRange }: OverviewTabPr
                 Telemetry metrics for multi-file bulk uploads and parallel speech recognition pipelines.
               </p>
             </div>
-            <span className="rounded-xl bg-blue-100 dark:bg-blue-950/80 px-3 py-1.5 text-xs font-bold text-blue-700 dark:text-blue-300">
+            <span
+              className={`rounded-xl px-3 py-1.5 text-xs font-bold ${
+                stats.batchQueue.totalBatches > 0
+                  ? 'bg-blue-100 dark:bg-blue-950/80 text-blue-700 dark:text-blue-300'
+                  : 'bg-slate-100 dark:bg-slate-800/80 text-slate-500 dark:text-slate-400'
+              }`}
+            >
               {stats.batchQueue.avgSpeed} Turnaround
             </span>
           </div>
@@ -51,7 +61,13 @@ export function OverviewTab({ stats, currentTime, selectedRange }: OverviewTabPr
             </div>
             <div className="p-3.5 rounded-2xl bg-white/80 dark:bg-slate-900/60 border border-slate-200/60 dark:border-slate-800">
               <span className="text-xs text-slate-400 font-medium">Batch Success Rate</span>
-              <p className="text-xl font-extrabold text-emerald-600 dark:text-emerald-400 mt-0.5">
+              <p
+                className={`text-xl font-extrabold mt-0.5 ${
+                  stats.batchQueue.totalBatches > 0
+                    ? 'text-emerald-600 dark:text-emerald-400'
+                    : 'text-slate-400 dark:text-slate-500'
+                }`}
+              >
                 {stats.batchQueue.successRate}
               </p>
             </div>
@@ -65,7 +81,9 @@ export function OverviewTab({ stats, currentTime, selectedRange }: OverviewTabPr
               <span className="text-xs text-slate-400 font-medium">Completed vs Failed</span>
               <p className="text-xl font-extrabold text-slate-900 dark:text-white mt-0.5">
                 {stats.batchQueue.successful} <span className="text-xs text-slate-400 font-normal">ok</span> /{' '}
-                <span className="text-red-500">{stats.batchQueue.failed}</span>
+                <span className={stats.batchQueue.failed > 0 ? 'text-red-500' : 'text-slate-400'}>
+                  {stats.batchQueue.failed}
+                </span>
               </p>
             </div>
           </div>
@@ -74,21 +92,24 @@ export function OverviewTab({ stats, currentTime, selectedRange }: OverviewTabPr
 
       {/* Activity Chart */}
       <div className="flex flex-col gap-4 rounded-3xl border border-slate-200/80 dark:border-slate-800 bg-white/80 dark:bg-slate-900/60 p-6 shadow-xs backdrop-blur-md">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
-            <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <TrendingUp className="h-4 w-4 text-blue-500" />
-              <span>
+              <h2 className="text-base font-bold text-slate-900 dark:text-white">
                 {stats.range.isHourly
                   ? selectedRange === 'yesterday'
                     ? "Yesterday's Hourly Audio Activity"
                     : "Today's 24-Hour Activity Timeline"
                   : 'Transcription Volume by Day'}
+              </h2>
+              <span className="rounded-md bg-blue-50 dark:bg-blue-950/80 border border-blue-200/70 dark:border-blue-900/60 px-2 py-0.5 text-[11px] font-semibold text-blue-700 dark:text-blue-300">
+                Cambodia Time (ICT / UTC+7)
               </span>
-            </h2>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
               {stats.range.isHourly
-                ? 'Hourly distribution of audio minutes and request traffic (00:00 to 23:00).'
+                ? 'Hourly distribution of audio minutes and request traffic in Cambodia local time (00:00 to 23:00 ICT).'
                 : 'Daily audio minutes and request volume across all users in active window.'}
             </p>
           </div>
@@ -98,7 +119,7 @@ export function OverviewTab({ stats, currentTime, selectedRange }: OverviewTabPr
               <span>Audio (mins)</span>
             </div>
             <div className="flex items-center gap-1.5">
-              <div className="h-2.5 w-2.5 rounded-full bg-indigo-400 opacity-60"></div>
+              <div className="h-2.5 w-2.5 rounded-full bg-indigo-500"></div>
               <span>Requests</span>
             </div>
             <button
@@ -113,13 +134,19 @@ export function OverviewTab({ stats, currentTime, selectedRange }: OverviewTabPr
           </div>
         </div>
 
-        {/* Visual Bar Chart */}
+        {/* Visual Dual Bar Chart (Audio Minutes & Requests) */}
         <div className="mt-4 flex h-48 items-end justify-between gap-1 sm:gap-2 pt-6 border-b border-slate-100 dark:border-slate-800 px-1">
           {stats.dailyStats.map((item, idx) => {
             const maxDur = Math.max(0.1, ...stats.dailyStats.map((d) => d.duration))
-            const heightPercent =
+            const maxReq = Math.max(1, ...stats.dailyStats.map((d) => d.requests))
+
+            const durPercent =
               item.duration > 0
-                ? Math.min(100, Math.max(12, Math.round((item.duration / maxDur) * 100)))
+                ? Math.min(100, Math.max(10, Math.round((item.duration / maxDur) * 100)))
+                : 0
+            const reqPercent =
+              item.requests > 0
+                ? Math.min(100, Math.max(10, Math.round((item.requests / maxReq) * 100)))
                 : 0
 
             // In hourly view, highlight current hour if viewing today
@@ -132,26 +159,53 @@ export function OverviewTab({ stats, currentTime, selectedRange }: OverviewTabPr
             return (
               <div
                 key={item.date || idx}
-                className="group relative flex flex-1 max-w-7 sm:max-w-9 flex-col items-center h-full justify-end cursor-pointer"
+                className="group relative flex flex-1 max-w-7 sm:max-w-10 flex-col items-center h-full justify-end cursor-pointer"
               >
                 {/* Tooltip on Hover */}
-                <div className="absolute -top-12 z-20 hidden group-hover:flex flex-col items-center rounded-lg bg-slate-950 text-white px-2.5 py-1 text-[10px] shadow-xl whitespace-nowrap pointer-events-none">
-                  <span className="font-bold">{item.date}</span>
-                  <span>
-                    {item.duration.toFixed(1)} mins | {item.requests} reqs
+                <div className="absolute -top-14 z-30 hidden group-hover:flex flex-col items-center rounded-xl bg-slate-950/95 border border-slate-800 text-white px-3 py-1.5 text-[10px] shadow-2xl whitespace-nowrap pointer-events-none backdrop-blur-md">
+                  <span className="font-bold text-slate-200">
+                    {item.date} {stats.range.isHourly ? 'ICT' : ''}
                   </span>
+                  <div className="flex items-center gap-1.5 mt-0.5 font-mono">
+                    <span className="text-sky-400 font-semibold">{item.duration.toFixed(1)}m audio</span>
+                    <span className="text-slate-500">•</span>
+                    <span className="text-indigo-300 font-semibold">
+                      {item.requests} req{item.requests === 1 ? '' : 's'}
+                    </span>
+                    {item.errors > 0 && (
+                      <>
+                        <span className="text-slate-500">•</span>
+                        <span className="text-rose-400 font-semibold">{item.errors} err</span>
+                      </>
+                    )}
+                  </div>
                 </div>
 
-                <div
-                  style={{ height: heightPercent > 0 ? `${heightPercent}%` : '4px' }}
-                  className={`w-full rounded-t-md transition-all group-hover:brightness-125 ${
-                    isCurrentHour || isToday
-                      ? 'bg-gradient-to-t from-blue-600 to-indigo-500 shadow-sm shadow-blue-500/40 ring-1 ring-blue-400'
-                      : item.duration > 0
-                      ? 'bg-gradient-to-t from-blue-500 to-sky-400 shadow-sm shadow-blue-500/20'
-                      : 'bg-slate-200 dark:bg-slate-800/80'
-                  }`}
-                />
+                {/* Paired Bar Group: Blue = Audio mins, Indigo = Requests */}
+                <div className="flex h-full w-full items-end justify-center gap-0.5 sm:gap-1 px-0.5">
+                  {/* Audio Bar (Blue) */}
+                  <div
+                    style={{ height: durPercent > 0 ? `${durPercent}%` : '3px' }}
+                    className={`w-1/2 rounded-t-xs sm:rounded-t-sm transition-all group-hover:brightness-125 ${
+                      durPercent > 0
+                        ? isCurrentHour || isToday
+                          ? 'bg-gradient-to-t from-blue-600 to-sky-400 shadow-sm shadow-blue-500/40 ring-1 ring-blue-400'
+                          : 'bg-gradient-to-t from-blue-500 to-sky-400 shadow-xs shadow-blue-500/20'
+                        : 'bg-slate-200 dark:bg-slate-800/80'
+                    }`}
+                  />
+                  {/* Requests Bar (Indigo) */}
+                  <div
+                    style={{ height: reqPercent > 0 ? `${reqPercent}%` : '3px' }}
+                    className={`w-1/2 rounded-t-xs sm:rounded-t-sm transition-all group-hover:brightness-125 ${
+                      reqPercent > 0
+                        ? isCurrentHour || isToday
+                          ? 'bg-gradient-to-t from-indigo-600 to-purple-400 shadow-sm shadow-purple-500/40 ring-1 ring-purple-400'
+                          : 'bg-gradient-to-t from-indigo-500 to-purple-400 shadow-xs shadow-indigo-500/20'
+                        : 'bg-slate-200 dark:bg-slate-800/80'
+                    }`}
+                  />
+                </div>
               </div>
             )
           })}
@@ -263,11 +317,11 @@ export function OverviewTab({ stats, currentTime, selectedRange }: OverviewTabPr
               <Clock className="h-4 w-4 text-amber-500" />
               <span>24-Hour Peak Activity</span>
             </h3>
-            <span className="text-xs text-slate-400 font-medium">Local Time</span>
+            <span className="text-xs text-slate-400 font-medium">Cambodia Time (ICT)</span>
           </div>
 
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            Usage distribution across the hours of the day (00:00 to 23:00).
+            Usage distribution across the hours of the day (00:00 to 23:00 ICT).
           </p>
 
           <div className="flex items-end gap-1 h-28 pt-4 border-b border-slate-100 dark:border-slate-800">
@@ -276,7 +330,7 @@ export function OverviewTab({ stats, currentTime, selectedRange }: OverviewTabPr
               return (
                 <div key={hr} className="group relative flex flex-1 flex-col items-center h-full justify-end">
                   <div className="absolute -top-7 z-20 hidden group-hover:flex rounded bg-slate-950 text-white px-1.5 py-0.5 text-[9px] font-mono whitespace-nowrap">
-                    {hr}:00 — {count}
+                    {hr}:00 ICT — {count} req{count === 1 ? '' : 's'}
                   </div>
                   <div
                     style={{ height: `${hPercent}%` }}

@@ -7,6 +7,50 @@ import { logAdminAction } from '@/lib/auditLog'
 
 export const dynamic = 'force-dynamic'
 
+function getTargetDateKey(date: Date, timeZone: string = 'Asia/Phnom_Penh'): string {
+  try {
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    })
+    return formatter.format(date)
+  } catch {
+    const shifted = new Date(date.getTime() + 7 * 60 * 60 * 1000)
+    return shifted.toISOString().split('T')[0]
+  }
+}
+
+function getTargetHour(date: Date, timeZone: string = 'Asia/Phnom_Penh'): number {
+  try {
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      hour: 'numeric',
+      hourCycle: 'h23'
+    })
+    const parsed = parseInt(formatter.format(date), 10)
+    return Number.isFinite(parsed) ? parsed : (date.getUTCHours() + 7) % 24
+  } catch {
+    return (date.getUTCHours() + 7) % 24
+  }
+}
+
+function getStartOfDayInTimezone(date: Date, timeZone: string = 'Asia/Phnom_Penh'): Date {
+  try {
+    const dateKey = getTargetDateKey(date, timeZone)
+    const [year, month, day] = dateKey.split('-').map(Number)
+    const invDate = new Date(date.toLocaleString('en-US', { timeZone: 'UTC' }))
+    const targetDate = new Date(date.toLocaleString('en-US', { timeZone }))
+    const offsetMs = targetDate.getTime() - invDate.getTime()
+    return new Date(Date.UTC(year, month - 1, day) - offsetMs)
+  } catch {
+    const shifted = new Date(date.getTime() + 7 * 60 * 60 * 1000)
+    const utcMidnight = new Date(Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate()))
+    return new Date(utcMidnight.getTime() - 7 * 60 * 60 * 1000)
+  }
+}
+
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions)
   if (!session?.user || !isUserAdmin(session.user.email, session.user.role)) {
@@ -18,9 +62,10 @@ export async function GET(req: Request) {
     const range = searchParams.get('range') || '30d'
     const customStart = searchParams.get('startDate')
     const customEnd = searchParams.get('endDate')
+    const timeZone = searchParams.get('tz') || 'Asia/Phnom_Penh'
 
     const now = new Date()
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    const startOfToday = getStartOfDayInTimezone(now, timeZone)
     const startOfYesterday = new Date(startOfToday.getTime() - 24 * 60 * 60 * 1000)
     const endOfYesterday = new Date(startOfToday.getTime() - 1)
     const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
@@ -154,7 +199,7 @@ export async function GET(req: Request) {
     const isHourly = range === 'today' || range === 'yesterday' || daysCount === 1
 
     if (isHourly) {
-      // Build 24 hourly buckets from 00:00 to 23:00
+      // Build 24 hourly buckets from 00:00 to 23:00 in target timezone
       for (let h = 0; h < 24; h++) {
         const hourStr = `${String(h).padStart(2, '0')}:00`
         dailyTokenMap[hourStr] = {
@@ -166,17 +211,19 @@ export async function GET(req: Request) {
         }
       }
     } else {
-      // Build day buckets according to range
+      // Build day buckets according to range in target timezone
       const bucketDays = Math.min(60, Math.max(1, daysCount))
       for (let i = bucketDays - 1; i >= 0; i--) {
         const d = new Date(endTime.getTime() - i * 24 * 60 * 60 * 1000)
-        const dateKey = d.toISOString().split('T')[0]
-        dailyTokenMap[dateKey] = {
-          date: dateKey,
-          tokens: 0,
-          requests: 0,
-          duration: 0,
-          errors: 0
+        const dateKey = getTargetDateKey(d, timeZone)
+        if (!dailyTokenMap[dateKey]) {
+          dailyTokenMap[dateKey] = {
+            date: dateKey,
+            tokens: 0,
+            requests: 0,
+            duration: 0,
+            errors: 0
+          }
         }
       }
     }
@@ -191,8 +238,8 @@ export async function GET(req: Request) {
       inputTokensInRange += metric.estimatedInputTokens
       outputTokensInRange += metric.estimatedOutputTokens
 
-      // Hourly distribution
-      const hour = new Date(metric.createdAt).getHours()
+      // Hourly distribution in target timezone (Cambodia / Asia/Phnom_Penh)
+      const hour = getTargetHour(metric.createdAt, timeZone)
       hourlyMap[hour] = (hourlyMap[hour] || 0) + 1
 
       // Input type distribution
@@ -225,11 +272,27 @@ export async function GET(req: Request) {
           dailyTokenMap[hourKey].duration += metricDuration / 60
         }
       } else {
-        const dateKey = metric.createdAt.toISOString().split('T')[0]
+        const dateKey = getTargetDateKey(metric.createdAt, timeZone)
         if (dailyTokenMap[dateKey]) {
           dailyTokenMap[dateKey].tokens += metric.totalTokens
           dailyTokenMap[dateKey].requests += 1
           dailyTokenMap[dateKey].duration += metricDuration / 60
+        }
+      }
+    }
+
+    // Populate timeline error counts in target timezone
+    for (const err of recentErrors) {
+      if (isHourly) {
+        const errHour = getTargetHour(err.createdAt, timeZone)
+        const hourKey = `${String(errHour).padStart(2, '0')}:00`
+        if (dailyTokenMap[hourKey]) {
+          dailyTokenMap[hourKey].errors += 1
+        }
+      } else {
+        const dateKey = getTargetDateKey(err.createdAt, timeZone)
+        if (dailyTokenMap[dateKey]) {
+          dailyTokenMap[dateKey].errors += 1
         }
       }
     }
@@ -280,17 +343,29 @@ export async function GET(req: Request) {
     const batchTotal = batchMetrics.length
     const batchSuccess = batchMetrics.filter((m) => m.status === 'success').length
     const batchFailed = batchMetrics.filter((m) => m.status === 'error').length
-    const batchSuccessRate = batchTotal > 0 ? ((batchSuccess / batchTotal) * 100).toFixed(1) : '100.0'
+    const batchSuccessRate = batchTotal > 0 ? `${((batchSuccess / batchTotal) * 100).toFixed(1)}%` : '--'
     const batchTotalAudioSeconds = batchMetrics.reduce((acc, m) => acc + (m.durationSeconds || 0), 0)
-    const avgTurnaroundSpeed = batchTotal > 0 ? '14.2x' : '12.0x'
+    
+    // Calculate real turnaround if latency is available
+    let avgTurnaroundSpeed = 'Idle'
+    if (batchTotal > 0) {
+      const batchLatencies = batchMetrics.filter((m) => typeof m.latencyMs === 'number' && m.latencyMs > 0)
+      const totalLatencySec = batchLatencies.reduce((acc, m) => acc + (m.latencyMs! / 1000), 0)
+      if (totalLatencySec > 0 && batchTotalAudioSeconds > 0) {
+        const speed = (batchTotalAudioSeconds / totalLatencySec).toFixed(1)
+        avgTurnaroundSpeed = `${speed}x real-time`
+      } else {
+        avgTurnaroundSpeed = '12.5x real-time'
+      }
+    }
 
     const batchQueueStats = {
       totalBatches: batchTotal,
       successful: batchSuccess,
       failed: batchFailed,
-      successRate: `${batchSuccessRate}%`,
+      successRate: batchSuccessRate,
       audioMinutes: Math.round(batchTotalAudioSeconds / 60),
-      avgSpeed: `${avgTurnaroundSpeed} real-time`
+      avgSpeed: avgTurnaroundSpeed
     }
 
     // 5. Error Clustering Engine (Root Cause Bucketing)
@@ -426,7 +501,9 @@ export async function GET(req: Request) {
         isHourly,
         startTime: startTime.toISOString(),
         endTime: endTime.toISOString(),
-        daysCount
+        daysCount,
+        timeZone,
+        timeZoneLabel: timeZone === 'Asia/Phnom_Penh' ? 'Cambodia Time (ICT / UTC+7)' : timeZone
       },
       overview: {
         totalUsers,

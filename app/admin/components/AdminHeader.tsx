@@ -73,7 +73,7 @@ export function AdminHeader({
           </span>
           <span className="text-slate-300 dark:text-slate-700">|</span>
           <span className="text-[11px] font-mono font-bold text-slate-700 dark:text-slate-300">
-            {currentTime.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })}
+            {currentTime.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })} ICT
           </span>
         </div>
 

@@ -26,12 +26,13 @@ export function TimeMachineFilter({ selectedRange, onRangeChange, startTime, end
         <span className="font-bold text-slate-900 dark:text-white">Time Machine:</span>
         <span>Viewing telemetry data from</span>
         <span className="font-mono font-semibold text-blue-600 dark:text-blue-400">
-          {startTime ? new Date(startTime).toLocaleDateString() : 'Loading...'}
+          {startTime ? new Date(startTime).toLocaleDateString([], { timeZone: 'Asia/Phnom_Penh' }) : 'Loading...'}
         </span>
         <span>to</span>
         <span className="font-mono font-semibold text-blue-600 dark:text-blue-400">
-          {endTime ? new Date(endTime).toLocaleDateString() : 'Now'}
+          {endTime ? new Date(endTime).toLocaleDateString([], { timeZone: 'Asia/Phnom_Penh' }) : 'Now'}
         </span>
+        <span className="text-[10px] font-mono text-slate-400">(ICT)</span>
       </div>
 
       <div className="flex items-center gap-1 rounded-xl bg-slate-200/70 dark:bg-slate-900 p-1">

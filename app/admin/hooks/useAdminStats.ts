@@ -34,7 +34,10 @@ export function useAdminStats() {
       setIsSyncing(true)
       setErrorMsg(null)
       try {
-        const res = await fetch(`/api/admin/stats?range=${range}`, { cache: 'no-store' })
+        const tz = typeof window !== 'undefined'
+          ? Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Phnom_Penh'
+          : 'Asia/Phnom_Penh'
+        const res = await fetch(`/api/admin/stats?range=${range}&tz=${encodeURIComponent(tz)}`, { cache: 'no-store' })
         if (!res.ok) {
           throw new Error('Failed to load admin statistics.')
         }
