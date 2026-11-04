@@ -785,22 +785,20 @@ export function checkTranscriptIncompleteness(
   }
 
   // 2. Dangling Mid-Sentence Cliffhanger Check:
-  // IMPORTANT: Viral TikTok/social media videos often intentionally end with cliffhangers ("...") for engagement.
-  // Only flag as incomplete if BOTH conditions are true:
-  // - Ends with suspicious punctuation/word AND
-  // - Has significant remaining audio (>6s) AND poor coverage (<75%)
+  // Detects if speech ends abruptly mid-thought on punctuation (..., —, -, comma)
+  // or on dangling grammatical words (determiners, quantifiers, conjunctions, prepositions, auxiliary verbs, etc.).
   const endsWithPunctuationCliffhanger = /[,\-—–]\s*$/s.test(cleanText) || /\.{3,}\s*$/s.test(cleanText) || /…\s*$/s.test(cleanText)
-  const endsWithDanglingWord = /\b(?:the|a|an|and|or|but|that|with|in|to|when|which|because|after|before|during|while|into|onto|of|for|at|by|from|as|so|than|about|like|such|turn|turns|become|becomes|is|are|was|were|their|my|his|her|its)\s*$/i.test(cleanText.replace(/[.!?។៕]+$/, '')) ||
-    /(?:និង|ឬ|ដែល|ជាមួយ|ក្នុង|ទៅ|ពេល|ព្រោះ|បន្ទាប់ពី|មុន|អំឡុង|ខណៈ|ចូល|នៃ|សម្រាប់|នៅ|ដោយ|ពី|ដូច|ដូចជា|គឺ|ជា)\s*$/.test(cleanText.replace(/[.!?។៕]+$/, ''))
+  const endsWithDanglingWord = /\b(?:the|a|an|and|or|but|that|with|in|to|when|which|where|why|how|what|because|after|before|during|while|into|onto|of|for|at|by|from|as|so|than|about|like|such|each|every|all|some|any|no|other|another|both|this|these|those|who|whom|whose|if|whether|though|although|even|also|now|then|just|only|still|yet|can|could|will|would|shall|should|may|might|must|have|has|had|do|does|did|be|been|being|is|are|was|were|turn|turns|become|becomes|their|my|his|her|its|our|your)\s*$/i.test(cleanText.replace(/[.!?។៕]+$/, '')) ||
+    /(?:និង|ឬ|ដែល|ជាមួយ|ក្នុង|ទៅ|ពេល|ព្រោះ|បន្ទាប់ពី|មុន|អំឡុង|ខណៈ|ចូល|នៃ|សម្រាប់|នៅ|ដោយ|ពី|ដូច|ដូចជា|គឺ|ជា|នីមួយៗ|រាល់|គ្រប់|ទាំងអស់|ទាំងនេះ|ទាំងនោះ|នេះ|នោះ|អ្នកណា|ឯណា|កាលណា|ហេតុអ្វី|យ៉ាងណា|បើ|ប្រសិន|ទោះ|អាច|នឹង|ត្រូវ|មាន|បាន|ធ្វើ)\s*$/.test(cleanText.replace(/[.!?។៕]+$/, ''))
 
-  // Flag cliffhangers if dialogue ends mid-thought with uncaptured remaining audio or unknown duration
+  // Flag cliffhangers whenever dialogue ends mid-thought with uncaptured remaining audio (>0.8s) or unknown duration
   const hasCliffhangerEnd = endsWithPunctuationCliffhanger || endsWithDanglingWord
   const isCliffhangerIncomplete =
     hasCliffhangerEnd &&
     (
       totalDuration === 0 ||
-      remainingSeconds > 4 ||
-      (totalDuration >= 15 && coverageRatio < 0.88)
+      remainingSeconds > 0.8 ||
+      (totalDuration >= 15 && coverageRatio < 0.96)
     )
 
   if (isCliffhangerIncomplete) {
@@ -889,5 +887,87 @@ export function checkTranscriptIncompleteness(
     wordCount,
     maxSegmentEnd
   }
+}
+
+/**
+ * Intelligently merges continuation segments onto existing segments,
+ * deduplicating any word overlap resulting from a cliffhanger context rewind.
+ */
+export function mergeContinuationSegments(
+  existing: TranscriptSegment[],
+  incoming: TranscriptSegment[],
+  isCliffhanger: boolean = false
+): TranscriptSegment[] {
+  if (!incoming || incoming.length === 0) return existing
+  if (!existing || existing.length === 0) return [...incoming]
+
+  const lastExisting = existing[existing.length - 1]
+  const firstIncoming = incoming[0]
+
+  const existingWords = lastExisting.text.trim().split(/\s+/).filter(Boolean)
+  const incomingWords = firstIncoming.text.trim().split(/\s+/).filter(Boolean)
+
+  const normalizeWord = (w: string) => w.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')
+
+  // Find longest suffix of existingWords matching prefix of incomingWords (up to 8 words)
+  let maxOverlap = 0
+  const maxCheck = Math.min(8, existingWords.length, incomingWords.length)
+  for (let k = 1; k <= maxCheck; k++) {
+    const existingSuffix = existingWords.slice(-k).map(normalizeWord).join(' ')
+    const incomingPrefix = incomingWords.slice(0, k).map(normalizeWord).join(' ')
+    if (existingSuffix && incomingPrefix && existingSuffix === incomingPrefix) {
+      maxOverlap = k
+    }
+  }
+
+  const result = [...existing]
+
+  if (maxOverlap > 0) {
+    // If incoming first segment is entirely subsumed by the overlap
+    if (maxOverlap >= incomingWords.length) {
+      const remainingIncoming = incoming.slice(1)
+      return remainingIncoming.length > 0
+        ? mergeContinuationSegments(result, remainingIncoming, isCliffhanger)
+        : result
+    }
+
+    // If existing last segment was entirely the overlap (e.g. ended with a tiny dangling fragment like "Now, each")
+    if (maxOverlap >= existingWords.length && isCliffhanger) {
+      result[result.length - 1] = {
+        start: lastExisting.start,
+        end: firstIncoming.end ?? Math.max(lastExisting.end || 0, firstIncoming.start + 3),
+        text: firstIncoming.text.trim()
+      }
+      result.push(...incoming.slice(1))
+      return result
+    }
+
+    // Otherwise, strip the overlapping words from the start of firstIncoming.text
+    result[result.length - 1] = {
+      ...lastExisting,
+      text: lastExisting.text.replace(/\s*[.…\-—–]+\s*$/, '').trim()
+    }
+
+    const strippedIncomingWords = incomingWords.slice(maxOverlap)
+    const newFirstSegment: TranscriptSegment = {
+      start: Math.max(lastExisting.end || lastExisting.start, firstIncoming.start),
+      ...(firstIncoming.end ? { end: firstIncoming.end } : {}),
+      text: strippedIncomingWords.join(' ')
+    }
+
+    result.push(newFirstSegment, ...incoming.slice(1))
+    return result
+  }
+
+  // If no word overlap found, but isCliffhanger and lastExisting ended with ellipsis/dangling dashes, clean them up
+  if (isCliffhanger && /\s*[.…\-—–]+\s*$/.test(lastExisting.text)) {
+    result[result.length - 1] = {
+      ...lastExisting,
+      text: lastExisting.text.replace(/\s*[.…\-—–]+\s*$/, '').trim()
+    }
+  }
+
+  result.push(...incoming)
+  return result
 }
 

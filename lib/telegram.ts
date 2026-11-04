@@ -593,11 +593,11 @@ export async function sendTelegramDailyReport(
     const trackedModelRequests = Object.values(modelCounts).reduce((a, b) => a + b, 0)
     if (successfulJobs > trackedModelRequests) {
       const defaultModel =
-        (process.env.GEMINI_MODEL || 'gemini-3.6-flash')
+        (process.env.GEMINI_MODEL || 'gemini-2.5-flash')
           .trim()
           .replace(/["'\r\n\t]/g, '')
           .replace(/^models\//i, '')
-          .trim() || 'gemini-3.6-flash'
+          .trim() || 'gemini-2.5-flash'
       modelCounts[defaultModel] = (modelCounts[defaultModel] || 0) + (successfulJobs - trackedModelRequests)
     }
 
@@ -666,7 +666,7 @@ export async function sendTelegramDailyReport(
     errors.forEach((e) => {
       const msg = e.errorMessage || ''
       if (/503|service unavailable|high demand|overloaded/i.test(msg)) {
-        const m = e.model || 'gemini-3.6-flash'
+        const m = e.model || 'gemini-2.5-flash'
         spikes503ByModel[m] = (spikes503ByModel[m] || 0) + 1
       }
     })

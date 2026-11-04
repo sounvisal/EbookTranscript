@@ -255,10 +255,10 @@ const PERMISSIVE_SAFETY_SETTINGS = [
  * - Strips quotes, backslashes, backticks, spaces, tabs, and newlines (prevents "unexpected model name format" 400 errors)
  * - Strips single or repeated "models/" prefixes so path interpolation (/models/${cleanModel}) remains valid
  * - Restricts characters strictly to [a-zA-Z0-9_.-]
- * - Defaults safely to 'gemini-3.5-flash-lite'
+ * - Defaults safely to 'gemini-2.5-flash'
  */
 export function cleanGeminiModelName(modelName?: string | null): string {
-  if (!modelName) return 'gemini-3.5-flash-lite'
+  if (!modelName) return 'gemini-2.5-flash'
   let cleaned = String(modelName).trim()
   try {
     cleaned = decodeURIComponent(cleaned)
@@ -268,7 +268,7 @@ export function cleanGeminiModelName(modelName?: string | null): string {
     .replace(/["'\\`\s\r\n\t]/g, '')
     .replace(/^(models\/)+/i, '')
     .replace(/[^a-zA-Z0-9_.-]/g, '')
-  return cleaned || 'gemini-3.5-flash-lite'
+  return cleaned || 'gemini-2.5-flash'
 }
 
 export function buildGeminiGenerationConfig(modelName: string, responseMimeType?: string) {
@@ -289,7 +289,7 @@ export function buildGeminiGenerationConfig(modelName: string, responseMimeType?
   const lower = cleanModel.toLowerCase()
   if (
     !lower.includes('lite') &&
-    (lower.includes('2.5-flash') || lower.includes('3.6-flash') || lower.includes('flash-latest'))
+    (lower.includes('2.5-flash') || lower.includes('2.0-flash') || lower.includes('flash-latest'))
   ) {
     config.thinkingConfig = { thinkingBudget: 0 }
   }
@@ -536,7 +536,7 @@ export async function transcribeAudioBufferWithGemini(
     throw new Error('No Gemini API keys configured in environment.')
   }
 
-  const models = (process.env.GEMINI_MODELS || 'gemini-3.5-flash-lite,gemini-2.5-flash,gemini-3.6-flash,gemini-2.5-flash-lite')
+  const models = (process.env.GEMINI_MODELS || 'gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash,gemini-1.5-flash')
     .split(',')
     .map((m) => cleanGeminiModelName(m))
     .filter(Boolean)

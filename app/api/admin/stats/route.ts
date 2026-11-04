@@ -483,7 +483,7 @@ export async function GET(req: Request) {
         index: idx,
         masked: key.length > 8 ? `${key.slice(0, 4)}${'•'.repeat(16)}` : '••••••••',
         status: 'active' as const,
-        modelPriority: 'gemini-2.5-flash / gemini-3.6-flash',
+        modelPriority: 'gemini-2.5-flash / gemini-2.5-flash-lite',
         loadSharePercent,
         routedRequestsToday,
         tokensToday: tokensTodayForKey,

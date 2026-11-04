@@ -17,6 +17,7 @@ import {
   checkTranscriptIncompleteness,
   extractTimestampedSegments,
   getPlainTranscriptText,
+  mergeContinuationSegments,
   normalizeTranscriptSegments,
   parseStructuredTranscriptText,
   parseTimestampToSeconds,
@@ -39,10 +40,9 @@ export const dynamic = 'force-dynamic'
 export const maxDuration = 300
 
 const MAX_LOCAL_FILE_BYTES = MAX_MEDIA_UPLOAD_BYTES
-// Gemini 3.5 Flash-Lite provides sub-second to 2s latency and 1500 RPD with zero 503 high-demand spikes.
-// Gemini 2.5 Flash and 3.6 Flash provide instant high-attention failover without reasoning delays.
-const MODEL_NAME = cleanGeminiModelName(process.env.GEMINI_MODEL) || 'gemini-3.5-flash-lite'
-const DEFAULT_FALLBACK_MODELS = ['gemini-3.5-flash-lite', 'gemini-2.5-flash', 'gemini-3.6-flash', 'gemini-2.5-flash-lite']
+// Gemini 2.5 Flash / Flash-Lite provides high accuracy, low latency, and robust coverage.
+const MODEL_NAME = cleanGeminiModelName(process.env.GEMINI_MODEL) || 'gemini-2.5-flash'
+const DEFAULT_FALLBACK_MODELS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-flash']
 
 // Audio at or below this size is sent inline in the transcribe request.
 // Video files or audio larger than 8MB always use the Files API (supports up to 2GB).
@@ -412,14 +412,15 @@ async function waitForUploadedFile(apiKey: string, fileName: string) {
 const BASE_TRANSCRIPTION_PROMPT = [
   'You are an expert multilingual audio transcription AI specialized in automatic language detection (Khmer / ភាសាខ្មែរ, English, and bilingual speech) and noisy audio extraction.',
   'Listen carefully to the entire media from the very beginning (0:00) to the absolute end.',
-  '1. AUTOMATIC LANGUAGE DETECTION: Automatically detect the spoken language. If the audio is in Khmer, set language to "Khmer". If in English, set language to "English". If bilingual mixed speech, set language to "Khmer / English".',
-  '2. VERBATIM SPEECH ACCURACY: Transcribe every spoken word accurately in the native script. For Khmer speech, output clean Khmer script (អក្សរខ្មែរ) with proper spacing and spelling. For English speech, output English.',
-  '3. HIGH-SENSITIVITY ACOUSTIC EXTRACTION: Listen with maximum sensitivity to all audio channels. Even if the voice is quiet, muffled, whispered, speaking fast, singing, chanting, talking over an intro, or partially masked by background music, sound effects, beats, or ambient noise, you MUST detect and transcribe all spoken words verbatim.',
-  '4. COMPLETE RECORDING CONTINUITY & VIRAL VIDEO HOOKS: Transcribe the entire duration verbatim from start to finish without stopping. Viral social media videos (TikTok, Snaptik, Facebook Reels, Shorts) frequently begin with a 1-sentence opening hook, followed by a dramatic sound effect, laugh track, musical break, or scene transition, after which the narration continues. You MUST NOT STOP after the opening hook sentence. Keep listening past all pauses, music stingers, and sound effects all the way to the absolute end of the media.',
-  '5. COMPILATIONS, COUNTDOWNS & MULTI-SCENE CONTINUITY: For countdowns and list videos (e.g. "Number 10" or "Number 9" down to "Number 1"), you MUST transcribe every single entry all the way through the final #1 reveal and outro conclusion. Never stop early at an intermediate number like #2 or #3. There are often 5-15 second transition pauses, action clips, or music between list numbers; continue listening past any pauses and transcribe all speech to the absolute end of the media.',
-  '6. MULTI-ITEM COMMENTARY & ANIMAL / MEME COMPILATIONS: Videos showcasing multiple examples, animals, people, or stories often pause for dramatic effect or laughter after each item setup (e.g., "they turn into..."). Never stop transcribing when one item pauses or ends mid-thought. Spoken narration continues for all subsequent items and punchlines throughout the full video. Continue transcribing every single item until the recording ends completely.',
-  '7. NUMERIC SECONDS TIMESTAMPS: Every start and end timestamp in "segments" must be a raw number in seconds (e.g. 0.0, 4.5, 38.2, 145.6). Do NOT use formatted colon strings like "2:30".',
-  '8. QUOTATION MARKS: Inside transcript text strings, use single quotes (\'quote\') or properly escaped quotes (\\"quote\\") for spoken dialogue so that JSON formatting is strictly valid.',
+  '1. CRITICAL OPENING (0:00 - 0:05) FIRST SENTENCE ACCURACY: You MUST begin transcribing from the absolute first fraction of a second (0:00.0). Social media and viral videos (TikTok, Snaptik, Reels, Shorts) frequently begin immediately with an opening spoken hook or fast introductory narration right from 0:00, often accompanied by loud intro music, sound effects, or beats. You MUST NOT skip, drop, or delay transcribing the opening words or first sentence. Transcribe all spoken words right from 0:00 verbatim as your first segment.',
+  '2. AUTOMATIC LANGUAGE DETECTION: Automatically detect the spoken language. If the audio is in Khmer, set language to "Khmer". If in English, set language to "English". If bilingual mixed speech, set language to "Khmer / English".',
+  '3. VERBATIM SPEECH ACCURACY: Transcribe every spoken word accurately in the native script. For Khmer speech, output clean Khmer script (អក្សរខ្មែរ) with proper spacing and spelling. For English speech, output English.',
+  '4. HIGH-SENSITIVITY ACOUSTIC EXTRACTION: Listen with maximum sensitivity to all audio channels. Even if the voice is quiet, muffled, whispered, speaking fast, singing, chanting, talking over an intro, or partially masked by background music, sound effects, beats, or ambient noise, you MUST detect and transcribe all spoken words verbatim.',
+  '5. COMPLETE RECORDING CONTINUITY & VIRAL VIDEO HOOKS: Transcribe the entire duration verbatim from start to finish without stopping. Viral social media videos frequently begin with a 1-sentence opening hook, followed by a dramatic sound effect, laugh track, musical break, or scene transition, after which the narration continues. You MUST NOT STOP after the opening hook sentence. Keep listening past all pauses, music stingers, and sound effects all the way to the absolute end of the media.',
+  '6. COMPILATIONS, COUNTDOWNS & MULTI-SCENE CONTINUITY: For countdowns and list videos (e.g. "Number 10" or "Number 9" down to "Number 1"), you MUST transcribe every single entry all the way through the final #1 reveal and outro conclusion. Never stop early at an intermediate number like #2 or #3. There are often 5-15 second transition pauses, action clips, or music between list numbers; continue listening past any pauses and transcribe all speech to the absolute end of the media.',
+  '7. MULTI-ITEM COMMENTARY & ANIMAL / MEME COMPILATIONS: Videos showcasing multiple examples, animals, people, or stories often pause for dramatic effect or laughter after each item setup (e.g., "they turn into..."). Never stop transcribing when one item pauses or ends mid-thought. Spoken narration continues for all subsequent items and punchlines throughout the full video. Continue transcribing every single item until the recording ends completely.',
+  '8. NUMERIC SECONDS TIMESTAMPS: Every start and end timestamp in "segments" must be a raw number in seconds (e.g. 0.0, 4.5, 38.2, 145.6). Do NOT use formatted colon strings like "2:30".',
+  '9. QUOTATION MARKS: Inside transcript text strings, use single quotes (\'quote\') or properly escaped quotes (\\"quote\\") for spoken dialogue so that JSON formatting is strictly valid.',
   'Format strictly as JSON with this exact shape:',
   '{"language":"Khmer","text":"Full continuous transcript text here","segments":[{"start":0.0,"end":4.5,"text":"phrase"}]}',
   'Ensure "text" contains the complete continuous transcript, and "segments" contains all timestamped phrases.',
@@ -433,47 +434,48 @@ function buildTranscriptionPrompt(options?: TranscribeOptions): string {
   const diarization = Boolean(options.speakerDiarization)
   const langPref = options.languagePreference || 'auto'
 
-  let langInstruction = '1. AUTOMATIC LANGUAGE DETECTION: Automatically detect the spoken language. If the audio is in Khmer, set language to "Khmer". If in English, set language to "English". If bilingual mixed speech, set language to "Khmer / English".'
+  let langInstruction = '2. AUTOMATIC LANGUAGE DETECTION: Automatically detect the spoken language. If the audio is in Khmer, set language to "Khmer". If in English, set language to "English". If bilingual mixed speech, set language to "Khmer / English".'
   if (langPref === 'khmer') {
-    langInstruction = '1. LANGUAGE REQUIREMENT: The spoken audio is in Khmer (ភាសាខ្មែរ). Transcribe strictly in clean Khmer script (អក្សរខ្មែរ) with proper spacing and spelling. Set language to "Khmer".'
+    langInstruction = '2. LANGUAGE REQUIREMENT: The spoken audio is in Khmer (ភាសាខ្មែរ). Transcribe strictly in clean Khmer script (អក្សរខ្មែរ) with proper spacing and spelling. Set language to "Khmer".'
   } else if (langPref === 'english') {
-    langInstruction = '1. LANGUAGE REQUIREMENT: The spoken audio is in English. Transcribe strictly in English with proper punctuation, grammar, and capitalization. Set language to "English".'
+    langInstruction = '2. LANGUAGE REQUIREMENT: The spoken audio is in English. Transcribe strictly in English with proper punctuation, grammar, and capitalization. Set language to "English".'
   } else if (langPref === 'bilingual') {
-    langInstruction = '1. LANGUAGE REQUIREMENT: The spoken audio contains bilingual Khmer and English mixed speech (code-switching). Transcribe Khmer portions in Khmer script (អក្សរខ្មែរ) and English speech/loanwords in English script. Set language to "Khmer / English".'
+    langInstruction = '2. LANGUAGE REQUIREMENT: The spoken audio contains bilingual Khmer and English mixed speech (code-switching). Transcribe Khmer portions in Khmer script (អក្សរខ្មែរ) and English speech/loanwords in English script. Set language to "Khmer / English".'
   }
 
   const promptParts = [
     'You are an expert multilingual audio transcription AI specialized in automatic language detection (Khmer / ភាសាខ្មែរ, English, and bilingual speech) and noisy audio extraction.',
     'Listen carefully to the entire media from the very beginning (0:00) to the absolute end.',
+    '1. CRITICAL OPENING (0:00 - 0:05) FIRST SENTENCE ACCURACY: You MUST begin transcribing from the absolute first fraction of a second (0:00.0). Social media and viral videos (TikTok, Snaptik, Reels, Shorts) frequently begin immediately with an opening spoken hook or fast introductory narration right from 0:00, often accompanied by loud intro music, sound effects, or beats. You MUST NOT skip, drop, or delay transcribing the opening words or first sentence. Transcribe all spoken words right from 0:00 verbatim as your first segment.',
     langInstruction,
-    '2. VERBATIM SPEECH ACCURACY: Transcribe every spoken word accurately in the native script. For Khmer speech, output clean Khmer script (អក្សរខ្មែរ) with proper spacing and spelling. For English speech, output English.',
-    '3. HIGH-SENSITIVITY ACOUSTIC EXTRACTION: Listen with maximum sensitivity to all audio channels. Even if the voice is quiet, muffled, whispered, speaking fast, singing, chanting, talking over an intro, or partially masked by background music, sound effects, beats, or ambient noise, you MUST detect and transcribe all spoken words verbatim.',
-    '4. COMPLETE RECORDING CONTINUITY & VIRAL VIDEO HOOKS: Transcribe the entire duration verbatim from start to finish without stopping. Viral social media videos (TikTok, Snaptik, Facebook Reels, Shorts) frequently begin with a 1-sentence opening hook, followed by a dramatic sound effect, laugh track, musical break, or scene transition, after which the narration continues. You MUST NOT STOP after the opening hook sentence. Keep listening past all pauses, music stingers, and sound effects all the way to the absolute end of the media.',
-    '5. COMPILATIONS, COUNTDOWNS & MULTI-SCENE CONTINUITY: For countdowns and list videos (e.g. "Number 10" or "Number 9" down to "Number 1"), you MUST transcribe every single entry all the way through the final #1 reveal and outro conclusion. Never stop early at an intermediate number like #2 or #3. There are often 5-15 second transition pauses, action clips, or music between list numbers; continue listening past any pauses and transcribe all speech to the absolute end of the media.',
-    '6. MULTI-ITEM COMMENTARY & ANIMAL / MEME COMPILATIONS: Videos showcasing multiple examples, animals, people, or stories often pause for dramatic effect or laughter after each item setup (e.g., "they turn into..."). Never stop transcribing when one item pauses or ends mid-thought. Spoken narration continues for all subsequent items and punchlines throughout the full video. Continue transcribing every single item until the recording ends completely.',
-    '7. NUMERIC SECONDS TIMESTAMPS: Every start and end timestamp in "segments" must be a raw number in seconds (e.g. 0.0, 4.5, 38.2, 145.6). Do NOT use formatted colon strings like "2:30".'
+    '3. VERBATIM SPEECH ACCURACY: Transcribe every spoken word accurately in the native script. For Khmer speech, output clean Khmer script (អក្សរខ្មែរ) with proper spacing and spelling. For English speech, output English.',
+    '4. HIGH-SENSITIVITY ACOUSTIC EXTRACTION: Listen with maximum sensitivity to all audio channels. Even if the voice is quiet, muffled, whispered, speaking fast, singing, chanting, talking over an intro, or partially masked by background music, sound effects, beats, or ambient noise, you MUST detect and transcribe all spoken words verbatim.',
+    '5. COMPLETE RECORDING CONTINUITY & VIRAL VIDEO HOOKS: Transcribe the entire duration verbatim from start to finish without stopping. Viral social media videos frequently begin with a 1-sentence opening hook, followed by a dramatic sound effect, laugh track, musical break, or scene transition, after which the narration continues. You MUST NOT STOP after the opening hook sentence. Keep listening past all pauses, music stingers, and sound effects all the way to the absolute end of the media.',
+    '6. COMPILATIONS, COUNTDOWNS & MULTI-SCENE CONTINUITY: For countdowns and list videos (e.g. "Number 10" or "Number 9" down to "Number 1"), you MUST transcribe every single entry all the way through the final #1 reveal and outro conclusion. Never stop early at an intermediate number like #2 or #3. There are often 5-15 second transition pauses, action clips, or music between list numbers; continue listening past any pauses and transcribe all speech to the absolute end of the media.',
+    '7. MULTI-ITEM COMMENTARY & ANIMAL / MEME COMPILATIONS: Videos showcasing multiple examples, animals, people, or stories often pause for dramatic effect or laughter after each item setup (e.g., "they turn into..."). Never stop transcribing when one item pauses or ends mid-thought. Spoken narration continues for all subsequent items and punchlines throughout the full video. Continue transcribing every single item until the recording ends completely.',
+    '8. NUMERIC SECONDS TIMESTAMPS: Every start and end timestamp in "segments" must be a raw number in seconds (e.g. 0.0, 4.5, 38.2, 145.6). Do NOT use formatted colon strings like "2:30".'
   ]
 
   if (diarization) {
     promptParts.push(
-      '8. SPEAKER DIARIZATION: Identify and differentiate distinct speakers across the audio. Prefix each speaker turn or dialogue with speaker labels (e.g., "Speaker 1: ...", "Speaker 2: ..."). Maintain consistent speaker tags across consecutive segments.'
+      '9. SPEAKER DIARIZATION: Identify and differentiate distinct speakers across the audio. Prefix each speaker turn or dialogue with speaker labels (e.g., "Speaker 1: ...", "Speaker 2: ..."). Maintain consistent speaker tags across consecutive segments.'
     )
   }
 
   if (customVocab.length > 0) {
     promptParts.push(
-      `9. DOMAIN VOCABULARY & KEYWORD HINTS: Pay special attention to the following specific proper nouns, technical terms, and keywords: ${customVocab.map((v) => `"${v}"`).join(', ')}. Whenever words sounding like or referring to these terms are spoken, transcribe them with these exact spellings.`
+      `10. DOMAIN VOCABULARY & KEYWORD HINTS: Pay special attention to the following specific proper nouns, technical terms, and keywords: ${customVocab.map((v) => `"${v}"`).join(', ')}. Whenever words sounding like or referring to these terms are spoken, transcribe them with these exact spellings.`
     )
   }
 
   if (options.highSensitivity) {
     promptParts.push(
-      '10. MAXIMUM AUDIO SENSITIVITY ACTIVE: The recording contains quiet dialogue, whispering, lyrics, or speech over background music/beats. Boost vocal channel detection and transcribe all audible utterances verbatim without omitting any words.'
+      '11. MAXIMUM AUDIO SENSITIVITY ACTIVE: The recording contains quiet dialogue, whispering, lyrics, or speech over background music/beats. Boost vocal channel detection and transcribe all audible utterances verbatim without omitting any words.'
     )
   }
 
   promptParts.push(
-    '11. QUOTATION MARKS: Inside transcript text strings, use single quotes (\'quote\') or properly escaped quotes (\\"quote\\") for spoken dialogue so that JSON formatting is strictly valid.',
+    '12. QUOTATION MARKS: Inside transcript text strings, use single quotes (\'quote\') or properly escaped quotes (\\"quote\\") for spoken dialogue so that JSON formatting is strictly valid.',
     'Format strictly as JSON with this exact shape:',
     '{"language":"Khmer","text":"Full continuous transcript text here","segments":[{"start":0.0,"end":4.5,"text":"phrase"}]}',
     'Ensure "text" contains the complete continuous transcript, and "segments" contains all timestamped phrases.',
@@ -742,8 +744,8 @@ async function transcribeWithKey(
       const modelCallStart = Date.now()
       const roundedDuration = Math.round(totalDuration)
       const effectivePrompt = totalDuration > 0
-        ? `${promptText} CRITICAL FULL-DURATION REQUIREMENT: Total recording duration is exactly ${roundedDuration} seconds. Spoken dialogue occurs across the full recording. Viral social media clips (TikTok, Facebook, Reels) frequently feature dramatic mid-video sound effects (crashes, laughter, music stingers) and action pauses between scenes. You MUST continue listening past any mid-video sound effects or pauses all the way to ${roundedDuration}s. For compilations and countdowns (e.g., Number 10 down to Number 1), you MUST transcribe all entries completely all the way through the final #1 item and conclusion. Dialogue resumes after scene transitions. You MUST transcribe all spoken dialogue from 0.0s all the way to ${roundedDuration}s without stopping. Do NOT stop after introductory phrases, sound effects, or musical pauses.`
-        : `${promptText} CRITICAL FULL-DURATION REQUIREMENT: Listen attentively to the absolute end of the recording without stopping prematurely. Multi-part commentary, meme compilations, and social media videos often have pauses, laugh tracks, or sound effects between items. Spoken dialogue continues after pauses. You MUST transcribe all spoken dialogue all the way to the end of the recording without stopping.`
+        ? `${promptText} CRITICAL FULL-DURATION REQUIREMENT: Total recording duration is exactly ${roundedDuration} seconds. START FROM 0:00.0: Transcribe the very first words spoken at the beginning (0:00 - 0:05); do not skip opening words spoken over intro music or sound effects. Spoken dialogue occurs across the full recording. Viral social media clips (TikTok, Facebook, Reels) frequently feature dramatic mid-video sound effects (crashes, laughter, music stingers) and action pauses between scenes. You MUST continue listening past any mid-video sound effects or pauses all the way to ${roundedDuration}s. For compilations and countdowns (e.g., Number 10 down to Number 1), you MUST transcribe all entries completely all the way through the final #1 item and conclusion. Dialogue resumes after scene transitions. You MUST transcribe all spoken dialogue from 0.0s all the way to ${roundedDuration}s without stopping. Do NOT stop after introductory phrases, sound effects, or musical pauses.`
+        : `${promptText} CRITICAL FULL-DURATION REQUIREMENT: START FROM 0:00.0: Transcribe the very first words spoken at the beginning (0:00 - 0:05). Listen attentively to the absolute end of the recording without stopping prematurely. Multi-part commentary, meme compilations, and social media videos often have pauses, laugh tracks, or sound effects between items. Spoken dialogue continues after pauses. You MUST transcribe all spoken dialogue all the way to the end of the recording without stopping.`
 
       try {
         const responseText = await withGeminiRetry(
@@ -775,13 +777,6 @@ async function transcribeWithKey(
           return Math.max(max, end)
         }, 0)
 
-        // Evaluate whether initial transcript is incomplete (e.g. countdown cut off, cliffhanger mid-thought, or coverage gap)
-        const initialIncomplete = checkTranscriptIncompleteness(
-          parsedTranscript.text || accumulatedSegments.map((s) => s.text).join(' '),
-          accumulatedSegments,
-          totalDuration
-        )
-
         // AUTOMATIC CONTINUATION LOOP:
         // If the media has known duration (>= 15s) and speech stopped early, OR transcript ended mid-thought / cliffhanger,
         // automatically issue continuation requests from the last detected timestamp to capture all remaining speech.
@@ -792,12 +787,25 @@ async function transcribeWithKey(
         while (
           continuationPass < MAX_CONTINUATION_PASSES &&
           (
-            (totalDuration >= 15 && currentMaxEnd < totalDuration - 4) ||
-            (initialIncomplete.isIncomplete && currentMaxEnd > 0)
+            (totalDuration >= 15 && currentMaxEnd < totalDuration - 2) ||
+            (checkTranscriptIncompleteness(
+              accumulatedSegments.map((s) => s.text).join(' '),
+              accumulatedSegments,
+              totalDuration
+            ).isIncomplete && currentMaxEnd > 0)
           )
         ) {
           continuationPass++
-          const startOffset = Math.max(0, Math.floor(currentMaxEnd))
+          const currentIncompleteness = checkTranscriptIncompleteness(
+            accumulatedSegments.map((s) => s.text).join(' '),
+            accumulatedSegments,
+            totalDuration
+          )
+
+          // If cliffhanger cut-off, rewind startOffset by 2 seconds so model hears the context of the cut sentence
+          const isCliffhanger = Boolean(currentIncompleteness.isCliffhanger)
+          const rewindSeconds = isCliffhanger ? 2.0 : 0
+          const startOffset = Math.max(0, Math.floor(Math.max(0, currentMaxEnd - rewindSeconds)))
           const lastWords = accumulatedSegments.slice(-2).map((s) => s.text).join(' ').slice(-100).trim()
           const durationText = totalDuration > 0 ? `(total duration: ${Math.round(totalDuration)} seconds)` : '(full recording duration)'
           const targetEndText = totalDuration > 0 ? `${Math.round(totalDuration)}s` : 'the absolute end of the recording'
@@ -812,17 +820,12 @@ async function transcribeWithKey(
             /\b(?:number|no\.?|#)\s*(?:10|ten|9|nine|8|eight|7|seven|6|six|5|five|4|four|3|three|2|two)\b/i.test(accumulatedSegments.map((s) => s.text).join(' ')) ||
             /(?:លេខ|ចំណាត់ថ្នាក់(?:លេខ)?)\s*(?:១០|៩|៨|៧|៦|៥|៤|៣|២|10|9|8|7|6|5|4|3|2)/.test(accumulatedSegments.map((s) => s.text).join(' '))
 
-          const currentIncompleteness = checkTranscriptIncompleteness(
-            accumulatedSegments.map((s) => s.text).join(' '),
-            accumulatedSegments,
-            totalDuration
-          )
-
           const contPrompt = [
             `CRITICAL RECORDING CONTINUATION: You are continuing the verbatim transcription of this media recording ${durationText}.`,
-            `Speech from 0:00 up to ${startOffset} seconds has already been transcribed.`,
-            lastWords ? `The transcribed speech so far ended around ${startOffset}s with: "...${lastWords}".` : '',
-            currentIncompleteness.isCliffhanger ? `CRITICAL SENTENCE CUT-OFF: The speech ended abruptly mid-sentence ("...${lastWords}"). The narrator's sentence or thought was cut off by a pause, sound effect, or laugh track. Listen starting at ${startOffset}s to complete the sentence and continue transcribing subsequent commentary.` : '',
+            isCliffhanger
+              ? `The narrator was cut off mid-thought around ${Math.round(currentMaxEnd)}s ("...${lastWords}"). Rewound to ${startOffset}s for context: listen from ${startOffset}s, complete the interrupted sentence, and transcribe all remaining speech until ${targetEndText}.`
+              : `Speech from 0:00 up to ${startOffset} seconds has already been transcribed.`,
+            lastWords ? `The transcribed speech up to this point ended around ${startOffset}s with: "...${lastWords}".` : '',
             isCountdownInProgress ? `A countdown list is in progress! The final reveal (#1 / Number One / លេខ ១) and concluding dialogue occur between ${startOffset}s and ${targetEndText}. Transcribe all remaining entries and conclusion without stopping.` : '',
             `Listen carefully to all audio from ${startOffset}s to ${targetEndText} and transcribe any remaining spoken dialogue verbatim into the native script.`,
             'Format strictly as JSON with this exact shape:',
@@ -872,10 +875,13 @@ async function transcribeWithKey(
             }))
           }
 
-          const newSegments = rawContSegments.filter((s) => s.start >= currentMaxEnd - 2)
+          const newSegments = rawContSegments.filter((s) => {
+            const segEnd = typeof s.end === 'number' && Number.isFinite(s.end) ? s.end : s.start
+            return segEnd > currentMaxEnd - 1 || s.start >= startOffset
+          })
 
           if (newSegments.length > 0) {
-            accumulatedSegments.push(...newSegments)
+            accumulatedSegments = mergeContinuationSegments(accumulatedSegments, newSegments, isCliffhanger)
             const newMaxEnd = accumulatedSegments.reduce((max, s) => {
               const end = typeof s.end === 'number' && Number.isFinite(s.end) ? s.end : s.start
               return Math.max(max, end)
@@ -1019,7 +1025,7 @@ async function transcribeWithKey(
         if (shouldRotate(error) && modelIndex < activeModels.length - 1) {
           // If this key hit 429 rate limit or quota exhaustion on this model,
           // continue to next model on the same key because Google quotas are scoped per-model
-          // (e.g. gemini-3.5-flash-lite and gemini-2.5-flash have independent quotas).
+          // (e.g. gemini-2.5-flash-lite and gemini-2.5-flash have independent quotas).
           if (isRateLimitError(error)) {
             console.warn(`Key #${keyIndex + 1} hit 429 on model "${modelName}". Trying next model "${nextModel}" on this key...`)
             continue
