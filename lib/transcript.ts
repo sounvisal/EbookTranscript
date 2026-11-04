@@ -786,19 +786,27 @@ export function checkTranscriptIncompleteness(
 
   // 2. Dangling Mid-Sentence Cliffhanger Check:
   // Detects if speech ends abruptly mid-thought on punctuation (..., —, -, comma)
-  // or on dangling grammatical words (determiners, quantifiers, conjunctions, prepositions, auxiliary verbs, etc.).
-  const endsWithPunctuationCliffhanger = /[,\-—–]\s*$/s.test(cleanText) || /\.{3,}\s*$/s.test(cleanText) || /…\s*$/s.test(cleanText)
-  const endsWithDanglingWord = /\b(?:the|a|an|and|or|but|that|with|in|to|when|which|where|why|how|what|because|after|before|during|while|into|onto|of|for|at|by|from|as|so|than|about|like|such|each|every|all|some|any|no|other|another|both|this|these|those|who|whom|whose|if|whether|though|although|even|also|now|then|just|only|still|yet|can|could|will|would|shall|should|may|might|must|have|has|had|do|does|did|be|been|being|is|are|was|were|turn|turns|become|becomes|their|my|his|her|its|our|your)\s*$/i.test(cleanText.replace(/[.!?។៕]+$/, '')) ||
-    /(?:និង|ឬ|ដែល|ជាមួយ|ក្នុង|ទៅ|ពេល|ព្រោះ|បន្ទាប់ពី|មុន|អំឡុង|ខណៈ|ចូល|នៃ|សម្រាប់|នៅ|ដោយ|ពី|ដូច|ដូចជា|គឺ|ជា|នីមួយៗ|រាល់|គ្រប់|ទាំងអស់|ទាំងនេះ|ទាំងនោះ|នេះ|នោះ|អ្នកណា|ឯណា|កាលណា|ហេតុអ្វី|យ៉ាងណា|បើ|ប្រសិន|ទោះ|អាច|នឹង|ត្រូវ|មាន|បាន|ធ្វើ)\s*$/.test(cleanText.replace(/[.!?។៕]+$/, ''))
+  // or on dangling grammatical words when the sentence was cut off without concluding punctuation.
+  const hasSentenceTerminator = /[.!?។៕]["')\]]?\s*$/.test(cleanText) && !/\.{2,}\s*$/.test(cleanText) && !/…\s*$/.test(cleanText)
+  const endsWithPunctuationCliffhanger = /[,\-—–:]\s*$/s.test(cleanText) || /\.{2,}\s*$/s.test(cleanText) || /…\s*$/s.test(cleanText)
 
-  // Flag cliffhangers whenever dialogue ends mid-thought with uncaptured remaining audio (>0.8s) or unknown duration
-  const hasCliffhangerEnd = endsWithPunctuationCliffhanger || endsWithDanglingWord
+  // Strict dangling particles that cannot end a sentence even if followed by a period (e.g. "turn into.", "with the.")
+  const endsWithStrictParticle = /\b(?:the|a|an|and|or|but|of|into|onto|with|during|their|my|your|its|our)\s*[.!?]?$/i.test(cleanText)
+
+  // Dangling words when there is NO valid sentence terminator (e.g. speech cut off mid-thought before punctuation)
+  const endsWithUnpunctuatedDanglingWord = !hasSentenceTerminator && (
+    /\b(?:the|a|an|and|or|but|that|with|in|to|when|which|where|why|how|what|because|after|before|during|while|into|onto|of|for|at|by|from|as|so|than|about|like|such|each|every|all|some|any|no|other|another|both|this|these|those|who|whom|whose|if|whether|though|although|even|also|now|then|just|only|still|yet|can|could|will|would|shall|should|may|might|must|have|has|had|do|does|did|be|been|being|is|are|was|were|turn|turns|become|becomes|their|my|his|her|its|our|your)\s*$/i.test(cleanText) ||
+    /(?:និង|ឬ|ដែល|ជាមួយ|ក្នុង|ទៅ|ពេល|ព្រោះ|បន្ទាប់ពី|មុន|អំឡុង|ខណៈ|ចូល|នៃ|សម្រាប់|នៅ|ដោយ|ពី|ដូច|ដូចជា|គឺ|ជា|នីមួយៗ|រាល់|គ្រប់|ទាំងអស់|ទាំងនេះ|ទាំងនោះ|នេះ|នោះ|អ្នកណា|ឯណា|កាលណា|ហេតុអ្វី|យ៉ាងណា|បើ|ប្រសិន|ទោះ|អាច|នឹង|ត្រូវ|មាន|បាន|ធ្វើ)\s*$/.test(cleanText)
+  )
+
+  // Flag cliffhangers whenever dialogue ends mid-thought with uncaptured remaining audio or unknown duration
+  const hasCliffhangerEnd = endsWithPunctuationCliffhanger || endsWithStrictParticle || endsWithUnpunctuatedDanglingWord
   const isCliffhangerIncomplete =
     hasCliffhangerEnd &&
     (
       totalDuration === 0 ||
-      remainingSeconds > 0.8 ||
-      (totalDuration >= 15 && coverageRatio < 0.96)
+      remainingSeconds > 1.0 ||
+      (totalDuration >= 15 && coverageRatio < 0.94)
     )
 
   if (isCliffhangerIncomplete) {

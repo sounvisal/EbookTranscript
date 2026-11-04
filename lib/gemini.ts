@@ -536,7 +536,7 @@ export async function transcribeAudioBufferWithGemini(
     throw new Error('No Gemini API keys configured in environment.')
   }
 
-  const models = (process.env.GEMINI_MODELS || 'gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash,gemini-1.5-flash')
+  const models = (process.env.GEMINI_MODELS || 'gemini-2.5-flash-lite,gemini-2.5-flash,gemini-2.0-flash,gemini-1.5-flash')
     .split(',')
     .map((m) => cleanGeminiModelName(m))
     .filter(Boolean)

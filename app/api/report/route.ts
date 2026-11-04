@@ -14,7 +14,7 @@ import { getOptimalKeyOrder, recordKeySuccess, recordKeyFailure } from '@/lib/fl
 
 export const runtime = 'nodejs'
 
-const DEFAULT_FALLBACK_MODELS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-flash']
+const DEFAULT_FALLBACK_MODELS = ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']
 const MAX_LOCAL_FILE_BYTES = MAX_MEDIA_UPLOAD_BYTES
 const TEXT_INPUT_LIMIT = 120000
 

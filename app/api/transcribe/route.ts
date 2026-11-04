@@ -40,9 +40,10 @@ export const dynamic = 'force-dynamic'
 export const maxDuration = 300
 
 const MAX_LOCAL_FILE_BYTES = MAX_MEDIA_UPLOAD_BYTES
-// Gemini 2.5 Flash / Flash-Lite provides high accuracy, low latency, and robust coverage.
-const MODEL_NAME = cleanGeminiModelName(process.env.GEMINI_MODEL) || 'gemini-2.5-flash'
-const DEFAULT_FALLBACK_MODELS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-flash']
+// Gemini 2.5 Flash-Lite provides sub-second to 2s latency and high throughput.
+// Gemini 2.5 Flash provides instant high-attention failover without reasoning delays.
+const MODEL_NAME = cleanGeminiModelName(process.env.GEMINI_MODEL) || 'gemini-2.5-flash-lite'
+const DEFAULT_FALLBACK_MODELS = ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']
 
 // Audio at or below this size is sent inline in the transcribe request.
 // Video files or audio larger than 8MB always use the Files API (supports up to 2GB).
@@ -786,14 +787,12 @@ async function transcribeWithKey(
 
         while (
           continuationPass < MAX_CONTINUATION_PASSES &&
-          (
-            (totalDuration >= 15 && currentMaxEnd < totalDuration - 2) ||
-            (checkTranscriptIncompleteness(
-              accumulatedSegments.map((s) => s.text).join(' '),
-              accumulatedSegments,
-              totalDuration
-            ).isIncomplete && currentMaxEnd > 0)
-          )
+          currentMaxEnd > 0 &&
+          checkTranscriptIncompleteness(
+            accumulatedSegments.map((s) => s.text).join(' '),
+            accumulatedSegments,
+            totalDuration
+          ).isIncomplete
         ) {
           continuationPass++
           const currentIncompleteness = checkTranscriptIncompleteness(
