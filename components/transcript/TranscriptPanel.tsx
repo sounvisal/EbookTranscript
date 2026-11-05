@@ -36,6 +36,7 @@ import AudioPlayer from '@/components/transcript/AudioPlayer'
 import { transcribeWithProgress } from '@/lib/transcribeClient'
 import { TranscriptSearch } from '@/components/transcript/TranscriptSearch'
 import { useUndoRedo } from '@/hooks/useUndoRedo'
+import { saveMediaBlob } from '@/lib/mediaStorage'
 
 const SPEAKER_REGEX = /^(?:\[?(?:Speaker\s*[A-Za-z0-9]+|Person\s*[A-Za-z0-9]+|Host|Guest|Interviewer|Interviewee|អ្នកនិយាយ\s*[០-៩0-9]+)\]?)\s*[:：]\s*/i
 
@@ -281,6 +282,11 @@ export default function TranscriptPanel() {
           if (data?.id && transcript) {
             transcript.id = data.id
             transcript.alreadySaved = true
+            if (file) {
+              saveMediaBlob(data.id, file, file.name).catch(() => {})
+            } else if (audioBlob) {
+              saveMediaBlob(data.id, audioBlob, transcript.source).catch(() => {})
+            }
           }
           setSaved(true)
         } else {

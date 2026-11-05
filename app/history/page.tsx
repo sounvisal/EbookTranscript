@@ -25,6 +25,7 @@ import { downloadTxt } from '@/lib/download'
 import { getPlainTranscriptText } from '@/lib/transcript'
 import { useSession, signIn } from 'next-auth/react'
 import { useTranscriptStore, getCachedSessionMedia } from '@/store/transcriptStore'
+import { getMediaBlob, deleteMediaBlob } from '@/lib/mediaStorage'
 import { HistoryTableSkeleton } from '@/components/skeletons/HistoryTableSkeleton'
 
 const PAGE_SIZE = 15
@@ -166,11 +167,34 @@ export default function HistoryPage() {
     if (!record) return
 
     const sourceName = getSourceName(item)
+
+    // 1. Check in-memory session cache first
+    let mediaUrl: string | null = null
+    let mediaFile: File | null = null
+    let mediaBlob: Blob | null = null
+
     const cached =
       getCachedSessionMedia(item.id) ||
       (item.filename ? getCachedSessionMedia(item.filename) : undefined) ||
       (item.source ? getCachedSessionMedia(item.source) : undefined) ||
       getCachedSessionMedia(sourceName)
+
+    if (cached) {
+      mediaUrl = cached.url
+      mediaFile = cached.file || null
+      mediaBlob = cached.blob || null
+    } else {
+      // 2. Retrieve the user's actual uploaded recording from browser IndexedDB
+      try {
+        const storedBlob = await getMediaBlob(item.id, item.filename || item.source || sourceName)
+        if (storedBlob) {
+          mediaBlob = storedBlob
+          mediaUrl = URL.createObjectURL(storedBlob)
+        }
+      } catch (err) {
+        console.warn('Failed to retrieve media from IndexedDB:', err)
+      }
+    }
 
     useTranscriptStore.getState().setTranscriptWithAudio(
       {
@@ -181,9 +205,9 @@ export default function HistoryPage() {
         language: item.language || 'auto',
         alreadySaved: true
       },
-      cached?.url || null,
-      cached?.file || null,
-      cached?.blob || null
+      mediaUrl,
+      mediaFile,
+      mediaBlob
     )
 
     router.push('/transcribe')
@@ -229,6 +253,8 @@ export default function HistoryPage() {
     try {
       const response = await fetch(`/api/history?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
       if (!response.ok) throw new Error('Unable to delete this transcript.')
+
+      deleteMediaBlob(id).catch(() => {})
 
       setDetails((current) => {
         const next = { ...current }

@@ -12,6 +12,7 @@ import { useSession, signIn } from 'next-auth/react'
 import { loadDemoSample } from '@/lib/demoSample'
 import { AudioWaveformPreview } from '@/components/preview/AudioWaveformPreview'
 import { VideoThumbnailPreview } from '@/components/preview/VideoThumbnailPreview'
+import { saveMediaBlob } from '@/lib/mediaStorage'
 
 import ReportErrorButton from '@/components/common/ReportErrorButton'
 
@@ -60,6 +61,10 @@ export default function MediaUploadZone() {
     setStatus('uploading')
     setErrorMessage(null)
     setProgress(0)
+
+    if (input.file) {
+      saveMediaBlob(input.file.name, input.file, input.file.name).catch(() => {})
+    }
 
     try {
       // Real progress streamed from the direct-to-Gemini transcribe client.

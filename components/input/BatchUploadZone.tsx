@@ -12,6 +12,7 @@ import { transcribeWithProgress } from '@/lib/transcribeClient'
 import ReportErrorButton from '@/components/common/ReportErrorButton'
 import AdvancedOptionsDrawer from './AdvancedOptionsDrawer'
 import { useTranscriptStore } from '@/store/transcriptStore'
+import { saveMediaBlob } from '@/lib/mediaStorage'
 
 // Role-based batch limits: 30 for standard users, 100 for admins
 const USER_BATCH_LIMIT = 30
@@ -160,6 +161,7 @@ export default function BatchUploadZone() {
         if (data?.id && job.transcript) {
           job.transcript.id = data.id
           job.transcript.alreadySaved = true
+          saveMediaBlob(data.id, job.file, job.file.name).catch(() => {})
         }
       }
     } catch (error) {
