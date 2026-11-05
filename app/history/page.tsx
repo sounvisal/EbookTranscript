@@ -24,7 +24,7 @@ import {
 import { downloadTxt } from '@/lib/download'
 import { getPlainTranscriptText } from '@/lib/transcript'
 import { useSession, signIn } from 'next-auth/react'
-import { useTranscriptStore } from '@/store/transcriptStore'
+import { useTranscriptStore, getCachedSessionMedia } from '@/store/transcriptStore'
 import { HistoryTableSkeleton } from '@/components/skeletons/HistoryTableSkeleton'
 
 const PAGE_SIZE = 15
@@ -165,16 +165,28 @@ export default function HistoryPage() {
     const record = await loadTranscriptRecord(item.id)
     if (!record) return
 
-    useTranscriptStore.getState().setTranscriptWithAudio({
-      id: item.id,
-      text: record.rawText || record.text,
-      source: getSourceName(item),
-      duration: item.duration || 0,
-      language: item.language || 'auto',
-      alreadySaved: true
-    }, null)
+    const sourceName = getSourceName(item)
+    const cached =
+      getCachedSessionMedia(item.id) ||
+      (item.filename ? getCachedSessionMedia(item.filename) : undefined) ||
+      (item.source ? getCachedSessionMedia(item.source) : undefined) ||
+      getCachedSessionMedia(sourceName)
 
-    router.push('/#workspace')
+    useTranscriptStore.getState().setTranscriptWithAudio(
+      {
+        id: item.id,
+        text: record.rawText || record.text,
+        source: sourceName,
+        duration: item.duration || 0,
+        language: item.language || 'auto',
+        alreadySaved: true
+      },
+      cached?.url || null,
+      cached?.file || null,
+      cached?.blob || null
+    )
+
+    router.push('/transcribe')
   }
 
   const togglePreview = async (item: TranscriptRecord) => {

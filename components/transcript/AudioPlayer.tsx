@@ -11,9 +11,11 @@ import {
   Gauge,
   Headphones,
   Sliders,
-  Keyboard
+  Keyboard,
+  Upload
 } from 'lucide-react'
 import { formatTimestamp } from '@/lib/transcript'
+import { useTranscriptStore } from '@/store/transcriptStore'
 
 type AudioPlayerProps = {
   src?: string | null
@@ -36,6 +38,8 @@ export default function AudioPlayer({
 }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const timerRef = useRef<NodeJS.Timeout | null>(null)
+  const synthRef = useRef<SpeechSynthesisUtterance | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0)
   const [isMuted, setIsMuted] = useState(false)
@@ -50,6 +54,69 @@ export default function AudioPlayer({
       setAudioDuration(duration)
     }
   }, [duration])
+
+  // Stop any active SpeechSynthesis on unmount
+  useEffect(() => {
+    return () => {
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        window.speechSynthesis.cancel()
+      }
+    }
+  }, [])
+
+  const stopSpeechSynthesis = () => {
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel()
+    }
+    synthRef.current = null
+  }
+
+  const startSpeechSynthesis = (targetTime: number) => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window) || !text) return
+    window.speechSynthesis.cancel()
+
+    const cleanText = text.trim()
+    if (!cleanText) return
+
+    const progressRatio = audioDuration > 0 ? Math.min(1, Math.max(0, targetTime / audioDuration)) : 0
+    const words = cleanText.split(/\s+/)
+    const startWordIndex = Math.floor(progressRatio * words.length)
+    const textToSpeak = words.slice(startWordIndex).join(' ')
+    if (!textToSpeak.trim()) return
+
+    const utterance = new SpeechSynthesisUtterance(textToSpeak)
+    utterance.rate = playbackSpeed
+
+    // Voice selection: detect Khmer or English
+    const voices = window.speechSynthesis.getVoices()
+    const isKhmer = /[\u1780-\u17FF]/.test(cleanText)
+    const voice = voices.find((v) => isKhmer ? v.lang.startsWith('km') : v.lang.startsWith('en'))
+    if (voice) utterance.voice = voice
+
+    utterance.onboundary = (e) => {
+      if (e.name === 'word' && words.length > 0) {
+        const spokenWordCount = textToSpeak.slice(0, e.charIndex).split(/\s+/).length
+        const totalWordIdx = startWordIndex + spokenWordCount
+        const approxTime = (totalWordIdx / words.length) * audioDuration
+        onTimeUpdate(Math.min(audioDuration, approxTime))
+      }
+    }
+
+    utterance.onend = () => {
+      setIsPlaying(false)
+      onTimeUpdate(audioDuration)
+    }
+
+    utterance.onerror = (err) => {
+      if (err.error !== 'interrupted' && err.error !== 'canceled') {
+        console.warn('SpeechSynthesis error:', err)
+      }
+      setIsPlaying(false)
+    }
+
+    synthRef.current = utterance
+    window.speechSynthesis.speak(utterance)
+  }
 
   // 1. Native Audio Event Handlers
   useEffect(() => {
@@ -177,8 +244,14 @@ export default function AudioPlayer({
         setIsPlaying(true)
       }
     } else {
-      // Toggle silent visual timeline scrubbing only — NEVER generate synthetic speech
-      setIsPlaying(!isPlaying)
+      // When native audio is not attached, play via browser SpeechSynthesis
+      if (isPlaying) {
+        stopSpeechSynthesis()
+        setIsPlaying(false)
+      } else {
+        startSpeechSynthesis(currentTime)
+        setIsPlaying(true)
+      }
     }
   }
 
@@ -186,6 +259,8 @@ export default function AudioPlayer({
     const newTime = Math.max(0, Math.min(audioDuration, currentTime + seconds))
     if (hasNativeAudio && audioRef.current) {
       audioRef.current.currentTime = newTime
+    } else if (isPlaying) {
+      startSpeechSynthesis(newTime)
     }
     onSeek(newTime)
   }
@@ -194,6 +269,8 @@ export default function AudioPlayer({
     const newTime = Number.parseFloat(e.target.value)
     if (hasNativeAudio && audioRef.current) {
       audioRef.current.currentTime = newTime
+    } else if (isPlaying) {
+      startSpeechSynthesis(newTime)
     }
     onSeek(newTime)
   }
@@ -204,7 +281,19 @@ export default function AudioPlayer({
     setPlaybackSpeed(nextSpeed)
     if (hasNativeAudio && audioRef.current) {
       audioRef.current.playbackRate = nextSpeed
+    } else if (isPlaying) {
+      startSpeechSynthesis(currentTime)
     }
+  }
+
+  const handleAttachFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const url = URL.createObjectURL(file)
+    useTranscriptStore.getState().setFile(file)
+    useTranscriptStore.getState().setCustomAudioUrl(url)
+    stopSpeechSynthesis()
+    setIsPlaying(false)
   }
 
   const toggleMute = () => {
@@ -262,16 +351,34 @@ export default function AudioPlayer({
               <Headphones className="h-3.5 w-3.5" />
             </span>
             <span className="font-semibold text-slate-900 dark:text-white">
-              {hasNativeAudio ? 'Original Audio Playback' : 'Transcript Scrubber'}
+              {hasNativeAudio ? 'Original Audio Playback' : 'Voice Reader & Karaoke'}
             </span>
             {hasNativeAudio ? (
               <span className="rounded-md bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 text-[10px] font-bold text-emerald-700 dark:text-emerald-300">
                 Uploaded Audio
               </span>
             ) : (
-              <span className="rounded-md bg-slate-100 dark:bg-slate-800 px-2 py-0.5 text-[10px] font-medium text-slate-500">
-                Text Only Review
-              </span>
+              <div className="flex items-center gap-1.5">
+                <span className="rounded-md bg-blue-50 dark:bg-blue-950/60 px-2 py-0.5 text-[10px] font-semibold text-blue-700 dark:text-blue-300 flex items-center gap-1">
+                  <Volume2 className="h-3 w-3" /> Voice Reader (TTS)
+                </span>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="audio/*,video/*"
+                  className="hidden"
+                  onChange={handleAttachFile}
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="inline-flex items-center gap-1 rounded-md bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 px-2 py-0.5 text-[10px] font-medium text-slate-700 dark:text-slate-300 transition-colors cursor-pointer"
+                  title="Attach original audio or video file from your computer"
+                >
+                  <Upload className="h-2.5 w-2.5" />
+                  <span>Attach Audio</span>
+                </button>
+              </div>
             )}
           </div>
 
@@ -298,6 +405,8 @@ export default function AudioPlayer({
                   const targetTime = (idx / waveBars.length) * displayTotal
                   if (hasNativeAudio && audioRef.current) {
                     audioRef.current.currentTime = targetTime
+                  } else if (isPlaying) {
+                    startSpeechSynthesis(targetTime)
                   }
                   onSeek(targetTime)
                 }}

@@ -49,7 +49,12 @@ interface TranscriptState {
   setStatus: (status: 'idle' | 'uploading' | 'processing' | 'complete' | 'error') => void
   setProgress: (progress: number) => void
   setTranscript: (transcript: TranscriptResult | null) => void
-  setTranscriptWithAudio: (transcript: TranscriptResult | null, audioUrl?: string | null) => void
+  setTranscriptWithAudio: (
+    transcript: TranscriptResult | null,
+    audioUrl?: string | null,
+    file?: File | null,
+    audioBlob?: Blob | null
+  ) => void
   updateTranscriptContent: (newText: string, newSegments?: TranscriptSegment[]) => void
   setErrorMessage: (message: string | null) => void
   setWorkflowMode: (mode: 'transcript' | 'meeting' | 'summary') => void
@@ -71,6 +76,21 @@ interface TranscriptState {
   setAudioBlob: (blob: Blob | null) => void
   setCustomAudioUrl: (url: string | null) => void
   resetAll: () => void
+}
+
+// In-memory session media cache indexed by transcript ID, filename, and source name
+export const sessionMediaCache = new Map<string, { url: string; file?: File | null; blob?: Blob | null }>()
+
+export function cacheSessionMedia(key: string | undefined | null, data: { url: string; file?: File | null; blob?: Blob | null }) {
+  if (!key || !data?.url) return
+  sessionMediaCache.set(key, data)
+  const clean = key.trim().toLowerCase()
+  if (clean !== key) sessionMediaCache.set(clean, data)
+}
+
+export function getCachedSessionMedia(key: string | undefined | null) {
+  if (!key) return undefined
+  return sessionMediaCache.get(key) || sessionMediaCache.get(key.trim().toLowerCase())
 }
 
 export const useTranscriptStore = create<TranscriptState>((set) => ({
@@ -106,27 +126,73 @@ export const useTranscriptStore = create<TranscriptState>((set) => ({
   setFile: (file) =>
     set((state) => {
       if (state.audioUrl && state.audioUrl.startsWith('blob:')) {
-        try { URL.revokeObjectURL(state.audioUrl) } catch {}
+        const isStillCached = Array.from(sessionMediaCache.values()).some((c) => c.url === state.audioUrl)
+        if (!isStillCached) {
+          try { URL.revokeObjectURL(state.audioUrl) } catch {}
+        }
       }
       const newUrl = file ? URL.createObjectURL(file) : null
+      if (file && newUrl) {
+        cacheSessionMedia(file.name, { url: newUrl, file })
+      }
       return { file, audioUrl: newUrl, audioBlob: null }
     }),
   setStatus: (status) => set({ status }),
   setProgress: (progress) => set({ progress }),
-  setTranscript: (transcript) => set({ transcript, status: 'complete', errorMessage: null }),
-  setTranscriptWithAudio: (transcript, audioUrl = null) =>
+  setTranscript: (transcript) =>
     set((state) => {
-      if (state.audioUrl && state.audioUrl.startsWith('blob:') && state.audioUrl !== audioUrl) {
-        try { URL.revokeObjectURL(state.audioUrl) } catch {}
+      if (transcript && (state.audioUrl || state.file || state.audioBlob)) {
+        const media = {
+          url: state.audioUrl || (state.file ? URL.createObjectURL(state.file) : ''),
+          file: state.file,
+          blob: state.audioBlob
+        }
+        if (media.url) {
+          if (transcript.id) cacheSessionMedia(transcript.id, media)
+          if (transcript.source) cacheSessionMedia(transcript.source, media)
+          if (state.file?.name) cacheSessionMedia(state.file.name, media)
+        }
       }
+      return { transcript, status: 'complete', errorMessage: null }
+    }),
+  setTranscriptWithAudio: (transcript, audioUrl = null, file = null, audioBlob = null) =>
+    set((state) => {
+      let resolvedUrl = audioUrl
+      let resolvedFile = file
+      let resolvedBlob = audioBlob
+
+      // If no audio was provided, restore from sessionMediaCache!
+      if (!resolvedUrl && transcript) {
+        const cached =
+          (transcript.id ? getCachedSessionMedia(transcript.id) : undefined) ||
+          (transcript.source ? getCachedSessionMedia(transcript.source) : undefined)
+        if (cached) {
+          resolvedUrl = cached.url
+          resolvedFile = cached.file ?? null
+          resolvedBlob = cached.blob ?? null
+        }
+      }
+
+      if (state.audioUrl && state.audioUrl.startsWith('blob:') && state.audioUrl !== resolvedUrl) {
+        const isStillCached = Array.from(sessionMediaCache.values()).some((c) => c.url === state.audioUrl)
+        if (!isStillCached) {
+          try { URL.revokeObjectURL(state.audioUrl) } catch {}
+        }
+      }
+
+      if (transcript && resolvedUrl) {
+        if (transcript.id) cacheSessionMedia(transcript.id, { url: resolvedUrl, file: resolvedFile, blob: resolvedBlob })
+        if (transcript.source) cacheSessionMedia(transcript.source, { url: resolvedUrl, file: resolvedFile, blob: resolvedBlob })
+      }
+
       return {
         transcript: transcript ? { ...transcript, alreadySaved: true } : null,
         status: 'complete',
         errorMessage: null,
-        customAudioUrl: audioUrl,
-        audioUrl: audioUrl,
-        file: null,
-        audioBlob: null
+        customAudioUrl: resolvedUrl,
+        audioUrl: resolvedUrl,
+        file: resolvedFile,
+        audioBlob: resolvedBlob
       }
     }),
   updateTranscriptContent: (newText, newSegments) =>
@@ -196,12 +262,26 @@ export const useTranscriptStore = create<TranscriptState>((set) => ({
   setAudioBlob: (blob) =>
     set((state) => {
       if (state.audioUrl && state.audioUrl.startsWith('blob:')) {
-        try { URL.revokeObjectURL(state.audioUrl) } catch {}
+        const isStillCached = Array.from(sessionMediaCache.values()).some((c) => c.url === state.audioUrl)
+        if (!isStillCached) {
+          try { URL.revokeObjectURL(state.audioUrl) } catch {}
+        }
       }
       const newUrl = blob ? URL.createObjectURL(blob) : null
+      if (blob && newUrl) {
+        if (state.file?.name) cacheSessionMedia(state.file.name, { url: newUrl, file: state.file, blob })
+        if (state.transcript?.id) cacheSessionMedia(state.transcript.id, { url: newUrl, file: state.file, blob })
+      }
       return { audioBlob: blob, audioUrl: newUrl }
     }),
-  setCustomAudioUrl: (url) => set({ customAudioUrl: url, audioUrl: url }),
+  setCustomAudioUrl: (url) =>
+    set((state) => {
+      if (url && state.transcript) {
+        if (state.transcript.id) cacheSessionMedia(state.transcript.id, { url, file: state.file, blob: state.audioBlob })
+        if (state.transcript.source) cacheSessionMedia(state.transcript.source, { url, file: state.file, blob: state.audioBlob })
+      }
+      return { customAudioUrl: url, audioUrl: url }
+    }),
   resetAll: () =>
     set((state) => {
       if (state.audioUrl && state.audioUrl.startsWith('blob:')) {
