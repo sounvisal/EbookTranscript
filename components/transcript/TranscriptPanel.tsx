@@ -12,6 +12,8 @@ import { useTranscriptStore } from '@/store/transcriptStore'
 import {
   Check,
   Copy,
+  Link2,
+  ArrowUpRight,
   Download,
   RefreshCw,
   Sparkles,
@@ -37,6 +39,8 @@ import { transcribeWithProgress } from '@/lib/transcribeClient'
 import { TranscriptSearch } from '@/components/transcript/TranscriptSearch'
 import { useUndoRedo } from '@/hooks/useUndoRedo'
 import { saveMediaBlob } from '@/lib/mediaStorage'
+import { createTranscriptSlug } from '@/lib/transcriptSlug'
+import Link from 'next/link'
 
 const SPEAKER_REGEX = /^(?:\[?(?:Speaker\s*[A-Za-z0-9]+|Person\s*[A-Za-z0-9]+|Host|Guest|Interviewer|Interviewee|អ្នកនិយាយ\s*[០-៩0-9]+)\]?)\s*[:：]\s*/i
 
@@ -102,7 +106,14 @@ function getSpeakerStyle(speaker: string) {
 
 export default function TranscriptPanel() {
   const { data: session } = useSession()
-  const { transcript, file, audioBlob, audioUrl: storeAudioUrl, customAudioUrl, resetAll, updateTranscriptContent, advancedOptions } = useTranscriptStore()
+  const { transcript, file, audioBlob, audioUrl: storeAudioUrl, customAudioUrl, resetAll: storeResetAll, updateTranscriptContent, advancedOptions } = useTranscriptStore()
+
+  const resetAll = () => {
+    storeResetAll()
+    if (typeof window !== 'undefined') {
+      window.history.pushState(null, '', '/transcribe')
+    }
+  }
   const [viewMode, setViewMode] = useState<'paragraphs' | 'timestamps'>('timestamps')
   const [wordSyncEnabled, setWordSyncEnabled] = useState(true)
   const [copied, setCopied] = useState(false)
@@ -119,6 +130,7 @@ export default function TranscriptPanel() {
   const [editingParagraphIdx, setEditingParagraphIdx] = useState<number | null>(null)
   const [editDraft, setEditDraft] = useState<string>('')
   const [isPatchingHistory, setIsPatchingHistory] = useState<boolean>(false)
+  const [copiedShareLink, setCopiedShareLink] = useState<boolean>(false)
   const [saveSuccessMessage, setSaveSuccessMessage] = useState<string | null>(null)
 
   // Audio Playback & Synchronization State
@@ -287,6 +299,12 @@ export default function TranscriptPanel() {
             } else if (audioBlob) {
               saveMediaBlob(data.id, audioBlob, transcript.source).catch(() => {})
             }
+
+            // Sync clean path URL without reloading
+            const slug = createTranscriptSlug(transcript.source || file?.name, data.id)
+            if (typeof window !== 'undefined' && slug) {
+              window.history.replaceState(null, '', '/transcribe/' + encodeURIComponent(slug))
+            }
           }
           setSaved(true)
         } else {
@@ -370,6 +388,16 @@ export default function TranscriptPanel() {
     setEditingSegmentIdx(null)
     setEditingParagraphIdx(null)
     setEditDraft('')
+  }
+
+  
+  const handleCopyShareLink = () => {
+    if (!transcript?.id) return
+    const slug = createTranscriptSlug(transcript.source || file?.name, transcript.id)
+    const fullUrl = `${window.location.origin}/transcribe/${encodeURIComponent(slug)}`
+    navigator.clipboard.writeText(fullUrl)
+    setCopiedShareLink(true)
+    setTimeout(() => setCopiedShareLink(false), 2000)
   }
 
   const persistToHistory = useCallback(async (newText: string) => {
@@ -591,10 +619,41 @@ export default function TranscriptPanel() {
               {saveSuccessMessage}
             </span>
           )}
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-white/90 dark:bg-slate-900/90 px-3.5 py-1 text-xs font-medium text-slate-600 dark:text-slate-300 ring-1 ring-slate-200/80 dark:ring-slate-700 shadow-2xs">
-            <span className={`h-1.5 w-1.5 rounded-full ${saving ? 'bg-amber-500 animate-pulse' : (saved || isAlreadySaved) ? 'bg-emerald-500' : (!session ? 'bg-blue-500' : 'bg-slate-400')}`} />
-            {saving ? 'Saving to cloud…' : (saved || isAlreadySaved) ? 'Saved to history' : (!session ? 'Guest Preview' : 'Ready')}
-          </span>
+          {transcript?.id && (
+            <button
+              onClick={handleCopyShareLink}
+              className="inline-flex items-center gap-1.5 rounded-full border border-slate-200/80 dark:border-slate-700 bg-white/90 dark:bg-slate-900/90 px-3 py-1 text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors shadow-2xs cursor-pointer"
+              title="Copy direct clean link to this transcript"
+            >
+              {copiedShareLink ? (
+                <>
+                  <Check className="h-3 w-3 text-emerald-500" />
+                  <span className="text-emerald-600 dark:text-emerald-400 font-semibold">Link Copied</span>
+                </>
+              ) : (
+                <>
+                  <Link2 className="h-3 w-3 text-slate-500" />
+                  <span>Copy Link</span>
+                </>
+              )}
+            </button>
+          )}
+
+          {session ? (
+            <Link
+              href="/history"
+              className="inline-flex items-center gap-1.5 rounded-full bg-white/90 dark:bg-slate-900/90 px-3.5 py-1 text-xs font-medium text-slate-600 dark:text-slate-300 ring-1 ring-slate-200/80 dark:ring-slate-700 shadow-2xs hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
+              title="View all transcripts in history"
+            >
+              <span className={`h-1.5 w-1.5 rounded-full ${saving ? 'bg-amber-500 animate-pulse' : (saved || isAlreadySaved) ? 'bg-emerald-500' : 'bg-slate-400'}`} />
+              <span>{saving ? 'Saving to cloud…' : (saved || isAlreadySaved) ? 'Saved to history ↗' : 'Cloud Ready'}</span>
+            </Link>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-white/90 dark:bg-slate-900/90 px-3.5 py-1 text-xs font-medium text-slate-600 dark:text-slate-300 ring-1 ring-slate-200/80 dark:ring-slate-700 shadow-2xs">
+              <span className="h-1.5 w-1.5 rounded-full bg-blue-500" />
+              Guest Preview
+            </span>
+          )}
         </div>
       </div>
 

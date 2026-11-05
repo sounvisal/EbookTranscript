@@ -27,6 +27,7 @@ import { useSession, signIn } from 'next-auth/react'
 import { useTranscriptStore, getCachedSessionMedia } from '@/store/transcriptStore'
 import { getMediaBlob, deleteMediaBlob } from '@/lib/mediaStorage'
 import { HistoryTableSkeleton } from '@/components/skeletons/HistoryTableSkeleton'
+import { createTranscriptSlug } from '@/lib/transcriptSlug'
 
 const PAGE_SIZE = 15
 
@@ -75,6 +76,8 @@ export default function HistoryPage() {
   const [loading, setLoading] = useState(true)
   const [loadingDetailId, setLoadingDetailId] = useState<string | null>(null)
   const [copiedDetailId, setCopiedDetailId] = useState<string | null>(null)
+  const [copiedLinkId, setCopiedLinkId] = useState<string | null>(null)
+  const [localAudioMap, setLocalAudioMap] = useState<Record<string, boolean>>({})
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -122,6 +125,47 @@ export default function HistoryPage() {
     }, 300)
     return () => clearTimeout(timer)
   }, [searchQuery, selectedLanguage, status])
+
+  
+  // Check local audio availability in IndexedDB
+  useEffect(() => {
+    if (!history || history.length === 0) return
+    let isCancelled = false
+
+    const checkAudioAvailability = async () => {
+      const results: Record<string, boolean> = {}
+      await Promise.all(
+        history.map(async (item) => {
+          const sourceName = getSourceName(item)
+          const cached =
+            getCachedSessionMedia(item.id) ||
+            (item.filename ? getCachedSessionMedia(item.filename) : undefined) ||
+            (item.source ? getCachedSessionMedia(item.source) : undefined) ||
+            getCachedSessionMedia(sourceName)
+
+          if (cached) {
+            results[item.id] = true
+            return
+          }
+
+          try {
+            const blob = await getMediaBlob(item.id, item.filename || item.source || sourceName)
+            results[item.id] = Boolean(blob)
+          } catch {
+            results[item.id] = false
+          }
+        })
+      )
+      if (!isCancelled) {
+        setLocalAudioMap(results)
+      }
+    }
+
+    checkAudioAvailability()
+    return () => {
+      isCancelled = true
+    }
+  }, [history])
 
   useEffect(() => {
     if (status === 'authenticated') {
@@ -210,7 +254,19 @@ export default function HistoryPage() {
       mediaBlob
     )
 
-    router.push('/transcribe')
+    const slug = createTranscriptSlug(sourceName, item.id)
+    router.push('/transcribe/' + encodeURIComponent(slug))
+  }
+
+  
+  const handleCopyLink = (item: TranscriptRecord, event: React.MouseEvent) => {
+    event.stopPropagation()
+    const sourceName = getSourceName(item)
+    const slug = createTranscriptSlug(sourceName, item.id)
+    const fullUrl = `${window.location.origin}/transcribe/${encodeURIComponent(slug)}`
+    navigator.clipboard.writeText(fullUrl)
+    setCopiedLinkId(item.id)
+    setTimeout(() => setCopiedLinkId(null), 2000)
   }
 
   const togglePreview = async (item: TranscriptRecord) => {
@@ -444,9 +500,21 @@ export default function HistoryPage() {
                               <p className="truncate text-sm font-bold text-slate-900 dark:text-white" title={sourceName}>
                                 {sourceName}
                               </p>
-                              <p className="mt-0.5 text-[11px] text-slate-400 dark:text-slate-500">
-                                {isLink ? 'Web / Video link' : 'Uploaded media'}
-                              </p>
+                              <div className="flex items-center gap-2 mt-0.5">
+                                <p className="text-[11px] text-slate-400 dark:text-slate-500">
+                                  {isLink ? 'Web / Video link' : 'Uploaded media'}
+                                </p>
+                                {localAudioMap[item.id] ? (
+                                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 dark:text-emerald-300 ring-1 ring-emerald-500/20" title="Original recording available in browser storage">
+                                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                    Audio Ready
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 dark:bg-slate-800 px-2 py-0.5 text-[10px] font-medium text-slate-500 dark:text-slate-400" title="Voice playback available via AI speech">
+                                    AI Voice
+                                  </span>
+                                )}
+                              </div>
                             </div>
                           </div>
                         </td>
@@ -473,6 +541,17 @@ export default function HistoryPage() {
                               title="Review in Audio Player & Karaoke Sync"
                             >
                               <Headphones className="h-4 w-4" />
+                            </button>
+                            <button
+                              onClick={(event) => handleCopyLink(item, event)}
+                              className="rounded-full p-2 text-slate-400 hover:bg-emerald-50 hover:text-emerald-600 dark:hover:bg-emerald-950/50 dark:hover:text-emerald-400 transition-colors cursor-pointer"
+                              title="Copy direct clean link to this transcript"
+                            >
+                              {copiedLinkId === item.id ? (
+                                <Check className="h-4 w-4 text-emerald-500" />
+                              ) : (
+                                <Link2 className="h-4 w-4" />
+                              )}
                             </button>
                             <button
                               onClick={(event) => handleDownload(item, event)}
@@ -516,6 +595,21 @@ export default function HistoryPage() {
                                     title="Open in player with sync highlighter"
                                   >
                                     <Headphones className="h-3.5 w-3.5" /> Review in Player
+                                  </button>
+                                  <button
+                                    onClick={(event) => handleCopyLink(item, event)}
+                                    className="flex items-center gap-1 rounded-full border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors cursor-pointer"
+                                    title="Copy direct clean link to this transcript"
+                                  >
+                                    {copiedLinkId === item.id ? (
+                                      <>
+                                        <Check className="h-3.5 w-3.5 text-emerald-500" /> Link Copied
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Link2 className="h-3.5 w-3.5 text-slate-500" /> Copy Link
+                                      </>
+                                    )}
                                   </button>
                                   <button
                                     onClick={(event) => handleCopy(item.id, event)}
