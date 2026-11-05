@@ -722,6 +722,11 @@ export type IncompletenessReport = {
   maxSegmentEnd?: number
   isCountdownCutoff?: boolean
   isCliffhanger?: boolean
+  isStartCutoff?: boolean
+  isInternalGap?: boolean
+  startOffset?: number
+  gapStart?: number
+  gapEnd?: number
 }
 
 /**
@@ -784,29 +789,113 @@ export function checkTranscriptIncompleteness(
     }
   }
 
-  // 2. Dangling Mid-Sentence Cliffhanger Check:
-  // Detects if speech ends abruptly mid-thought on punctuation (..., —, -, comma)
-  // or on dangling grammatical words when the sentence was cut off without concluding punctuation.
+  // 2. Opening Hook / Delayed Start Check:
+  // Detects if speech doesn't begin until >= 3.8s (e.g. model skipped opening hook over intro music/sound effects),
+  // or begins with a dependent pronoun/conjunction ("Behind him...", "And then...", "So when...").
+  const firstSegment = segments && segments.length > 0 ? segments[0] : null
+  const firstSegmentStart = firstSegment
+    ? (typeof firstSegment.start === 'number' && Number.isFinite(firstSegment.start) ? firstSegment.start : 0)
+    : 0
+
+  const beginsWithDependentPhrase =
+    /^(?:behind\s+(?:him|her|them|it)|and\s+(?:then|so|if|when|these|those)|but\s+|so\s+(?:he|she|they|it|we)|then\s+|while\s+|because\s+|which\s+|where\s+|who\s+|whom\s+)\b/i.test(cleanText) ||
+    /^(?:និង|ប៉ុន្តែ|ដូច្នេះ|បន្ទាប់មក|ខណៈ|ព្រោះ|ដែល)\b/.test(cleanText)
+
+  const isLateStart =
+    (firstSegmentStart >= 3.8 && (totalDuration >= 12 || beginsWithDependentPhrase)) ||
+    (firstSegmentStart >= 2.2 && beginsWithDependentPhrase)
+
+  if (isLateStart) {
+    return {
+      isIncomplete: true,
+      reason: `Opening speech skipped: speech begins late at ${Math.round(firstSegmentStart * 10) / 10}s (0:00 - ${Math.round(firstSegmentStart)}s uncaptured)${beginsWithDependentPhrase ? ' with dependent clause' : ''}`,
+      coverageRatio,
+      remainingSeconds,
+      wordCount,
+      maxSegmentEnd,
+      isStartCutoff: true,
+      startOffset: firstSegmentStart
+    }
+  }
+
+  // 3. Internal Gap / Dropped Dialogue Check:
+  // Detects if a large gap (>= 7s) occurs inside the audio followed by an isolated 1-3 word fragment (e.g. 12s gap then "speeds.")
+  if (segments && segments.length >= 2) {
+    for (let i = 0; i < segments.length - 1; i++) {
+      const segA = segments[i]
+      const segB = segments[i + 1]
+      const endA = typeof segA.end === 'number' && Number.isFinite(segA.end) ? segA.end : segA.start
+      const startB = typeof segB.start === 'number' && Number.isFinite(segB.start) ? segB.start : 0
+      const gap = startB - endA
+
+      const wordsB = segB.text.trim().split(/\s+/).filter(Boolean)
+      if (gap >= 6.5 && wordsB.length <= 3) {
+        return {
+          isIncomplete: true,
+          reason: `Internal speech dropped: large ${Math.round(gap)}s gap (${Math.round(endA)}s - ${Math.round(startB)}s) followed by truncated fragment ("${segB.text.trim()}")`,
+          coverageRatio: totalDuration > 0 ? endA / totalDuration : 1,
+          remainingSeconds: totalDuration > 0 ? Math.max(0, totalDuration - endA) : 0,
+          wordCount,
+          maxSegmentEnd: endA, // Ignore trailing fragment so it doesn't give a false 100% coverage
+          isInternalGap: true,
+          gapStart: endA,
+          gapEnd: startB
+        }
+      }
+    }
+  }
+
+  // 4. Isolated Trailing Fragment Check:
+  // Detects if transcript ends on an isolated 1-2 word fragment (e.g. "Speeds." or "Now, each.") after a substantial gap
+  if (segments && segments.length >= 2) {
+    const lastSeg = segments[segments.length - 1]
+    const prevSeg = segments[segments.length - 2]
+    const lastSegWords = lastSeg.text.trim().split(/\s+/).filter(Boolean)
+    const prevEnd = typeof prevSeg.end === 'number' && Number.isFinite(prevSeg.end) ? prevSeg.end : prevSeg.start
+    const lastStart = typeof lastSeg.start === 'number' && Number.isFinite(lastSeg.start) ? lastSeg.start : 0
+
+    if (lastSegWords.length <= 2 && (lastStart - prevEnd) >= 4.0) {
+      return {
+        isIncomplete: true,
+        reason: `Ending truncated: isolated trailing fragment ("${lastSeg.text.trim()}") after ${Math.round(lastStart - prevEnd)}s gap`,
+        coverageRatio: totalDuration > 0 ? prevEnd / totalDuration : 1,
+        remainingSeconds: totalDuration > 0 ? Math.max(0, totalDuration - prevEnd) : 0,
+        wordCount,
+        maxSegmentEnd: prevEnd,
+        isCliffhanger: true
+      }
+    }
+  }
+
+  // 5. Dangling Mid-Sentence Cliffhanger Check:
+  // IMPORTANT: Detects mid-sentence cuts with cliffhangers (..., comma, dash) or dangling grammar words
+  // Viral TikTok videos may intentionally end with "..." for engagement, so we need context:
+  // - Check if ending looks incomplete (punctuation/grammar cliffhanger)
+  // - Only flag if there's EITHER:
+  //   a) Substantial remaining audio (>3s) with poor coverage (<85%), OR
+  //   b) Unknown duration (can't verify if intentional), OR  
+  //   c) Very short remaining time (<1s) but CLEAR mid-sentence cut (no terminator + dangling word)
+
   const hasSentenceTerminator = /[.!?។៕]["')\]]?\s*$/.test(cleanText) && !/\.{2,}\s*$/.test(cleanText) && !/…\s*$/.test(cleanText)
   const endsWithPunctuationCliffhanger = /[,\-—–:]\s*$/s.test(cleanText) || /\.{2,}\s*$/s.test(cleanText) || /…\s*$/s.test(cleanText)
 
-  // Strict dangling particles that cannot end a sentence even if followed by a period (e.g. "turn into.", "with the.")
-  const endsWithStrictParticle = /\b(?:the|a|an|and|or|but|of|into|onto|with|during|their|my|your|its|our)\s*[.!?]?$/i.test(cleanText)
+  // Strict dangling particles that cannot end a sentence (e.g. "which are oriented", "turn into")
+  const endsWithStrictParticle = /\b(?:the|a|an|and|or|but|of|into|onto|with|during|their|my|your|its|our|are|is|was|were|be|been|being)\s*[.!?]?$/i.test(cleanText)
 
-  // Dangling words when there is NO valid sentence terminator (e.g. speech cut off mid-thought before punctuation)
+  // Dangling words when NO valid sentence terminator (speech cut mid-thought before punctuation)
   const endsWithUnpunctuatedDanglingWord = !hasSentenceTerminator && (
-    /\b(?:the|a|an|and|or|but|that|with|in|to|when|which|where|why|how|what|because|after|before|during|while|into|onto|of|for|at|by|from|as|so|than|about|like|such|each|every|all|some|any|no|other|another|both|this|these|those|who|whom|whose|if|whether|though|although|even|also|now|then|just|only|still|yet|can|could|will|would|shall|should|may|might|must|have|has|had|do|does|did|be|been|being|is|are|was|were|turn|turns|become|becomes|their|my|his|her|its|our|your)\s*$/i.test(cleanText) ||
+    /\b(?:the|a|an|and|or|but|that|with|in|to|when|which|where|why|how|what|because|after|before|during|while|into|onto|of|for|at|by|from|as|so|than|about|like|such|each|every|all|some|any|no|other|another|both|this|these|those|who|whom|whose|if|whether|though|although|even|also|now|then|just|only|still|yet|can|could|will|would|shall|should|may|might|must|have|has|had|do|does|did|be|been|being|is|are|was|were|turn|turns|become|becomes|their|my|his|her|its|our|your|oriented|pointing|located|situated|designed|intended|meant|supposed|expected|going|coming|moving)\s*$/i.test(cleanText) ||
     /(?:និង|ឬ|ដែល|ជាមួយ|ក្នុង|ទៅ|ពេល|ព្រោះ|បន្ទាប់ពី|មុន|អំឡុង|ខណៈ|ចូល|នៃ|សម្រាប់|នៅ|ដោយ|ពី|ដូច|ដូចជា|គឺ|ជា|នីមួយៗ|រាល់|គ្រប់|ទាំងអស់|ទាំងនេះ|ទាំងនោះ|នេះ|នោះ|អ្នកណា|ឯណា|កាលណា|ហេតុអ្វី|យ៉ាងណា|បើ|ប្រសិន|ទោះ|អាច|នឹង|ត្រូវ|មាន|បាន|ធ្វើ)\s*$/.test(cleanText)
   )
 
-  // Flag cliffhangers whenever dialogue ends mid-thought with uncaptured remaining audio or unknown duration
+  // Flag cliffhangers if ending looks incomplete AND meets one of these conditions:
   const hasCliffhangerEnd = endsWithPunctuationCliffhanger || endsWithStrictParticle || endsWithUnpunctuatedDanglingWord
   const isCliffhangerIncomplete =
     hasCliffhangerEnd &&
     (
-      totalDuration === 0 ||
-      remainingSeconds > 1.0 ||
-      (totalDuration >= 15 && coverageRatio < 0.94)
+      totalDuration === 0 ||  // Unknown duration - can't verify if intentional
+      remainingSeconds > 1.5 ||  // >1.5s missing - likely incomplete
+      (totalDuration >= 15 && coverageRatio < 0.85 && remainingSeconds > 0.5)  // Poor coverage on known duration
     )
 
   if (isCliffhangerIncomplete) {

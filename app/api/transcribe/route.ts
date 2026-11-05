@@ -576,6 +576,13 @@ async function readTranscriptCache(audioHash: string) {
       }
     }
 
+    // Never serve a cached transcript if it is incomplete or cut off
+    const cachedIncompleteness = checkTranscriptIncompleteness(cached.text, segments, cached.duration || 0)
+    if (cachedIncompleteness.isIncomplete) {
+      console.warn(`[TranscriptCache] Ignoring cached incomplete transcript: ${cachedIncompleteness.reason}`)
+      return null
+    }
+
     return {
       text: cached.text,
       segments,
@@ -778,8 +785,59 @@ async function transcribeWithKey(
           return Math.max(max, end)
         }, 0)
 
+        // AUTOMATIC OPENING HOOK RECOVERY:
+        // If the first segment starts late (start >= 3.5s) or begins with a dependent clause,
+        // retrieve the missing opening hook/sentence spoken over intro music or sound effects.
+        if (
+          accumulatedSegments.length > 0 &&
+          (accumulatedSegments[0].start >= 3.5 ||
+            checkTranscriptIncompleteness(accumulatedSegments.map((s) => s.text).join(' '), accumulatedSegments, totalDuration).isStartCutoff)
+        ) {
+          const firstStart = Math.max(0, accumulatedSegments[0].start)
+          const firstSnippet = accumulatedSegments[0].text.slice(0, 50).trim()
+          emit({
+            type: 'status',
+            phase: 'processing',
+            message: `Recovering opening speech (0:00 - ${Math.round(firstStart)}s)...`
+          })
+
+          const openPrompt = [
+            `CRITICAL OPENING RETRIEVAL: You are transcribing the very beginning of this media recording from 0:00.0 to ${Math.round(firstStart + 1.0)}s.`,
+            `The speech from ${Math.round(firstStart * 10) / 10}s onward is already transcribed starting with: "${firstSnippet}".`,
+            `Listen with high acoustic sensitivity from 0:00.0 to ${Math.round(firstStart + 1.0)}s. Even if spoken over intro music, sound effects, or beats, transcribe all opening speech spoken before "${firstSnippet}".`,
+            'Format strictly as JSON with this exact shape:',
+            `{"language":"${parsedTranscript.language || 'auto'}","text":"Opening transcript words here","segments":[{"start":0.0,"end":${Math.round(firstStart * 10) / 10},"text":"phrase"}]}`,
+            `End timestamps must not exceed ${Math.round((firstStart + 1.0) * 10) / 10}s.`
+          ].join(' ')
+
+          try {
+            const openResponseText = await withGeminiRetry(
+              () =>
+                streamGeminiTranscript(apiKey, {
+                  modelName,
+                  prompt: openPrompt,
+                  mimeType: mediaMimeType,
+                  ...(fileUri ? { fileUri } : { inlineData: audioInput.buffer })
+                }),
+              `opening retrieval (${modelName})`
+            )
+            const openParsed = parseGeminiTranscriptResponse(openResponseText)
+            const openSegments = (openParsed.segments || []).filter((s) => (s.end || s.start) <= firstStart + 0.5)
+            if (openSegments.length > 0) {
+              accumulatedSegments = [...openSegments, ...accumulatedSegments]
+            } else if (openParsed.text && openParsed.text.trim()) {
+              accumulatedSegments = [
+                { start: 0.0, end: firstStart, text: openParsed.text.trim() },
+                ...accumulatedSegments
+              ]
+            }
+          } catch (openErr) {
+            console.warn('Opening hook retrieval failed:', openErr)
+          }
+        }
+
         // AUTOMATIC CONTINUATION LOOP:
-        // If the media has known duration (>= 15s) and speech stopped early, OR transcript ended mid-thought / cliffhanger,
+        // If the media has known duration (>= 15s) and speech stopped early, OR transcript ended mid-thought / cliffhanger / internal gap,
         // automatically issue continuation requests from the last detected timestamp to capture all remaining speech.
         let continuationPass = 0
         const MAX_CONTINUATION_PASSES = 3
@@ -800,6 +858,13 @@ async function transcribeWithKey(
             accumulatedSegments,
             totalDuration
           )
+
+          // Handle internal gap: drop isolated trailing fragment after the gap and rewind to gapStart
+          if (currentIncompleteness.isInternalGap && typeof currentIncompleteness.gapStart === 'number') {
+            const gapStart = currentIncompleteness.gapStart
+            accumulatedSegments = accumulatedSegments.filter((s) => s.start < gapStart + 0.5)
+            currentMaxEnd = gapStart
+          }
 
           // If cliffhanger cut-off, rewind startOffset by 2 seconds so model hears the context of the cut sentence
           const isCliffhanger = Boolean(currentIncompleteness.isCliffhanger)
