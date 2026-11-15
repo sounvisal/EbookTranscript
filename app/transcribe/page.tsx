@@ -6,9 +6,11 @@ import Link from 'next/link'
 import { useSession, signIn } from 'next-auth/react'
 import InputTabs from '@/components/input/InputTabs'
 import ProcessingPanel from '@/components/processing/ProcessingPanel'
+import RecentTranscriptions from '@/components/processing/RecentTranscriptions'
 import TranscriptPanel from '@/components/transcript/TranscriptPanel'
-import { useTranscriptStore, getCachedSessionMedia } from '@/store/transcriptStore'
+import { useTranscriptStore } from '@/store/transcriptStore'
 import { getMediaBlob } from '@/lib/mediaStorage'
+import { MAX_MEDIA_UPLOAD_MB } from '@/lib/uploadLimits'
 import { extractIdFromSlug } from '@/lib/transcriptSlug'
 import { loadDemoSample } from '@/lib/demoSample'
 import { AnimatePresence, motion } from 'framer-motion'
@@ -28,7 +30,8 @@ function TranscribeContent() {
   const params = useParams()
   const searchParams = useSearchParams()
   const router = useRouter()
-  const { status: authStatus } = useSession()
+  const { status: authStatus, data: session } = useSession()
+  const accountId = session?.user?.id
 
   const status = useTranscriptStore((state) => state.status)
   const currentTranscript = useTranscriptStore((state) => state.transcript)
@@ -52,7 +55,7 @@ function TranscribeContent() {
 
   // Restore transcript when accessing clean path /transcribe/[slug] or ?id=...
   useEffect(() => {
-    if (!targetId) return
+    if (!targetId || authStatus === 'loading') return
 
     // If already loaded in store, no need to re-fetch
     if (currentTranscript?.id === targetId && status === 'complete') {
@@ -84,33 +87,8 @@ function TranscribeContent() {
 
         const sourceName = data.filename || data.source || 'Transcript'
 
-        // 1. Check in-memory session cache first
-        let mediaUrl: string | null = null
-        let mediaFile: File | null = null
-        let mediaBlob: Blob | null = null
-
-        const cached =
-          getCachedSessionMedia(data.id) ||
-          (data.filename ? getCachedSessionMedia(data.filename) : undefined) ||
-          (data.source ? getCachedSessionMedia(data.source) : undefined) ||
-          getCachedSessionMedia(sourceName)
-
-        if (cached) {
-          mediaUrl = cached.url
-          mediaFile = cached.file || null
-          mediaBlob = cached.blob || null
-        } else {
-          // 2. Retrieve genuine audio file binary from local browser IndexedDB
-          try {
-            const storedBlob = await getMediaBlob(data.id, data.filename || data.source || sourceName)
-            if (storedBlob) {
-              mediaBlob = storedBlob
-              mediaUrl = URL.createObjectURL(storedBlob)
-            }
-          } catch (storageErr) {
-            console.warn('Failed to retrieve audio from IndexedDB:', storageErr)
-          }
-        }
+        const mediaBlob = accountId ? await getMediaBlob(accountId, data.id, data.job?.id) : null
+        if (isCancelled) return
 
         setTranscriptWithAudio(
           {
@@ -121,8 +99,8 @@ function TranscribeContent() {
             language: data.language || 'auto',
             alreadySaved: true
           },
-          mediaUrl,
-          mediaFile,
+          null,
+          null,
           mediaBlob
         )
       } catch (fetchErr) {
@@ -138,7 +116,7 @@ function TranscribeContent() {
     return () => {
       isCancelled = true
     }
-  }, [targetId, authStatus, currentTranscript?.id, status, setTranscriptWithAudio])
+  }, [targetId, authStatus, accountId, currentTranscript?.id, status, setTranscriptWithAudio])
 
   return (
     <div className="mx-auto w-full max-w-5xl px-4 pb-24 pt-8 sm:px-6 sm:pt-10 space-y-8">
@@ -173,7 +151,7 @@ function TranscribeContent() {
             <Globe2 className="h-3.5 w-3.5 text-blue-500" /> Khmer & English
           </span>
           <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100/90 dark:bg-slate-900/90 px-3 py-1 ring-1 ring-slate-200/60 dark:ring-slate-800 shadow-2xs">
-            <Zap className="h-3.5 w-3.5 text-amber-500" /> Up to 2GB
+            <Zap className="h-3.5 w-3.5 text-amber-500" /> Up to {MAX_MEDIA_UPLOAD_MB} MB
           </span>
           <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100/90 dark:bg-slate-900/90 px-3 py-1 ring-1 ring-slate-200/60 dark:ring-slate-800 shadow-2xs">
             <ShieldCheck className="h-3.5 w-3.5 text-emerald-500" /> Private
@@ -247,6 +225,7 @@ function TranscribeContent() {
                 transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
               >
                 <InputTabs />
+                {accountId && !targetId && <RecentTranscriptions accountId={accountId} />}
               </motion.div>
             ) : status === 'uploading' || status === 'processing' ? (
               <motion.div

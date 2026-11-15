@@ -1,5 +1,5 @@
 import { sendTelegramFleetEmergencyAlert, sendTelegramFleetRecoveryAlert } from './telegram'
-import { cleanGeminiModelName } from './gemini'
+import { getConfiguredKeys, getConfiguredModels } from './geminiConfig'
 
 export type ModelHealthStatus = 'HEALTHY' | 'DEGRADED' | 'HIGH_DEMAND_503' | 'RATE_LIMITED_429'
 
@@ -40,13 +40,6 @@ export type FleetProbeSummary = {
   degradedModelCount: number
 }
 
-const DEFAULT_MODELS = [
-  'gemini-2.5-flash-lite',
-  'gemini-2.5-flash',
-  'gemini-2.0-flash',
-  'gemini-1.5-flash'
-]
-
 // Global in-memory health table for the AI model fleet
 const modelHealthTable = new Map<string, ModelHealthRecord>()
 
@@ -70,38 +63,6 @@ export function getOrInitModelRecord(model: string): ModelHealthRecord {
     modelHealthTable.set(model, record)
   }
   return record
-}
-
-// Reads configured models from environment
-export function getConfiguredModels(): string[] {
-  const envModels = (process.env.GEMINI_MODELS || '')
-    .split(',')
-    .map((m) => cleanGeminiModelName(m))
-    .filter(Boolean)
-
-  const single = cleanGeminiModelName(process.env.GEMINI_MODEL)
-  const preferred = envModels.length > 0 ? envModels : (single ? [single] : [])
-
-  // ALWAYS merge preferred with DEFAULT_MODELS so the fleet NEVER has a single point of failure!
-  // Any user-configured preference leads the chain, followed by healthy fallback models.
-  const combined = [
-    ...preferred,
-    ...DEFAULT_MODELS
-  ]
-
-  return Array.from(new Set(combined))
-}
-
-// Reads configured API keys from environment
-export function getConfiguredKeys(): string[] {
-  const multi = (process.env.GEMINI_API_KEYS || '')
-    .split(',')
-    .map((k) => k.trim().replace(/["'\r\n]/g, ''))
-    .filter(Boolean)
-  if (multi.length > 0) return multi
-
-  const single = (process.env.GEMINI_API_KEY || '').trim().replace(/["'\r\n]/g, '')
-  return single && single !== 'AIzaSyYourGoogleApiKeyHere' ? [single] : []
 }
 
 // Global in-memory health and quarantine table for the API key fleet
@@ -307,9 +268,9 @@ export function getOptimalModelOrder(durationSeconds?: number): string[] {
   ]
 
   // For long recordings (>= 90s), prioritize models with superior sustained long-audio attention
-  // (gemini-2.5-flash, gemini-2.0-flash) ahead of lightweight sub-minute models to prevent premature cutoff
+  // (Gemini 2.5 Flash) ahead of lightweight sub-minute models to prevent premature cutoff
   if (durationSeconds && durationSeconds >= 90) {
-    const longContextModels = ['gemini-2.5-flash', 'gemini-2.0-flash']
+    const longContextModels = ['gemini-2.5-flash']
     unquarantined.sort((a, b) => {
       const aIsLong = longContextModels.includes(a) ? 1 : 0
       const bIsLong = longContextModels.includes(b) ? 1 : 0

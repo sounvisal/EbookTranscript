@@ -38,7 +38,7 @@ import AudioPlayer from '@/components/transcript/AudioPlayer'
 import { transcribeWithProgress } from '@/lib/transcribeClient'
 import { TranscriptSearch } from '@/components/transcript/TranscriptSearch'
 import { useUndoRedo } from '@/hooks/useUndoRedo'
-import { saveMediaBlob } from '@/lib/mediaStorage'
+import { getMediaBlob, saveMediaBlob } from '@/lib/mediaStorage'
 import { createTranscriptSlug } from '@/lib/transcriptSlug'
 import Link from 'next/link'
 
@@ -268,7 +268,8 @@ export default function TranscriptPanel() {
     }
 
     const autoSave = async () => {
-      if (!session || !transcript || hasSaved.current || saved || saving || isAlreadySaved) return
+      const accountId = session?.user?.id
+      if (!accountId || !transcript || hasSaved.current || saved || saving || isAlreadySaved) return
 
       hasSaved.current = true
       setSaving(true)
@@ -276,6 +277,8 @@ export default function TranscriptPanel() {
       try {
         const payload = {
           text: liveText,
+          expectedUserId: accountId,
+          cacheId: transcript.cacheId,
           source: transcript.source || (file ? 'file' : transcript.source === 'LIVE VOICE' ? 'live_voice' : 'voice_record'),
           filename: file ? file.name : undefined,
           duration: transcript.duration || 0,
@@ -291,18 +294,23 @@ export default function TranscriptPanel() {
 
         if (res.ok) {
           const data = await res.json().catch(() => null)
-          if (data?.id && transcript) {
-            transcript.id = data.id
-            transcript.alreadySaved = true
-            if (file) {
-              saveMediaBlob(data.id, file, file.name).catch(() => {})
-            } else if (audioBlob) {
-              saveMediaBlob(data.id, audioBlob, transcript.source).catch(() => {})
+          const store = useTranscriptStore.getState()
+          if (data?.id && store.accountId === accountId && store.transcript === transcript) {
+            store.setTranscript({ ...transcript, id: data.id, alreadySaved: true })
+            const media = file || audioBlob
+            if (media) {
+              try {
+                if (res.status === 201 || !await getMediaBlob(accountId, data.id)) {
+                  await saveMediaBlob(accountId, data.id, media)
+                }
+              } catch {
+                setSaveSuccessMessage('Transcript saved. Local audio storage is unavailable.')
+              }
             }
 
             // Sync clean path URL without reloading
             const slug = createTranscriptSlug(transcript.source || file?.name, data.id)
-            if (typeof window !== 'undefined' && slug) {
+            if (typeof window !== 'undefined' && slug && useTranscriptStore.getState().accountId === accountId) {
               window.history.replaceState(null, '', '/transcribe/' + encodeURIComponent(slug))
             }
           }
@@ -319,7 +327,7 @@ export default function TranscriptPanel() {
     }
 
     autoSave()
-  }, [session, transcript, file, saved, saving, liveText, wordCount, isAlreadySaved])
+  }, [session, transcript, file, audioBlob, saved, saving, liveText, wordCount, isAlreadySaved])
 
   const handleCopy = () => {
     navigator.clipboard.writeText(liveText)
@@ -666,6 +674,17 @@ export default function TranscriptPanel() {
           currentTime={currentTime}
           onSeek={setCurrentTime}
           onTimeUpdate={setCurrentTime}
+          onAttachFile={(attached) => {
+            const accountId = session?.user?.id
+            const store = useTranscriptStore.getState()
+            if (accountId && store.accountId !== accountId) return
+            store.setFile(attached)
+            if (accountId && transcript?.id) {
+              saveMediaBlob(accountId, transcript.id, attached).catch(() => {
+                setSaveSuccessMessage('Audio attached for this session. Local storage is unavailable.')
+              })
+            }
+          }}
         />
       </div>
 

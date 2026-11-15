@@ -6,13 +6,13 @@ import { FileAudio, AlertCircle, Sparkles, X, Music, Film, CheckCircle2, Refresh
 import { useTranscriptStore } from '@/store/transcriptStore'
 import { motion, AnimatePresence } from 'framer-motion'
 import { MAX_MEDIA_UPLOAD_BYTES, MAX_MEDIA_UPLOAD_MB } from '@/lib/uploadLimits'
+import { getMediaBlob, saveMediaBlob } from '@/lib/mediaStorage'
 import { transcribeWithProgress } from '@/lib/transcribeClient'
 import AdvancedOptionsDrawer from './AdvancedOptionsDrawer'
 import { useSession, signIn } from 'next-auth/react'
 import { loadDemoSample } from '@/lib/demoSample'
 import { AudioWaveformPreview } from '@/components/preview/AudioWaveformPreview'
 import { VideoThumbnailPreview } from '@/components/preview/VideoThumbnailPreview'
-import { saveMediaBlob } from '@/lib/mediaStorage'
 
 import ReportErrorButton from '@/components/common/ReportErrorButton'
 
@@ -58,19 +58,17 @@ export default function MediaUploadZone() {
       localStorage.setItem('signal_guest_count', String(guestCount + 1))
     }
 
+    const accountId = session?.user?.id ?? null
     setStatus('uploading')
     setErrorMessage(null)
     setProgress(0)
-
-    if (input.file) {
-      saveMediaBlob(input.file.name, input.file, input.file.name).catch(() => {})
-    }
 
     try {
       // Real progress streamed from the direct-to-Gemini transcribe client.
       const data = await transcribeWithProgress(
         input,
         (event) => {
+          if (useTranscriptStore.getState().accountId !== accountId) return
           if (event.type === 'status' && event.phase === 'processing') {
             setStatus('processing')
           }
@@ -81,15 +79,24 @@ export default function MediaUploadZone() {
         advancedOptions
       )
 
+      if (useTranscriptStore.getState().accountId !== accountId) return
+      if (data.id && accountId && input.file) {
+        if (!await getMediaBlob(accountId, data.id)) await saveMediaBlob(accountId, data.id, input.file).catch(() => {})
+      }
+      if (useTranscriptStore.getState().accountId !== accountId) return
       setTranscript({
+        id: data.id,
+        alreadySaved: data.alreadySaved,
         text: data.text,
         segments: data.segments,
         source: data.source || input.file?.name || input.url || 'MEDIA INPUT',
         language: data.language,
         duration: data.duration,
+        cacheId: data.cacheId,
         kind: 'transcript'
       })
     } catch (error) {
+      if (useTranscriptStore.getState().accountId !== accountId) return
       console.error(error)
       const errorMsg = error instanceof Error ? error.message : 'Transcription failed.'
       setErrorMessage(errorMsg)

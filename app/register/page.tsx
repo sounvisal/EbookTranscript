@@ -3,17 +3,15 @@ import { redirect } from 'next/navigation'
 export const dynamic = 'force-dynamic'
 
 type RegisterPageProps = {
-  searchParams?: {
-    callbackUrl?: string
-  }
+  searchParams: Promise<{ callbackUrl?: string | string[] }>
 }
 
-export default function RegisterPage({ searchParams }: RegisterPageProps) {
+export default async function RegisterPage({ searchParams }: RegisterPageProps) {
+  const { callbackUrl } = await searchParams
   const params = new URLSearchParams({ mode: 'register' })
 
-  if (searchParams?.callbackUrl) {
-    const rawCallback = searchParams.callbackUrl
-    const safeCallback = rawCallback.startsWith('/admin') ? '/transcribe' : rawCallback
+  if (typeof callbackUrl === 'string' && callbackUrl) {
+    const safeCallback = callbackUrl.startsWith('/admin') ? '/transcribe' : callbackUrl
     params.set('callbackUrl', safeCallback)
   }
 

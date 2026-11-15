@@ -9,7 +9,7 @@ const HISTORY_PAGE_SIZE = 15
 export async function GET(req: Request) {
   try {
     const session = await getServerSession(authOptions)
-    if (!session?.user) {
+    if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized access' }, { status: 401 })
     }
 
@@ -18,7 +18,8 @@ export async function GET(req: Request) {
 
     if (id) {
       const transcript = await prisma.transcript.findFirst({
-        where: { id, userId: session.user.id }
+        where: { id, userId: session.user.id },
+        include: { job: { select: { id: true } } }
       })
 
       if (!transcript) {
@@ -71,6 +72,7 @@ export async function GET(req: Request) {
         duration: true,
         wordCount: true,
         language: true,
+        job: { select: { id: true } },
         createdAt: true
       }
     })
@@ -95,11 +97,14 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   try {
     const session = await getServerSession(authOptions)
-    if (!session?.user) {
+    if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized access' }, { status: 401 })
     }
 
-    const { text, source, filename, duration, wordCount, language } = await req.json()
+    const { text, source, filename, duration, wordCount, language, cacheId, expectedUserId } = await req.json()
+    if (expectedUserId && expectedUserId !== session.user.id) {
+      return NextResponse.json({ error: 'The signed-in account changed.' }, { status: 403 })
+    }
 
     if (!text || !source) {
       return NextResponse.json({ error: 'Text and source are required' }, { status: 400 })
@@ -118,10 +123,9 @@ export async function POST(req: Request) {
       where: {
         userId: session.user.id,
         text: cleanText,
-        OR: [
-          ...(effectiveFilename ? [{ filename: effectiveFilename }, { source: effectiveFilename }] : []),
-          { source }
-        ]
+        ...(effectiveFilename
+          ? { OR: [{ filename: effectiveFilename }, { filename: null, source: effectiveFilename }] }
+          : { filename: null, source })
       },
       select: {
         id: true,
@@ -139,6 +143,10 @@ export async function POST(req: Request) {
       return NextResponse.json(existing, { status: 200 })
     }
 
+    const cache = typeof cacheId === 'string'
+      ? await prisma.transcriptCache.findFirst({ where: { id: cacheId, userId: session.user.id }, select: { id: true } })
+      : null
+
     const transcript = await prisma.transcript.create({
       data: {
         text: cleanText,
@@ -147,7 +155,8 @@ export async function POST(req: Request) {
         duration: computedDuration,
         wordCount: computedWordCount,
         language,
-        userId: session.user.id
+        userId: session.user.id,
+        cacheId: cache?.id
       }
     })
 
@@ -161,7 +170,7 @@ export async function POST(req: Request) {
 export async function DELETE(req: Request) {
   try {
     const session = await getServerSession(authOptions)
-    if (!session?.user) {
+    if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized access' }, { status: 401 })
     }
 
@@ -170,16 +179,24 @@ export async function DELETE(req: Request) {
       return NextResponse.json({ error: 'ID is required' }, { status: 400 })
     }
 
-    const transcript = await prisma.transcript.findFirst({
-      where: { id, userId: session.user.id },
-      select: { id: true }
+    const userId = session.user.id
+    const deleted = await prisma.$transaction(async (transaction) => {
+      const transcript = await transaction.transcript.findFirst({
+        where: { id, userId },
+        select: { id: true, cacheId: true }
+      })
+      if (!transcript) return false
+      const result = await transaction.transcript.deleteMany({ where: { id, userId } })
+      if (!result.count) return false
+      if (transcript.cacheId) {
+        await transaction.transcriptCache.deleteMany({ where: { id: transcript.cacheId, userId } })
+      }
+      return true
     })
 
-    if (!transcript) {
+    if (!deleted) {
       return NextResponse.json({ error: 'Not found or unauthorized' }, { status: 404 })
     }
-
-    await prisma.transcript.delete({ where: { id } })
     return NextResponse.json({ success: true }, { status: 200 })
   } catch (error) {
     console.error('Error deleting transcript:', error)
@@ -190,7 +207,7 @@ export async function DELETE(req: Request) {
 export async function PATCH(req: Request) {
   try {
     const session = await getServerSession(authOptions)
-    if (!session?.user) {
+    if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized access' }, { status: 401 })
     }
 

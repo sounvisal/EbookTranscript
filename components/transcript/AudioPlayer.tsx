@@ -15,9 +15,9 @@ import {
   Upload
 } from 'lucide-react'
 import { formatTimestamp } from '@/lib/transcript'
-import { useTranscriptStore } from '@/store/transcriptStore'
 
 type AudioPlayerProps = {
+  onAttachFile: (file: File) => void
   src?: string | null
   text?: string
   duration?: number
@@ -29,6 +29,7 @@ type AudioPlayerProps = {
 const PLAYBACK_SPEEDS = [0.75, 1.0, 1.25, 1.5, 2.0]
 
 export default function AudioPlayer({
+  onAttachFile,
   src,
   text,
   duration = 0,
@@ -289,9 +290,7 @@ export default function AudioPlayer({
   const handleAttachFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-    const url = URL.createObjectURL(file)
-    useTranscriptStore.getState().setFile(file)
-    useTranscriptStore.getState().setCustomAudioUrl(url)
+    onAttachFile(file)
     stopSpeechSynthesis()
     setIsPlaying(false)
   }

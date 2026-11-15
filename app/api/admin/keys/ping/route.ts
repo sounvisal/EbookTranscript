@@ -1,21 +1,10 @@
 import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions, isUserAdmin } from '@/lib/auth'
+import { getConfiguredKeys } from '@/lib/geminiConfig'
 import { recordKeySuccess, recordKeyFailure } from '@/lib/fleet'
 
 export const dynamic = 'force-dynamic'
-
-function getGeminiApiKeys(): string[] {
-  const multi = (process.env.GEMINI_API_KEYS || '')
-    .split(',')
-    .map((key) => key.trim().replace(/["'\r\n]/g, ''))
-    .filter(Boolean)
-  if (multi.length) {
-    return multi
-  }
-  const single = (process.env.GEMINI_API_KEY || '').trim().replace(/["'\r\n]/g, '')
-  return single && single !== 'AIzaSyYourGoogleApiKeyHere' ? [single] : []
-}
 
 export type KeyDiagnosticResult = {
   index: number
@@ -34,7 +23,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Forbidden. Admin access required.' }, { status: 403 })
   }
 
-  const keys = getGeminiApiKeys()
+  const keys = getConfiguredKeys()
   if (keys.length === 0) {
     return NextResponse.json({
       success: true,

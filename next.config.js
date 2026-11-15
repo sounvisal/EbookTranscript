@@ -20,13 +20,12 @@ if (!process.env.NEXTAUTH_URL || process.env.NEXTAUTH_URL.trim() === '') {
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  swcMinify: true,
+  outputFileTracingRoot: __dirname,
+  outputFileTracingIncludes: {
+    '/api/**/*': ['./node_modules/youtube-dl-exec/bin/**/*', './node_modules/ffmpeg-static/**/*']
+  },
+  serverExternalPackages: ['ffmpeg-static', '@distube/ytdl-core', 'youtube-dl-exec'],
   experimental: {
-    outputFileTracingRoot: path.join(__dirname),
-    outputFileTracingIncludes: {
-      '/api/**/*': ['./node_modules/youtube-dl-exec/bin/**/*', './node_modules/ffmpeg-static/**/*']
-    },
-    serverComponentsExternalPackages: ['ffmpeg-static', '@distube/ytdl-core', 'youtube-dl-exec'],
     optimizePackageImports: ['lucide-react', 'framer-motion']
   },
   async headers() {

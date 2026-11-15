@@ -24,7 +24,7 @@ import {
 import { downloadTxt } from '@/lib/download'
 import { getPlainTranscriptText } from '@/lib/transcript'
 import { useSession, signIn } from 'next-auth/react'
-import { useTranscriptStore, getCachedSessionMedia } from '@/store/transcriptStore'
+import { useTranscriptStore } from '@/store/transcriptStore'
 import { getMediaBlob, deleteMediaBlob } from '@/lib/mediaStorage'
 import { HistoryTableSkeleton } from '@/components/skeletons/HistoryTableSkeleton'
 import { createTranscriptSlug } from '@/lib/transcriptSlug'
@@ -32,6 +32,7 @@ import { createTranscriptSlug } from '@/lib/transcriptSlug'
 const PAGE_SIZE = 15
 
 type TranscriptRecord = {
+  job?: { id: string } | null
   id: string
   text?: string
   rawText?: string
@@ -66,7 +67,8 @@ function getSourceName(item: TranscriptRecord) {
 
 export default function HistoryPage() {
   const router = useRouter()
-  const { status } = useSession()
+  const { status, data: session } = useSession()
+  const accountId = session?.user?.id
   const [history, setHistory] = useState<TranscriptRecord[]>([])
   const [details, setDetails] = useState<Record<string, string>>({})
   const [rawDetails, setRawDetails] = useState<Record<string, string>>({})
@@ -129,31 +131,14 @@ export default function HistoryPage() {
   
   // Check local audio availability in IndexedDB
   useEffect(() => {
-    if (!history || history.length === 0) return
+    if (!accountId || history.length === 0) return
     let isCancelled = false
 
     const checkAudioAvailability = async () => {
       const results: Record<string, boolean> = {}
       await Promise.all(
         history.map(async (item) => {
-          const sourceName = getSourceName(item)
-          const cached =
-            getCachedSessionMedia(item.id) ||
-            (item.filename ? getCachedSessionMedia(item.filename) : undefined) ||
-            (item.source ? getCachedSessionMedia(item.source) : undefined) ||
-            getCachedSessionMedia(sourceName)
-
-          if (cached) {
-            results[item.id] = true
-            return
-          }
-
-          try {
-            const blob = await getMediaBlob(item.id, item.filename || item.source || sourceName)
-            results[item.id] = Boolean(blob)
-          } catch {
-            results[item.id] = false
-          }
+          results[item.id] = Boolean(await getMediaBlob(accountId, item.id, item.job?.id))
         })
       )
       if (!isCancelled) {
@@ -165,7 +150,7 @@ export default function HistoryPage() {
     return () => {
       isCancelled = true
     }
-  }, [history])
+  }, [history, accountId])
 
   useEffect(() => {
     if (status === 'authenticated') {
@@ -208,37 +193,12 @@ export default function HistoryPage() {
   const handleReviewInPlayer = async (item: TranscriptRecord, event: React.MouseEvent) => {
     event.stopPropagation()
     const record = await loadTranscriptRecord(item.id)
-    if (!record) return
+    if (!record || !accountId) return
 
     const sourceName = getSourceName(item)
 
-    // 1. Check in-memory session cache first
-    let mediaUrl: string | null = null
-    let mediaFile: File | null = null
-    let mediaBlob: Blob | null = null
-
-    const cached =
-      getCachedSessionMedia(item.id) ||
-      (item.filename ? getCachedSessionMedia(item.filename) : undefined) ||
-      (item.source ? getCachedSessionMedia(item.source) : undefined) ||
-      getCachedSessionMedia(sourceName)
-
-    if (cached) {
-      mediaUrl = cached.url
-      mediaFile = cached.file || null
-      mediaBlob = cached.blob || null
-    } else {
-      // 2. Retrieve the user's actual uploaded recording from browser IndexedDB
-      try {
-        const storedBlob = await getMediaBlob(item.id, item.filename || item.source || sourceName)
-        if (storedBlob) {
-          mediaBlob = storedBlob
-          mediaUrl = URL.createObjectURL(storedBlob)
-        }
-      } catch (err) {
-        console.warn('Failed to retrieve media from IndexedDB:', err)
-      }
-    }
+    const mediaBlob = await getMediaBlob(accountId, item.id, item.job?.id)
+    if (useTranscriptStore.getState().accountId !== accountId) return
 
     useTranscriptStore.getState().setTranscriptWithAudio(
       {
@@ -249,8 +209,8 @@ export default function HistoryPage() {
         language: item.language || 'auto',
         alreadySaved: true
       },
-      mediaUrl,
-      mediaFile,
+      null,
+      null,
       mediaBlob
     )
 
@@ -302,6 +262,7 @@ export default function HistoryPage() {
 
   const handleDelete = async (id: string, event: React.MouseEvent) => {
     event.stopPropagation()
+    if (!accountId) return
     if (!confirm('Are you sure you want to delete this transcript?')) return
     setDeletingId(id)
     setError(null)
@@ -310,7 +271,9 @@ export default function HistoryPage() {
       const response = await fetch(`/api/history?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
       if (!response.ok) throw new Error('Unable to delete this transcript.')
 
-      deleteMediaBlob(id).catch(() => {})
+      if (useTranscriptStore.getState().transcript?.id === id) useTranscriptStore.getState().resetAll()
+      const jobId = history.find((item) => item.id === id)?.job?.id
+      const localDeleteFailed = await deleteMediaBlob(accountId, id, jobId).then(() => false, () => true)
 
       setDetails((current) => {
         const next = { ...current }
@@ -323,6 +286,7 @@ export default function HistoryPage() {
       } else {
         await fetchHistory(page, searchQuery, selectedLanguage)
       }
+      if (localDeleteFailed) setError('Transcript deleted. This browser could not remove its local recording.')
     } catch (deleteError) {
       console.error('Failed to delete transcript', deleteError)
       setError(deleteError instanceof Error ? deleteError.message : 'Unable to delete this transcript.')

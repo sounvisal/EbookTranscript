@@ -11,7 +11,7 @@
  * 3. Saves bandwidth and battery for users.
  */
 
-export async function getMediaDuration(file: File): Promise<number> {
+export async function getMediaDuration(file: File, allowDecodeFallback = true): Promise<number> {
   if (typeof window === 'undefined') return 0
   return new Promise((resolve) => {
     let resolved = false
@@ -35,7 +35,7 @@ export async function getMediaDuration(file: File): Promise<number> {
 
     const timer = setTimeout(() => {
       const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
-      if (AudioCtx && file.size < 60 * 1024 * 1024) {
+      if (allowDecodeFallback && AudioCtx && file.size < 60 * 1024 * 1024) {
         file.arrayBuffer().then((buf) => {
           const ctx = new AudioCtx()
           return ctx.decodeAudioData(buf).then((decoded) => {

@@ -45,6 +45,8 @@ model User {
   accounts      Account[]
   sessions      Session[]
   transcripts   Transcript[]
+  transcriptCache TranscriptCache[]
+  transcriptionJobs TranscriptionJob[]
   metrics       UsageMetric[]
   errors        ErrorLog[]
   createdAt     DateTime  @default(now())
@@ -70,20 +72,52 @@ model Transcript {
   updatedAt DateTime @updatedAt
   userId    String?
   user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cacheId   String?
+  cache     TranscriptCache? @relation(fields: [cacheId], references: [id], onDelete: SetNull)
+  job       TranscriptionJob?
+
+  @@index([cacheId])
 }
 
-/// Caches transcription results keyed by a hash of the extracted audio bytes, so
-/// re-transcribing the same media returns instantly without using API quota.
+model TranscriptionJob {
+  id             String      @id
+  userId         String
+  user           User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transcriptId   String?     @unique
+  transcript     Transcript? @relation(fields: [transcriptId], references: [id], onDelete: Cascade)
+  fileName       String
+  mimeType       String
+  keyFingerprint String
+  options        Json?
+  duration       Float?
+  status         String      @default("queued")
+  progress       Int         @default(0)
+  attempts       Int         @default(0)
+  startedAt      DateTime?
+  result         Json?
+  error          String?
+  createdAt      DateTime    @default(now())
+  expiresAt      DateTime
+
+  @@index([userId, createdAt])
+  @@index([expiresAt])
+}
+
+/// Short-lived cache of transcription results owned by the account that generated them.
 model TranscriptCache {
   id        String   @id @default(cuid())
-  audioHash String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  audioHash String
   text      String
   segments  String?
   language  String?
   duration  Float?
   createdAt DateTime @default(now())
+  transcripts Transcript[]
 
-  @@index([audioHash])
+  @@unique([userId, audioHash])
+  @@index([createdAt])
 }
 
 /// Privacy-safe telemetry for admin: tracks tokens, models, duration, and user metrics WITHOUT storing private transcript content.

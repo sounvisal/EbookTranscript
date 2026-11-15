@@ -1,7 +1,13 @@
+import { randomUUID } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { getOptimalKeyOrder, recordKeySuccess, recordKeyFailure } from '@/lib/fleet'
+
+import { GEMINI_UNAVAILABLE, getConfiguredKeys } from '@/lib/geminiConfig'
+import { MAX_MEDIA_UPLOAD_BYTES } from '@/lib/uploadLimits'
+import { createUploadToken, geminiKeyFingerprint, parseGoogleUploadUrl } from '@/lib/uploadSession'
+import { checkUserQuota } from '@/lib/quota'
 
 function getGeminiApiHost(): string {
   const raw = process.env.GEMINI_API_HOST || 'generativelanguage.googleapis.com'
@@ -13,24 +19,8 @@ function getGeminiApiHost(): string {
     || 'generativelanguage.googleapis.com'
 }
 
-let keyIndex = 0
-
-function getAllGeminiKeys(): string[] {
-  const multi = (process.env.GEMINI_API_KEYS || '')
-    .split(',')
-    .map((key) => key.trim().replace(/["'\r\n]/g, ''))
-    .filter(Boolean)
-  if (multi.length) {
-    return multi
-  }
-  const single = (process.env.GEMINI_API_KEY || '').trim().replace(/["'\r\n]/g, '')
-  return single && single !== 'AIzaSyYourGoogleApiKeyHere' ? [single] : []
-}
-
-import { checkUserQuota } from '@/lib/quota'
-
 export async function GET() {
-  const keys = getAllGeminiKeys()
+  const keys = getConfiguredKeys()
   return NextResponse.json({ totalKeys: keys.length })
 }
 
@@ -40,20 +30,30 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Please sign in to transcribe files.' }, { status: 401 })
   }
 
+  const keys = getConfiguredKeys()
+  const secret = process.env.NEXTAUTH_SECRET
+  if (!keys.length || !secret) {
+    return NextResponse.json({ error: GEMINI_UNAVAILABLE }, { status: 503 })
+  }
+
   // Verify daily usage quota
   const quota = await checkUserQuota(session.user.id, session.user.email, session.user.role)
   if (!quota.allowed) {
     return NextResponse.json({ error: quota.error || 'Daily usage quota reached.' }, { status: 429 })
   }
 
-  const keys = getAllGeminiKeys()
-  if (!keys.length) {
-    return NextResponse.json({ error: 'Gemini API key is not configured.' }, { status: 500 })
-  }
-
   const host = getGeminiApiHost()
   const body = await req.json().catch(() => ({}))
-  const { fileName, mimeType, fileSize, preferredKeyIndex } = body
+  const { fileName, mimeType, fileSize, preferredKeyIndex } = body ?? {}
+  const purpose = body?.purpose ?? 'transcription'
+  if ((purpose !== 'transcription' && purpose !== 'report')
+    || typeof fileName !== 'string' || !fileName.trim() || fileName.length > 255
+    || typeof mimeType !== 'string' || !/^[a-z0-9.+-]+\/[a-z0-9.+-]+$/i.test(mimeType)
+    || (purpose === 'transcription' && !/^(audio|video)\//i.test(mimeType))
+    || !Number.isSafeInteger(fileSize) || fileSize <= 0 || fileSize > MAX_MEDIA_UPLOAD_BYTES) {
+    return NextResponse.json({ error: 'Invalid upload name, type, or size.' }, { status: 400 })
+  }
+  const providerFileName = `files/${randomUUID()}`
 
   let uploadUrl = ''
   let assignedKey = keys[0]
@@ -78,82 +78,93 @@ export async function POST(req: Request) {
     }
   }
 
-  if (fileName && mimeType && typeof fileSize === 'number' && fileSize > 0) {
-    const orderedKeys = getOptimalKeyOrder(preferredKeyIndex, keys)
+  const orderedKeys = getOptimalKeyOrder(preferredKeyIndex, keys)
 
-    // Try healthy keys in optimal order to establish an authorized resumable session
-    for (const { key: candidateKey, index: idx } of orderedKeys) {
-      try {
-        const startHeaders: Record<string, string> = {
-          'x-goog-api-key': candidateKey,
-          'X-Goog-Upload-Protocol': 'resumable',
-          'X-Goog-Upload-Command': 'start',
-          'X-Goog-Upload-Header-Content-Length': String(fileSize),
-          'X-Goog-Upload-Header-Content-Type': mimeType,
-          'Content-Type': 'application/json; charset=utf-8'
-        }
-        if (clientOrigin && clientOrigin !== '*') {
-          startHeaders['Origin'] = clientOrigin
-        }
+  // Try healthy keys in optimal order to establish an authorized resumable session
+  for (const { key: candidateKey, index: idx } of orderedKeys) {
+    try {
+      const startHeaders: Record<string, string> = {
+        'x-goog-api-key': candidateKey,
+        'X-Goog-Upload-Protocol': 'resumable',
+        'X-Goog-Upload-Command': 'start',
+        'X-Goog-Upload-Header-Content-Length': String(fileSize),
+        'X-Goog-Upload-Header-Content-Type': mimeType,
+        'Content-Type': 'application/json; charset=utf-8'
+      }
+      if (clientOrigin && clientOrigin !== '*') {
+        startHeaders['Origin'] = clientOrigin
+      }
 
-        const targetHosts = host !== 'generativelanguage.googleapis.com'
-          ? [host, 'generativelanguage.googleapis.com']
-          : [host]
+      const targetHosts = host !== 'generativelanguage.googleapis.com'
+        ? [host, 'generativelanguage.googleapis.com']
+        : [host]
 
-        let startRes: Response | null = null
-        for (const targetHost of targetHosts) {
-          try {
-            const res = await fetch(`https://${targetHost}/upload/v1beta/files`, {
-              method: 'POST',
-              headers: startHeaders,
-              body: JSON.stringify({
-                file: {
-                  displayName: fileName,
-                  mimeType: mimeType
-                }
-              })
+      let startRes: Response | null = null
+      for (const targetHost of targetHosts) {
+        try {
+          const res = await fetch(`https://${targetHost}/upload/v1beta/files`, {
+            method: 'POST',
+            headers: startHeaders,
+            redirect: 'error',
+            signal: AbortSignal.timeout(15_000),
+            body: JSON.stringify({
+              file: {
+                name: providerFileName,
+                displayName: fileName,
+                mimeType: mimeType
+              }
             })
-            if (res.ok || targetHost === targetHosts[targetHosts.length - 1]) {
-              startRes = res
-              break
-            }
-          } catch (fetchErr) {
-            if (targetHost === targetHosts[targetHosts.length - 1]) throw fetchErr
-          }
-        }
-
-        if (startRes && startRes.ok) {
-          const retrievedUrl = startRes.headers.get('x-goog-upload-url')
-          if (retrievedUrl) {
-            uploadUrl = retrievedUrl
-            assignedKey = candidateKey
-            assignedIndex = idx
-            recordKeySuccess(idx)
+          })
+          if (res.ok || targetHost === targetHosts[targetHosts.length - 1]) {
+            startRes = res
             break
           }
-        } else if (startRes) {
-          const errText = await startRes.text().catch(() => '')
-          recordKeyFailure(idx, new Error(`HTTP ${startRes.status}: ${errText.slice(0, 100)}`))
-          console.warn(`Gemini key #${idx + 1} failed resumable session start (${startRes.status}):`, errText.slice(0, 200))
+        } catch (fetchErr) {
+          if (targetHost === targetHosts[targetHosts.length - 1]) throw fetchErr
         }
-      } catch (err) {
-        recordKeyFailure(idx, err)
-        console.warn(`Gemini key #${idx + 1} exception starting resumable session:`, err)
       }
-    }
 
-    if (!uploadUrl) {
-      return NextResponse.json(
-        { error: 'Unable to initialize Google media upload session. Please try again in a few moments.' },
-        { status: 502 }
-      )
+      if (startRes && startRes.ok) {
+        const retrievedUrl = startRes.headers.get('x-goog-upload-url')
+        if (retrievedUrl && parseGoogleUploadUrl(retrievedUrl)) {
+          uploadUrl = retrievedUrl
+          assignedKey = candidateKey
+          assignedIndex = idx
+          recordKeySuccess(idx)
+          break
+        }
+      } else if (startRes) {
+        const errText = await startRes.text().catch(() => '')
+        recordKeyFailure(idx, new Error(`HTTP ${startRes.status}: ${errText.slice(0, 100)}`))
+        console.warn(`Gemini key #${idx + 1} failed resumable session start (${startRes.status}):`, errText.slice(0, 200))
+      }
+    } catch (err) {
+      recordKeyFailure(idx, err)
+      console.warn(`Gemini key #${idx + 1} exception starting resumable session:`, err)
     }
+  }
+
+  if (!uploadUrl) {
+    return NextResponse.json(
+      { error: 'Unable to initialize Google media upload session. Please try again in a few moments.' },
+      { status: 502 }
+    )
   }
 
   return NextResponse.json({
     keyIndex: assignedIndex,
     host,
     uploadUrl,
+    uploadToken: createUploadToken({
+      userId: session.user.id,
+      fileName: providerFileName,
+      displayName: fileName,
+      mimeType,
+      fileSize,
+      purpose,
+      uploadUrl,
+      keyFingerprint: geminiKeyFingerprint(assignedKey)
+    }, secret),
     totalKeys: keys.length,
     quota: {
       usedMinutes: quota.usedMinutes,

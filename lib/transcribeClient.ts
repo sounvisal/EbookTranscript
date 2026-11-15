@@ -1,5 +1,7 @@
+import { MAX_INLINE_UPLOAD_BYTES, MAX_MEDIA_UPLOAD_BYTES } from '@/lib/uploadLimits'
+import { recoverPendingMedia, savePendingMedia } from '@/lib/mediaStorage'
 import type { TranscriptSegment } from '@/lib/transcript'
-import { prepareMediaForUpload } from '@/lib/clientAudio'
+import { getMediaDuration, prepareMediaForUpload } from '@/lib/clientAudio'
 import { useTranscriptStore } from '@/store/transcriptStore'
 
 export type TranscribeProgressEvent =
@@ -7,11 +9,66 @@ export type TranscribeProgressEvent =
   | { type: 'progress'; progress: number }
 
 export type TranscribeResult = {
+  id?: string
+  alreadySaved?: boolean
   text: string
   segments?: TranscriptSegment[]
   language?: string
   duration?: number
   source?: string
+  cacheId?: string
+}
+
+type TranscriptionJob = {
+  status: 'queued' | 'running' | 'interrupted' | 'complete' | 'failed'
+  progress: number
+  error?: string
+  transcriptId?: string
+  result?: TranscribeResult
+}
+
+async function requestTranscriptionJob(payload: object): Promise<string> {
+  const response = await fetch('/api/transcribe/jobs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  })
+  if (!response.ok) throw new Error(await readError(response, 'Unable to start transcription.'))
+  return (await response.json()).id
+}
+
+export async function resumeTranscriptionJob(
+  id: string,
+  onEvent?: (event: TranscribeProgressEvent) => void,
+  signal?: AbortSignal
+) {
+  await requestTranscriptionJob({ id })
+  return waitForTranscriptionJob(id, onEvent, signal)
+}
+
+async function waitForTranscriptionJob(
+  id: string,
+  onEvent?: (event: TranscribeProgressEvent) => void,
+  signal?: AbortSignal
+): Promise<TranscribeResult> {
+  const deadline = Date.now() + 12 * 60 * 1000
+  let resumed = false
+  while (Date.now() < deadline) {
+    const response = await fetch(`/api/transcribe/jobs?id=${encodeURIComponent(id)}`, { cache: 'no-store', signal })
+    if (!response.ok) throw new Error(await readError(response, 'Open Recent jobs to reconnect.'))
+    const job: TranscriptionJob = await response.json()
+    if (job.status === 'complete' && job.transcriptId && job.result) {
+      return { ...job.result, id: job.transcriptId, alreadySaved: true }
+    }
+    if (job.status === 'failed') throw new Error(job.error || 'Transcription timed out. Please upload the file again.')
+    if (job.status === 'interrupted' && !resumed) {
+      resumed = true
+      await requestTranscriptionJob({ id })
+    }
+    onEvent?.({ type: 'progress', progress: job.progress })
+    await new Promise((resolve) => setTimeout(resolve, 2000))
+  }
+  throw new Error('Transcription is still in progress. Open Recent jobs to reconnect.')
 }
 
 type StreamEvent =
@@ -30,6 +87,13 @@ function inferMimeType(file: File): string {
   }
   const ext = file.name.split('.').pop()?.toLowerCase()
   switch (ext) {
+    case 'pdf': return 'application/pdf'
+    case 'txt': return 'text/plain'
+    case 'md': return 'text/markdown'
+    case 'csv': return 'text/csv'
+    case 'json': return 'application/json'
+    case 'doc': return 'application/msword'
+    case 'docx': return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     case 'mp4':
     case 'm4v':
       return 'video/mp4'
@@ -110,40 +174,60 @@ async function uploadToResumableUrl(
   })
 }
 
-/**
- * Server Upload Proxy fallback (/api/upload-proxy) for environments where direct
- * browser connections to Google are blocked (e.g. strict corporate ad blockers).
- * For files <= 4MB, proxies the entire file in one 'upload, finalize' call.
- */
-async function uploadViaServerProxy(
-  uploadUrl: string,
-  file: File,
-  onProgress?: (percent: number) => void
-): Promise<{ uri: string; name: string; mimeType: string }> {
-  onProgress?.(15)
-
-  const uploadRes = await fetch('/api/upload-proxy', {
+async function uploadViaServerProxy(uploadToken: string, file: File) {
+  const response = await fetch('/api/upload-proxy', {
     method: 'POST',
-    headers: {
-      'x-upload-url': uploadUrl,
-      'x-upload-offset': '0',
-      'x-upload-command': 'upload, finalize'
-    },
+    headers: { 'x-upload-token': uploadToken },
     body: file
   })
+  if (!response.ok) throw new Error(await readError(response, 'Failed to upload media.'))
+}
 
-  if (!uploadRes.ok) {
-    const errJson = await uploadRes.json().catch(() => null)
-    throw new Error(errJson?.error || `Proxy upload failed (${uploadRes.status})`)
+async function readError(response: Response, fallback: string) {
+  const data = await response.json().catch(() => null)
+  return data?.error || fallback
+}
+
+/** Reserve and upload a file for a transcription or summary request. */
+export async function uploadMediaForProcessing(
+  file: File,
+  purpose: 'transcription' | 'report',
+  onProgress?: (progress: number) => void,
+  preferredKeyIndex?: number
+): Promise<string> {
+  if (!file.size || file.size > MAX_MEDIA_UPLOAD_BYTES) {
+    throw new Error('Choose a file within the supported upload size.')
+  }
+  const requestSession = async () => {
+    const response = await fetch('/api/upload-session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fileName: file.name,
+        mimeType: inferMimeType(file),
+        fileSize: file.size,
+        purpose,
+        preferredKeyIndex
+      })
+    })
+    if (!response.ok) throw new Error(await readError(response, 'Unable to start the upload.'))
+    return await response.json() as { uploadUrl: string; uploadToken: string }
   }
 
-  const data = await uploadRes.json().catch(() => ({}))
-  if (!data?.file?.uri) {
-    throw new Error('Upload proxy completed but failed to register media file.')
+  const session = await requestSession()
+  try {
+    await uploadToResumableUrl(session.uploadUrl, file, onProgress)
+    return session.uploadToken
+  } catch {
+    if (file.size > MAX_INLINE_UPLOAD_BYTES) {
+      throw new Error('Direct upload to Google failed. Check your connection or try another network, or upload a smaller file.')
+    }
+    // The first upload may already have reached Google. Use a fresh session for the fallback.
+    const proxySession = await requestSession()
+    await uploadViaServerProxy(proxySession.uploadToken, file)
+    onProgress?.(99)
+    return proxySession.uploadToken
   }
-
-  onProgress?.(99)
-  return data.file
 }
 
 import type { AdvancedOptions } from '@/store/transcriptStore'
@@ -224,199 +308,59 @@ async function readTranscriptionStream(
   return result
 }
 
-/**
- * Calls /api/transcribe in streaming mode and forwards real progress events.
- * For files <= 25MB (like 5MB videos), streams directly to /api/transcribe where ffmpeg
- * extracts a compact 120KB MP3 in <100ms and sends it inline to Gemini for 1-2s completion.
- * For larger files (up to 2GB), uses Resumable Gemini Files API upload.
- */
 export async function transcribeWithProgress(
   input: { file?: File; url?: string },
   onEvent?: (event: TranscribeProgressEvent) => void,
   options?: AdvancedOptions,
   preferredKeyIndex?: number
 ): Promise<TranscribeResult> {
-  let requestInit: RequestInit = { method: 'POST' }
+  if (!input.file) throw new Error('Please select an audio or video file to transcribe.')
+  if (input.file.size > MAX_MEDIA_UPLOAD_BYTES) throw new Error('This file exceeds the supported upload size.')
+  const accountId = useTranscriptStore.getState().accountId
 
-  if (input.file) {
-    onEvent?.({ type: 'status', phase: 'uploading' })
-
-    // Step 0: Optimize media for upload (extract compact speech audio if pure audio or supported)
-    let fileToUpload = input.file
-    let mediaDuration = 0
-    try {
-      const prepared = await prepareMediaForUpload(input.file)
-      fileToUpload = prepared.file
-      mediaDuration = prepared.duration
-      if (prepared.file && prepared.file !== input.file) {
-        useTranscriptStore.getState().setAudioBlob(prepared.file)
-      }
-    } catch {
-      fileToUpload = input.file
-    }
-
-    // FAST DIRECT PATH for files <= 25MB (e.g. 5MB videos):
-    // Directly stream file to /api/transcribe where server-side ffmpeg extracts audio in ~80ms
-    // and transcribes inline in 1-2s (bypassing slow video frame analysis and Files API state wait).
-    if (fileToUpload.size <= 25 * 1024 * 1024) {
-      const formData = new FormData()
-      formData.append('file', fileToUpload)
-      if (mediaDuration > 0) {
-        formData.append('duration', String(mediaDuration))
-      }
-      if (options) {
-        formData.append('options', JSON.stringify(options))
-      }
-      if (typeof preferredKeyIndex === 'number') {
-        formData.append('keyIndex', String(preferredKeyIndex))
-      }
-
-      try {
-        const directHeaders: Record<string, string> = {
-          'x-stream': '1'
-        }
-        if (mediaDuration > 0) {
-          directHeaders['x-duration'] = String(mediaDuration)
-        }
-        if (typeof preferredKeyIndex === 'number') {
-          directHeaders['x-key-index'] = String(preferredKeyIndex)
-        }
-
-        const directRes = await fetch('/api/transcribe', {
-          method: 'POST',
-          headers: directHeaders,
-          body: formData
-        })
-
-        if (directRes.ok && directRes.body) {
-          return await readTranscriptionStream(directRes.body, onEvent)
-        }
-
-        if (directRes.status === 401 || directRes.status === 429) {
-          const errData = await directRes.json().catch(() => null)
-          throw new Error(errData?.error || 'Transcription failed.')
-        }
-
-        console.warn(`Direct upload returned status ${directRes.status}; falling back to Files API...`)
-      } catch (directErr: any) {
-        if (directErr?.message && (directErr.message.includes('sign in') || directErr.message.includes('limit reached') || directErr.message.includes('quota'))) {
-          throw directErr
-        }
-        console.warn('Fast direct upload attempt failed; falling back to Files API upload...', directErr)
-      }
-    }
-
-    // 1. Get direct upload authorization & rotated key from server
-    const requestSession = async () => {
-      const sessionRes = await fetch('/api/upload-session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fileName: fileToUpload.name,
-          mimeType: inferMimeType(fileToUpload),
-          fileSize: fileToUpload.size,
-          clientOrigin: typeof window !== 'undefined' ? window.location.origin : undefined,
-          preferredKeyIndex
-        })
-      })
-
-      if (!sessionRes.ok) {
-        const errData = await sessionRes.json().catch(() => null)
-        throw new Error(errData?.error || 'Please sign in to transcribe files.')
-      }
-
-      return (await sessionRes.json()) as {
-        keyIndex: number
-        host: string
-        uploadUrl?: string
-      }
-    }
-
-    let { keyIndex, host, uploadUrl } = await requestSession()
-
-    // 2. Upload file: prioritize direct resumable upload (supports up to 2GB, 0 Vercel limits, no 8MB chunk error)
-    let uploadedFile: { uri: string; name: string; mimeType: string } | null = null
-
-    if (uploadUrl) {
-      try {
-        uploadedFile = await uploadToResumableUrl(uploadUrl, fileToUpload, (progress) => {
-          onEvent?.({ type: 'progress', progress })
-        })
-      } catch (directErr: any) {
-        console.warn('Direct resumable upload attempt failed; falling back to authenticated server proxy...', directErr)
-        try {
-          uploadedFile = await uploadViaServerProxy(uploadUrl, fileToUpload, (progress) => {
-            onEvent?.({ type: 'progress', progress })
-          })
-        } catch (proxyErr) {
-          // Retry with a fresh upload session if needed
-          try {
-            console.log('Retrying large file upload with fresh upload session...')
-            const retrySession = await requestSession()
-            keyIndex = retrySession.keyIndex
-            host = retrySession.host
-            uploadUrl = retrySession.uploadUrl
-
-            if (uploadUrl) {
-              uploadedFile = await uploadViaServerProxy(uploadUrl, fileToUpload, (progress) => {
-                onEvent?.({ type: 'progress', progress })
-              })
-            } else {
-              throw proxyErr || directErr
-            }
-          } catch (retryErr) {
-            throw retryErr || proxyErr || directErr
-          }
-        }
-      }
+  onEvent?.({ type: 'status', phase: 'uploading' })
+  let file = input.file
+  let duration = 0
+  try {
+    if (file.size > MAX_INLINE_UPLOAD_BYTES) {
+      duration = await getMediaDuration(file, false)
     } else {
-      throw new Error('Upload session URL not available. Please try again.')
+      const prepared = await prepareMediaForUpload(file)
+      file = prepared.file
+      duration = prepared.duration
+      if (file !== input.file && useTranscriptStore.getState().file === input.file) {
+        useTranscriptStore.getState().setAudioBlob(file)
+      }
     }
+  } catch {
+    file = input.file
+  }
 
-    if (!uploadedFile?.uri) {
-      throw new Error('Upload completed but did not return a valid file URI.')
-    }
+  if (file.size <= MAX_INLINE_UPLOAD_BYTES && duration < 150) {
+    const formData = new FormData()
+    formData.append('file', file, input.file.name)
+    if (duration > 0) formData.append('duration', String(duration))
+    if (options) formData.append('options', JSON.stringify(options))
+    if (typeof preferredKeyIndex === 'number') formData.append('keyIndex', String(preferredKeyIndex))
 
-    onEvent?.({ type: 'status', phase: 'processing', duration: mediaDuration })
-
-    // 3. Send lightweight 200-byte JSON request to /api/transcribe
-    requestInit = {
+    const response = await fetch('/api/transcribe', {
       method: 'POST',
-      headers: {
-        'x-stream': '1',
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        fileUri: uploadedFile.uri,
-        mimeType: uploadedFile.mimeType || fileToUpload.type || 'audio/wav',
-        displayName: input.file.name,
-        duration: mediaDuration,
-        keyIndex: keyIndex,
-        options
-      })
+      headers: { 'x-stream': '1' },
+      body: formData
+    })
+    if (response.ok && response.body) return readTranscriptionStream(response.body, onEvent)
+    if (response.status !== 413) {
+      throw new Error(await readError(response, `Transcription request failed (${response.status}).`))
     }
-  } else {
-    throw new Error('Please select an audio or video file to transcribe.')
   }
 
-  const res = await fetch('/api/transcribe', requestInit)
-
-  // Errors before the stream starts (auth, etc.) come back as plain JSON.
-  if (!res.ok || !res.body) {
-    let errorMsg = ''
-    try {
-      const data = await res.json()
-      errorMsg = data?.error || data?.message || ''
-    } catch {
-      try {
-        errorMsg = await res.text()
-      } catch {}
-    }
-    if (res.status === 401) {
-      throw new Error(errorMsg || 'Please sign in to transcribe files.')
-    }
-    throw new Error(errorMsg || `Server transcription request failed (${res.status} ${res.statusText || 'Error'})`)
-  }
-
-  return await readTranscriptionStream(res.body, onEvent)
+  const uploadToken = await uploadMediaForProcessing(file, 'transcription', (progress) => {
+    onEvent?.({ type: 'progress', progress })
+  }, preferredKeyIndex)
+  onEvent?.({ type: 'status', phase: 'processing', duration })
+  const id = await requestTranscriptionJob({ uploadToken, duration, options })
+  if (accountId) await savePendingMedia(accountId, id, input.file).catch(() => {})
+  const result = await waitForTranscriptionJob(id, onEvent)
+  if (accountId && result.id) await recoverPendingMedia(accountId, id, result.id).catch(() => {})
+  return result
 }

@@ -1,3 +1,4 @@
+import { cleanGeminiModelName, DEFAULT_GEMINI_MODELS, getConfiguredKeys, getConfiguredModels } from './geminiConfig'
 import { randomBytes } from 'node:crypto'
 import { checkTranscriptIncompleteness } from './transcript'
 
@@ -248,31 +249,8 @@ const PERMISSIVE_SAFETY_SETTINGS = [
   { category: 'HARM_CATEGORY_CIVIC_INTEGRITY', threshold: 'BLOCK_NONE' }
 ]
 
-/**
- * Sanitizes model name strings:
- * - Decodes URL-encoded entities (e.g. %20, %22, %2F)
- * - Strips trailing method colons and query parameters (e.g. :streamGenerateContent, :generateContent)
- * - Strips quotes, backslashes, backticks, spaces, tabs, and newlines (prevents "unexpected model name format" 400 errors)
- * - Strips single or repeated "models/" prefixes so path interpolation (/models/${cleanModel}) remains valid
- * - Restricts characters strictly to [a-zA-Z0-9_.-]
- * - Defaults safely to 'gemini-2.5-flash'
- */
-export function cleanGeminiModelName(modelName?: string | null): string {
-  if (!modelName) return 'gemini-2.5-flash'
-  let cleaned = String(modelName).trim()
-  try {
-    cleaned = decodeURIComponent(cleaned)
-  } catch {}
-  cleaned = cleaned
-    .replace(/:.*$/, '')
-    .replace(/["'\\`\s\r\n\t]/g, '')
-    .replace(/^(models\/)+/i, '')
-    .replace(/[^a-zA-Z0-9_.-]/g, '')
-  return cleaned || 'gemini-2.5-flash'
-}
-
 export function buildGeminiGenerationConfig(modelName: string, responseMimeType?: string) {
-  const cleanModel = cleanGeminiModelName(modelName)
+  const cleanModel = cleanGeminiModelName(modelName) || DEFAULT_GEMINI_MODELS[0]
   const config: Record<string, any> = {
     maxOutputTokens: 65536,
     temperature: 0.1
@@ -298,7 +276,7 @@ export function buildGeminiGenerationConfig(modelName: string, responseMimeType?
 }
 
 export async function generateGeminiTranscript(apiKey: string, input: { modelName: string; prompt: string; fileUri: string; mimeType: string }) {
-  const cleanModel = cleanGeminiModelName(input.modelName)
+  const cleanModel = cleanGeminiModelName(input.modelName) || DEFAULT_GEMINI_MODELS[0]
   const response = await geminiRequest<GeminiGenerateContentResponse>(
     apiKey,
     `/${GEMINI_API_VERSION}/models/${cleanModel}:generateContent`,
@@ -354,7 +332,7 @@ export async function streamGeminiTranscript(
     ? { inlineData: { mimeType: input.mimeType, data: input.inlineData.toString('base64') } }
     : { fileData: { mimeType: input.mimeType, fileUri: input.fileUri as string } }
 
-  const cleanModel = cleanGeminiModelName(input.modelName)
+  const cleanModel = cleanGeminiModelName(input.modelName) || DEFAULT_GEMINI_MODELS[0]
   const body = JSON.stringify({
     contents: [
       {
@@ -482,7 +460,7 @@ export async function streamGeminiTranscript(
 }
 
 export async function generateGeminiText(apiKey: string, input: { modelName: string; prompt: string }) {
-  const cleanModel = cleanGeminiModelName(input.modelName)
+  const cleanModel = cleanGeminiModelName(input.modelName) || DEFAULT_GEMINI_MODELS[0]
   const response = await geminiRequest<GeminiGenerateContentResponse>(
     apiKey,
     `/${GEMINI_API_VERSION}/models/${cleanModel}:generateContent`,
@@ -527,19 +505,13 @@ export async function transcribeAudioBufferWithGemini(
   mimeType: string,
   displayName: string = 'telegram-audio'
 ): Promise<{ text: string; language: string; model: string }> {
-  const keys = (process.env.GEMINI_API_KEYS || process.env.GEMINI_API_KEY || '')
-    .split(',')
-    .map((k) => k.trim().replace(/["'\r\n]/g, ''))
-    .filter(Boolean)
+  const keys = getConfiguredKeys()
 
   if (keys.length === 0) {
     throw new Error('No Gemini API keys configured in environment.')
   }
 
-  const models = (process.env.GEMINI_MODELS || 'gemini-2.5-flash-lite,gemini-2.5-flash,gemini-2.0-flash,gemini-1.5-flash')
-    .split(',')
-    .map((m) => cleanGeminiModelName(m))
-    .filter(Boolean)
+  const models = getConfiguredModels()
 
   const prompt = [
     'You are an expert multilingual audio transcription AI specialized in automatic language detection (Khmer / ភាសាខ្មែរ, English, and bilingual speech) and noisy audio extraction.',

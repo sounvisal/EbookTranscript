@@ -2,20 +2,20 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import {
-  cleanGeminiModelName,
   deleteGeminiFile,
   generateGeminiFileAnalysis,
   generateGeminiText,
   uploadGeminiFile,
   waitForGeminiFile
 } from '@/lib/gemini'
-import { MAX_MEDIA_UPLOAD_BYTES } from '@/lib/uploadLimits'
+import { GEMINI_UNAVAILABLE, getConfiguredKeys, getConfiguredModels, isGeminiDemoEnabled } from '@/lib/geminiConfig'
+import { geminiKeyFingerprint, readUploadToken } from '@/lib/uploadSession'
+import { MAX_INLINE_UPLOAD_BYTES } from '@/lib/uploadLimits'
 import { getOptimalKeyOrder, recordKeySuccess, recordKeyFailure } from '@/lib/fleet'
 
 export const runtime = 'nodejs'
+export const maxDuration = 300
 
-const DEFAULT_FALLBACK_MODELS = ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']
-const MAX_LOCAL_FILE_BYTES = MAX_MEDIA_UPLOAD_BYTES
 const TEXT_INPUT_LIMIT = 120000
 
 type ReportMode = 'meeting' | 'summary'
@@ -107,33 +107,6 @@ function isRetryableGeminiError(error: unknown) {
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-function getGeminiApiKeys(): string[] {
-  const multi = (process.env.GEMINI_API_KEYS || '')
-    .split(',')
-    .map((key) => key.trim().replace(/["'\r\n]/g, ''))
-    .filter(Boolean)
-  if (multi.length) {
-    return multi
-  }
-  const single = (process.env.GEMINI_API_KEY || '').trim().replace(/["'\r\n]/g, '')
-  return single && single !== 'AIzaSyYourGoogleApiKeyHere' ? [single] : []
-}
-
-function getGeminiModels(): string[] {
-  const multi = (process.env.GEMINI_MODELS || '')
-    .split(',')
-    .map((model) => cleanGeminiModelName(model))
-    .filter(Boolean)
-  if (multi.length) {
-    return multi
-  }
-  const single = cleanGeminiModelName(process.env.GEMINI_MODEL)
-  if (single && single !== DEFAULT_FALLBACK_MODELS[0]) {
-    return [single, ...DEFAULT_FALLBACK_MODELS.filter((m) => m !== single)]
-  }
-  return DEFAULT_FALLBACK_MODELS
 }
 
 async function withGeminiRetry<T>(operation: () => Promise<T>, label: string) {
@@ -256,17 +229,20 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Please sign in to generate reports.' }, { status: 401 })
     }
 
+    const keys = getConfiguredKeys()
+    if (!keys.length && !isGeminiDemoEnabled()) {
+      return NextResponse.json({ error: GEMINI_UNAVAILABLE }, { status: 503 })
+    }
     const quota = await checkUserQuota(session.user.id, session.user.email, session.user.role)
     if (!quota.allowed) {
       return NextResponse.json({ error: quota.error || 'Daily usage quota reached.' }, { status: 429 })
     }
 
-    const keys = getGeminiApiKeys()
-    const models = getGeminiModels()
+    const models = getConfiguredModels()
     const contentType = req.headers.get('content-type') || ''
 
-    if (contentType.includes('application/json')) {
-      const body = await req.json()
+    const body = contentType.includes('application/json') ? await req.json() : null
+    if (contentType.includes('application/json') && body?.mode !== 'summary') {
       const mode: ReportMode = body?.mode === 'meeting' ? 'meeting' : 'summary'
       const transcript = typeof body?.transcript === 'string' ? body.transcript.trim() : ''
 
@@ -332,20 +308,26 @@ export async function POST(req: Request) {
       throw lastError instanceof Error ? lastError : new Error('Failed to generate meeting report.')
     }
 
-    const formData = await req.formData()
-    const file = formData.get('file') as File | null
-
-    if (!file || file.size <= 0) {
-      throw new Error('Choose an audio, video, PDF, or document file first.')
+    let file: File | null = null
+    const upload = body?.mode === 'summary' ? readUploadToken(body.uploadToken, session.user.id) : null
+    if (body?.mode === 'summary' && (!upload || upload.purpose !== 'report')) {
+      return NextResponse.json({ error: 'Invalid or expired report upload session.' }, { status: 403 })
     }
 
-    if (file.size > MAX_LOCAL_FILE_BYTES) {
-      throw new Error(`Uploads are limited to ${Math.round(MAX_LOCAL_FILE_BYTES / 1024 / 1024)}MB.`)
+    if (!upload) {
+      const value = (await req.formData()).get('file')
+      if (!(value instanceof File) || !value.size) {
+        throw new Error('Choose an audio, video, PDF, or document file first.')
+      }
+      if (value.size > MAX_INLINE_UPLOAD_BYTES) {
+        return NextResponse.json({ error: 'Use a resumable report upload for files above 4 MB.' }, { status: 413 })
+      }
+      file = value
     }
 
-    const fileName = 'name' in file && typeof file.name === 'string' ? file.name : 'uploaded-file'
-    const displayName = sanitizeFileName(fileName, 'uploaded-file')
-    const mimeType = normalizeMimeType(file.type) || inferMimeTypeFromName(displayName)
+    const displayName = sanitizeFileName(upload?.displayName || file?.name || '', 'uploaded-file')
+    const fileType = normalizeMimeType(file?.type)
+    const mimeType = upload?.mimeType || (fileType === 'application/octet-stream' ? '' : fileType) || inferMimeTypeFromName(displayName)
 
     if (!isSupportedReportMimeType(mimeType)) {
       throw new Error('Supported report uploads are audio, video, PDF, text, Markdown, CSV, JSON, DOC, and DOCX files.')
@@ -360,25 +342,28 @@ export async function POST(req: Request) {
       }, { status: 200 })
     }
 
-    const fileBuffer = Buffer.from(await file.arrayBuffer())
+    const fileBuffer = file ? Buffer.from(await file.arrayBuffer()) : null
     let lastError: unknown
-    const orderedKeys = getOptimalKeyOrder(undefined, keys)
+    const orderedKeys = getOptimalKeyOrder(undefined, keys).filter(({ key }) =>
+      !upload || geminiKeyFingerprint(key) === upload.keyFingerprint
+    )
+    if (!orderedKeys.length) {
+      return NextResponse.json({ error: 'The report upload session expired. Please upload again.' }, { status: 403 })
+    }
 
     for (let kIndex = 0; kIndex < orderedKeys.length; kIndex += 1) {
       const { key: apiKey, index: actualKeyIndex } = orderedKeys[kIndex]
-      let uploadedFileName = ''
+      let uploadedFileName = upload?.fileName || ''
+      let reportCompleted = false
 
       try {
-        const uploadResult = await withGeminiRetry(
-          () =>
-            uploadGeminiFile(apiKey, {
-              buffer: fileBuffer,
-              mimeType,
-              displayName
-            }),
-          'report upload'
-        )
-        uploadedFileName = uploadResult.file.name
+        if (fileBuffer) {
+          const uploadResult = await withGeminiRetry(
+            () => uploadGeminiFile(apiKey, { buffer: fileBuffer, mimeType, displayName }),
+            'report upload'
+          )
+          uploadedFileName = uploadResult.file.name
+        }
 
         const uploadedFile = await waitForGeminiFile(apiKey, uploadedFileName)
 
@@ -397,6 +382,7 @@ export async function POST(req: Request) {
             )
             recordKeySuccess(actualKeyIndex)
 
+            reportCompleted = true
             return NextResponse.json({
               kind: 'summary',
               text,
@@ -422,7 +408,7 @@ export async function POST(req: Request) {
         }
         throw error
       } finally {
-        if (uploadedFileName) {
+        if (uploadedFileName && (!upload || reportCompleted)) {
           try {
             await deleteGeminiFile(apiKey, uploadedFileName)
           } catch (cleanupError) {
@@ -446,6 +432,6 @@ export async function POST(req: Request) {
       statusCode = 503
     }
 
-    return NextResponse.json({ error: errorMessage }, { status: statusCode })
+    return NextResponse.json({ error: statusCode === 500 ? 'Failed to generate report.' : errorMessage }, { status: statusCode })
   }
 }

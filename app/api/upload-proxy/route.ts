@@ -1,72 +1,48 @@
 import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
+import { MAX_INLINE_UPLOAD_BYTES } from '@/lib/uploadLimits'
+import { readUploadToken } from '@/lib/uploadSession'
 
 export const maxDuration = 60
 
-/**
- * Server Upload Proxy for Google Gemini Resumable Uploads.
- * 
- * Bypasses both:
- * 1. Vercel's 4.5MB payload limit (client sends in 3.5MB slices).
- * 2. Google AI Studio's client-side regional IP restrictions (Cambodia, etc.).
- */
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions)
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const upload = readUploadToken(req.headers.get('x-upload-token'), session.user.id)
+  if (!upload) return NextResponse.json({ error: 'Invalid or expired upload session.' }, { status: 403 })
+  if (upload.fileSize > MAX_INLINE_UPLOAD_BYTES) {
+    return NextResponse.json({ error: 'This file requires a direct upload to Google.' }, { status: 413 })
   }
-
-  const uploadUrl = req.headers.get('x-upload-url')
-  const uploadOffset = req.headers.get('x-upload-offset') || '0'
-  const uploadCommand = req.headers.get('x-upload-command') || 'upload, finalize'
-
-  if (!uploadUrl || !uploadUrl.startsWith('https://generativelanguage.googleapis.com/upload/v1beta/files')) {
-    return NextResponse.json({ error: 'Invalid or missing upload session URL' }, { status: 400 })
+  if (Number(req.headers.get('content-length')) !== upload.fileSize) {
+    return NextResponse.json({ error: 'Upload size does not match the session.' }, { status: 400 })
   }
 
   try {
-    const chunkBuffer = await req.arrayBuffer()
-    const chunkLength = chunkBuffer.byteLength
+    const file = await req.arrayBuffer()
+    if (file.byteLength !== upload.fileSize) {
+      return NextResponse.json({ error: 'Upload size does not match the session.' }, { status: 400 })
+    }
 
-    const googleRes = await fetch(uploadUrl, {
+    const response = await fetch(upload.uploadUrl, {
       method: 'POST',
+      redirect: 'error',
+      signal: AbortSignal.timeout(50_000),
       headers: {
-        'Content-Length': String(chunkLength),
-        'X-Goog-Upload-Offset': uploadOffset,
-        'X-Goog-Upload-Command': uploadCommand
+        'Content-Length': String(file.byteLength),
+        'X-Goog-Upload-Offset': '0',
+        'X-Goog-Upload-Command': 'upload, finalize'
       },
-      body: chunkBuffer
+      body: file
     })
-
-    const responseText = await googleRes.text()
-
-    if (!googleRes.ok) {
-      console.warn(`Google upload chunk error (${googleRes.status}):`, responseText)
-      let parsedError = ''
-      try {
-        const json = JSON.parse(responseText)
-        parsedError = json.error?.message || json.message || ''
-      } catch {
-        parsedError = responseText.slice(0, 150)
-      }
-      return NextResponse.json(
-        { error: parsedError || `Google upload failed (${googleRes.status})` },
-        { status: googleRes.status }
-      )
+    const data = await response.json().catch(() => null)
+    if (!response.ok || data?.file?.name !== upload.fileName) {
+      return NextResponse.json({ error: 'Google could not finalize this upload. Please try again.' }, { status: 502 })
     }
 
-    try {
-      const data = JSON.parse(responseText)
-      return NextResponse.json(data)
-    } catch {
-      return NextResponse.json({ success: true, status: googleRes.status })
-    }
-  } catch (error) {
-    console.error('Upload proxy failure:', error)
-    return NextResponse.json(
-      { error: 'Failed to proxy media chunk to upload service' },
-      { status: 500 }
-    )
+    return NextResponse.json(data)
+  } catch {
+    return NextResponse.json({ error: 'Failed to upload media to Google.' }, { status: 502 })
   }
 }

@@ -1,4 +1,9 @@
 {
+  "functions": {
+    "app/api/queues/transcription/route.ts": {
+      "experimentalTriggers": [{ "type": "queue/v2beta", "topic": "transcript-jobs" }]
+    }
+  },
   "crons": [
     {
       "path": "/api/cron/daily-report",

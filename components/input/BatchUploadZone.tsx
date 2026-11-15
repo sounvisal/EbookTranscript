@@ -12,7 +12,7 @@ import { transcribeWithProgress } from '@/lib/transcribeClient'
 import ReportErrorButton from '@/components/common/ReportErrorButton'
 import AdvancedOptionsDrawer from './AdvancedOptionsDrawer'
 import { useTranscriptStore } from '@/store/transcriptStore'
-import { saveMediaBlob } from '@/lib/mediaStorage'
+import { getMediaBlob, saveMediaBlob } from '@/lib/mediaStorage'
 
 // Role-based batch limits: 30 for standard users, 100 for admins
 const USER_BATCH_LIMIT = 30
@@ -40,6 +40,7 @@ type BatchTranscript = {
   language?: string
   duration?: number
   alreadySaved?: boolean
+  cacheId?: string
 }
 
 type BatchJob = {
@@ -65,6 +66,7 @@ function delay(ms: number) {
 
 export default function BatchUploadZone() {
   const { data: session } = useSession()
+  const accountId = session?.user?.id
   const isAdmin = session?.user?.role === 'admin'
   const maxBatchFiles = isAdmin ? ADMIN_BATCH_LIMIT : USER_BATCH_LIMIT
 
@@ -74,7 +76,6 @@ export default function BatchUploadZone() {
   const [totalFleetKeys, setTotalFleetKeys] = useState<number>(9)
   const [concurrency, setConcurrency] = useState<number>(DEFAULT_CONCURRENT_JOBS)
   const savedRef = useRef<Set<string>>(new Set())
-  const objectUrlsRef = useRef<Map<string, string>>(new Map())
 
   // Detect total configured keys in the Gemini Fleet on mount
   useEffect(() => {
@@ -123,25 +124,17 @@ export default function BatchUploadZone() {
   const removeJob = (id: string) => {
     if (running) return
     // Revoke Object URL to prevent memory leak
-    const url = objectUrlsRef.current.get(id)
-    if (url) {
-      URL.revokeObjectURL(url)
-      objectUrlsRef.current.delete(id)
-    }
     setJobs((current) => current.filter((job) => job.id !== id))
   }
 
   const clearAll = () => {
     if (running) return
-    // Revoke all Object URLs to prevent memory leak
-    objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url))
-    objectUrlsRef.current.clear()
     setJobs([])
     savedRef.current = new Set()
   }
 
-  const saveToHistory = async (job: BatchJob, plainText: string) => {
-    if (savedRef.current.has(job.id)) return
+  const saveToHistory = useCallback(async (job: BatchJob, plainText: string) => {
+    if (!accountId || useTranscriptStore.getState().accountId !== accountId || savedRef.current.has(job.id)) return
     savedRef.current.add(job.id)
     try {
       const res = await fetch('/api/history', {
@@ -149,6 +142,8 @@ export default function BatchUploadZone() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           text: plainText,
+          expectedUserId: accountId,
+          cacheId: job.transcript?.cacheId,
           source: 'file',
           filename: job.file.name,
           duration: job.transcript?.duration || 0,
@@ -161,14 +156,16 @@ export default function BatchUploadZone() {
         if (data?.id && job.transcript) {
           job.transcript.id = data.id
           job.transcript.alreadySaved = true
-          saveMediaBlob(data.id, job.file, job.file.name).catch(() => {})
+          if (res.status === 201 || !await getMediaBlob(accountId, data.id)) {
+            await saveMediaBlob(accountId, data.id, job.file).catch(() => {})
+          }
         }
       }
     } catch (error) {
       console.error('Batch autosave failed:', error)
       savedRef.current.delete(job.id)
     }
-  }
+  }, [accountId])
 
   const runJob = useCallback(
     async (job: BatchJob, workerIndex: number = 0) => {
@@ -194,6 +191,9 @@ export default function BatchUploadZone() {
         )
 
         const transcript: BatchTranscript = {
+          id: data.id,
+          alreadySaved: data.alreadySaved,
+          cacheId: data.cacheId,
           text: data.text,
           segments: data.segments,
           language: data.language,
@@ -201,8 +201,14 @@ export default function BatchUploadZone() {
         }
         updateJob(job.id, { status: 'complete', progress: 100, transcript })
 
-        const plainText = getPlainTranscriptText(transcript.text || '', transcript.segments)
-        await saveToHistory({ ...job, transcript }, plainText)
+        if (transcript.id && accountId && useTranscriptStore.getState().accountId === accountId) {
+          if (!await getMediaBlob(accountId, transcript.id)) {
+            await saveMediaBlob(accountId, transcript.id, job.file).catch(() => {})
+          }
+        } else if (!transcript.id) {
+          const plainText = getPlainTranscriptText(transcript.text || '', transcript.segments)
+          await saveToHistory({ ...job, transcript }, plainText)
+        }
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : 'Transcription failed'
         updateJob(job.id, {
@@ -224,7 +230,7 @@ export default function BatchUploadZone() {
         }).catch(() => {})
       }
     },
-    [updateJob, totalFleetKeys]
+    [updateJob, totalFleetKeys, saveToHistory, accountId]
   )
 
   const runAll = async () => {
@@ -501,13 +507,6 @@ export default function BatchUploadZone() {
                     <button
                       onClick={() => {
                         const store = useTranscriptStore.getState()
-                        store.setFile(job.file)
-                        // Reuse or create Object URL and track it
-                        let url = objectUrlsRef.current.get(job.id)
-                        if (!url) {
-                          url = URL.createObjectURL(job.file)
-                          objectUrlsRef.current.set(job.id, url)
-                        }
                         store.setTranscriptWithAudio(
                           {
                             id: job.transcript?.id,
@@ -519,7 +518,8 @@ export default function BatchUploadZone() {
                             kind: 'transcript',
                             alreadySaved: true
                           },
-                          url
+                          null,
+                          job.file
                         )
                       }}
                       className="flex items-center gap-1.5 rounded-lg border border-purple-200 dark:border-purple-800/80 bg-purple-50 dark:bg-purple-950/50 px-3 py-1.5 text-xs font-semibold text-purple-700 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-900/60 transition-colors cursor-pointer"
@@ -574,4 +574,4 @@ function StatusBadge({ status }: { status: BatchJobStatus }) {
   }
   const { label, className } = config[status]
   return <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${className}`}>{label}</span>
-}
+}
