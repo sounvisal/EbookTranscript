@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from 'react'
 import { formatTimestamp } from '@/lib/transcript'
-import type { TranscriptionActivity } from '@/lib/transcriptionActivity'
+import { transcriptionStageLabels, type TranscriptionActivity } from '@/lib/transcriptionActivity'
+import styles from './MediaProgress.module.css'
 
 export default function MediaProgress({ activity, fileName }: { activity: TranscriptionActivity; fileName?: string }) {
   const { stage, uploadPercent, sections } = activity
@@ -14,31 +15,38 @@ export default function MediaProgress({ activity, fileName }: { activity: Transc
     return () => clearInterval(timer)
   }, [])
 
+  const isUploading = stage === 'uploading'
+  const sectionCount = stage === 'processing' ? sections : undefined
+  const sectionLabel = sectionCount && `${sectionCount.completed} of ${sectionCount.total} sections complete`
+  const percent = sectionCount ? Math.round((sectionCount.completed / sectionCount.total) * 100)
+    : isUploading ? uploadPercent : undefined
+  const label = sectionCount ? 'Transcription sections' : isUploading ? 'File upload' : transcriptionStageLabels[stage]
+  const elapsedLabel = `Elapsed ${formatTimestamp(elapsed)}`
+
   return (
-    <div className="mt-3 space-y-1.5 text-xs text-slate-600 dark:text-slate-300">
-      {stage === 'uploading' && uploadPercent !== undefined && (
-        <div className="flex items-center gap-3">
-          <progress aria-label={fileName ? `Upload ${fileName}` : 'File upload'} value={uploadPercent} max={100} className="h-2 w-full accent-blue-600" />
-          <span className="font-medium tabular-nums">{uploadPercent}%</span>
+    <div className="mt-4 space-y-2.5 text-xs tabular-nums text-slate-600 dark:text-slate-300">
+      <div className="flex items-baseline justify-between gap-3">
+        <span className={sectionLabel ? 'font-medium' : ''}>{sectionLabel || elapsedLabel}</span>
+        {percent !== undefined && (
+          <span className="shrink-0 font-semibold text-slate-950 dark:text-white">{percent}%</span>
+        )}
+      </div>
+      <div
+        role="progressbar"
+        aria-label={fileName ? `${label} for ${fileName}` : label}
+        aria-valuenow={percent}
+        aria-valuetext={sectionLabel}
+        className={styles.track}
+      >
+        <span aria-hidden="true" className={percent === undefined ? `${styles.fill} ${styles.indeterminate}` : styles.fill}
+          style={percent === undefined ? undefined : { width: `${percent}%` }} />
+      </div>
+      {sectionCount && (
+        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-slate-600 dark:text-slate-400">
+          <span>{elapsedLabel}</span>
+          {sectionCount.completed === sectionCount.total && <span role="status">Finalizing transcript…</span>}
         </div>
       )}
-      {stage === 'processing' && sections && (
-        <>
-          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 font-medium tabular-nums">
-            <span>{sections.completed} of {sections.total} sections complete</span>
-            <span>{Math.round((sections.completed / sections.total) * 100)}%</span>
-          </div>
-          <progress
-            aria-label={fileName ? `Transcription sections for ${fileName}` : 'Transcription sections'}
-            aria-valuetext={`${sections.completed} of ${sections.total} sections complete`}
-            value={sections.completed}
-            max={sections.total}
-            className="block h-2 w-full accent-blue-600"
-          />
-          {sections.completed === sections.total && <p>Finalizing transcript…</p>}
-        </>
-      )}
-      <p className="tabular-nums text-slate-500 dark:text-slate-400">Elapsed {formatTimestamp(elapsed)}</p>
     </div>
   )
 }

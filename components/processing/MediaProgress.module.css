@@ -1,0 +1,52 @@
+.track {
+  display: block;
+  overflow: hidden;
+  height: 5px;
+  border-radius: 999px;
+  background: #e5e5eb;
+}
+
+:global(.dark) .track {
+  background: #38383f;
+}
+
+.fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--apple-blue, #0071e3);
+  transition: width 360ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+:global(.dark) .fill {
+  background: #0a84ff;
+}
+
+.indeterminate {
+  width: 30%;
+  animation: sweep 1.65s cubic-bezier(0.4, 0, 0.5, 1) infinite;
+}
+
+@keyframes sweep {
+  from { transform: translateX(-105%); }
+  to { transform: translateX(340%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fill { transition: none; }
+  .indeterminate {
+    animation: none;
+    transform: translateX(116.67%);
+  }
+}
+
+@media (forced-colors: active) {
+  .track,
+  :global(.dark) .track {
+    forced-color-adjust: none;
+    background: Canvas;
+    outline: 1px solid CanvasText;
+  }
+  .fill,
+  :global(.dark) .fill { background: Highlight; }
+}
