@@ -27,13 +27,21 @@ type TranscriptionJob = {
   result?: TranscribeResult
 }
 
+class BackgroundJobsUnavailable extends Error {}
+
 async function requestTranscriptionJob(payload: object): Promise<string> {
   const response = await fetch('/api/transcribe/jobs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   })
-  if (!response.ok) throw new Error(await readError(response, 'Unable to start transcription.'))
+  if (!response.ok) {
+    const data = await response.json().catch(() => null)
+    if (response.status === 503 && data?.code === 'DATABASE_MIGRATION_REQUIRED') {
+      throw new BackgroundJobsUnavailable(data.error)
+    }
+    throw new Error(data?.error || `Unable to start transcription (HTTP ${response.status}).`)
+  }
   return (await response.json()).id
 }
 
@@ -358,7 +366,24 @@ export async function transcribeWithProgress(
     onEvent?.({ type: 'progress', progress })
   }, preferredKeyIndex)
   onEvent?.({ type: 'status', phase: 'processing', duration })
-  const id = await requestTranscriptionJob({ uploadToken, duration, options })
+  let id: string
+  try {
+    id = await requestTranscriptionJob({ uploadToken, duration, options })
+  } catch (error) {
+    if (!(error instanceof BackgroundJobsUnavailable)) throw error
+    // Only fall back when the server confirms no job could have been created.
+    // Send the signed reference, never the large file, through the function.
+    onEvent?.({ type: 'status', phase: 'processing', message: 'Keep this tab open until transcription finishes.' })
+    const response = await fetch('/api/transcribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-stream': '1' },
+      body: JSON.stringify({ uploadToken, duration, options })
+    })
+    if (!response.ok || !response.body) {
+      throw new Error(await readError(response, `Transcription request failed (${response.status}).`))
+    }
+    return readTranscriptionStream(response.body, onEvent)
+  }
   if (accountId) await savePendingMedia(accountId, id, input.file).catch(() => {})
   const result = await waitForTranscriptionJob(id, onEvent)
   if (accountId && result.id) await recoverPendingMedia(accountId, id, result.id).catch(() => {})

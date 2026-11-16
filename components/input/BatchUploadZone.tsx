@@ -50,6 +50,7 @@ type BatchJob = {
   progress: number
   transcript?: BatchTranscript
   error?: string
+  message?: string
   assignedKeyIndex?: number
 }
 
@@ -174,6 +175,7 @@ export default function BatchUploadZone() {
         status: 'processing',
         progress: 0,
         error: undefined,
+        message: undefined,
         assignedKeyIndex
       })
 
@@ -184,6 +186,8 @@ export default function BatchUploadZone() {
           (event) => {
             if (event.type === 'progress') {
               updateJob(job.id, { progress: event.progress })
+            } else if (event.type === 'status' && event.message) {
+              updateJob(job.id, { message: event.message })
             }
           },
           advancedOptions,
@@ -461,11 +465,15 @@ export default function BatchUploadZone() {
                 </div>
               )}
 
+              {job.status === 'processing' && job.message && (
+                <p role="status" className="mt-2 text-xs text-slate-600 dark:text-slate-400">{job.message}</p>
+              )}
+
               {job.status === 'error' && (
                 <div className="mt-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 rounded-xl bg-amber-50/90 dark:bg-amber-950/40 p-3 text-xs text-amber-900 dark:text-amber-200 border border-amber-200/60 dark:border-amber-900/50">
                   <div className="flex items-center gap-2">
                     <AlertCircle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
-                    <span className="font-medium text-slate-900 dark:text-white">Unable to transcribe media</span>
+                    <span className="font-medium text-slate-900 dark:text-white">{job.error || 'Unable to transcribe media'}</span>
                   </div>
                   <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
                     <button

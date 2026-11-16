@@ -6,12 +6,30 @@ import { checkUserQuota } from '@/lib/quota'
 import { getConfiguredKeys, GEMINI_UNAVAILABLE } from '@/lib/geminiConfig'
 import { geminiKeyFingerprint, readUploadToken } from '@/lib/uploadSession'
 import { dispatchTranscription, JOB_LEASE_MS, MAX_JOB_ATTEMPTS } from '@/lib/transcriptionJobs'
+import { getDatabaseCapabilities } from '@/lib/databaseCapabilities'
 
 export const maxDuration = 300
 
 export async function GET(req: Request) {
+  try {
+    return await getJobs(req)
+  } catch (error) {
+    console.error('Unable to read transcription jobs:', error)
+    return NextResponse.json({ error: 'Unable to load transcription jobs. Please try again.' }, { status: 503 })
+  }
+}
+
+function migrationRequired() {
+  return NextResponse.json({
+    code: 'DATABASE_MIGRATION_REQUIRED',
+    error: 'Background transcription is not available until the database update is complete.'
+  }, { status: 503 })
+}
+
+async function getJobs(req: Request) {
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (!(await getDatabaseCapabilities()).jobs) return migrationRequired()
   const id = new URL(req.url).searchParams.get('id')
   const where = { userId: session.user.id, expiresAt: { gt: new Date() } }
 
@@ -40,8 +58,21 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
+  try {
+    return await startJob(req)
+  } catch (error) {
+    console.error('Unable to start transcription job:', error)
+    return NextResponse.json({ error: 'Unable to start transcription. Please try again.', code: 'JOB_START_FAILED' }, { status: 503 })
+  }
+}
+
+async function startJob(req: Request) {
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const schema = await getDatabaseCapabilities()
+  // Completion also writes Transcript.cacheId through Prisma's generated selection.
+  // Reject before creating or dispatching anything so a streaming fallback is safe.
+  if (!schema.jobs || !schema.scopedCache) return migrationRequired()
   const userId = session.user.id
   const body = await req.json().catch(() => null)
   if (!body) return NextResponse.json({ error: 'Invalid transcription request.' }, { status: 400 })

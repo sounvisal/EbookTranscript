@@ -23,10 +23,15 @@ export default function RecentTranscriptions({ accountId }: { accountId: string 
     setMessage('')
     try {
       const response = await fetch('/api/transcribe/jobs', { cache: 'no-store' })
-      if (!response.ok) throw new Error()
+      if (!response.ok) {
+        const body = await response.json().catch(() => null)
+        throw new Error(body?.code === 'DATABASE_MIGRATION_REQUIRED'
+          ? 'Recent background jobs are temporarily unavailable. Your saved transcripts are in History.'
+          : 'Could not load recent jobs. Please try again.')
+      }
       setJobs(await response.json())
-    } catch {
-      setMessage('Could not load recent jobs. Please try again.')
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Could not load recent jobs. Please try again.')
     } finally {
       setBusy(false)
     }

@@ -3,6 +3,13 @@ import { prisma } from '@/lib/prisma'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { getPlainTranscriptText } from '@/lib/transcript'
+import { getDatabaseCapabilities } from '@/lib/databaseCapabilities'
+
+// Explicit selection keeps existing history readable before additive migrations.
+const transcriptFields = {
+  id: true, text: true, source: true, filename: true, duration: true,
+  wordCount: true, language: true, createdAt: true, updatedAt: true, userId: true
+} as const
 
 const HISTORY_PAGE_SIZE = 15
 
@@ -15,11 +22,12 @@ export async function GET(req: Request) {
 
     const { searchParams } = new URL(req.url)
     const id = searchParams.get('id')
+    const schema = await getDatabaseCapabilities()
 
     if (id) {
       const transcript = await prisma.transcript.findFirst({
         where: { id, userId: session.user.id },
-        include: { job: { select: { id: true } } }
+        select: { ...transcriptFields, ...(schema.jobs ? { job: { select: { id: true } } } : {}) }
       })
 
       if (!transcript) {
@@ -72,7 +80,7 @@ export async function GET(req: Request) {
         duration: true,
         wordCount: true,
         language: true,
-        job: { select: { id: true } },
+        ...(schema.jobs ? { job: { select: { id: true } } } : {}),
         createdAt: true
       }
     })
@@ -143,7 +151,8 @@ export async function POST(req: Request) {
       return NextResponse.json(existing, { status: 200 })
     }
 
-    const cache = typeof cacheId === 'string'
+    const schema = await getDatabaseCapabilities()
+    const cache = schema.scopedCache && typeof cacheId === 'string'
       ? await prisma.transcriptCache.findFirst({ where: { id: cacheId, userId: session.user.id }, select: { id: true } })
       : null
 
@@ -156,8 +165,9 @@ export async function POST(req: Request) {
         wordCount: computedWordCount,
         language,
         userId: session.user.id,
-        cacheId: cache?.id
-      }
+        ...(schema.scopedCache ? { cacheId: cache?.id } : {})
+      },
+      select: transcriptFields
     })
 
     return NextResponse.json(transcript, { status: 201 })
@@ -180,10 +190,11 @@ export async function DELETE(req: Request) {
     }
 
     const userId = session.user.id
+    const schema = await getDatabaseCapabilities()
     const deleted = await prisma.$transaction(async (transaction) => {
       const transcript = await transaction.transcript.findFirst({
         where: { id, userId },
-        select: { id: true, cacheId: true }
+        select: { id: true, ...(schema.scopedCache ? { cacheId: true } : {}) }
       })
       if (!transcript) return false
       const result = await transaction.transcript.deleteMany({ where: { id, userId } })

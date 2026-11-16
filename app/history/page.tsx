@@ -328,7 +328,7 @@ export default function HistoryPage() {
           </p>
         </div>
         <span className="w-fit rounded-full border border-slate-200/80 bg-white/90 dark:border-slate-800 dark:bg-slate-900/90 px-3.5 py-1 text-xs font-semibold text-slate-700 dark:text-slate-300 shadow-2xs backdrop-blur-md">
-          {total.toLocaleString()} Saved Jobs
+          {error ? 'History unavailable' : loading ? 'Loading history…' : `${total.toLocaleString()} Saved Jobs`}
         </span>
       </div>
 
@@ -400,6 +400,13 @@ export default function HistoryPage() {
       <div className="apple-glass-card overflow-hidden rounded-3xl transition-all">
         {loading ? (
           <HistoryTableSkeleton />
+        ) : error && history.length === 0 ? (
+          <div className="p-20 text-center" role="status">
+            <h2 className="text-lg font-bold text-slate-800 dark:text-slate-200">History could not be loaded</h2>
+            <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
+              We could not retrieve your saved transcripts. Try loading them again.
+            </p>
+          </div>
         ) : history.length === 0 ? (
           <div className="flex flex-col items-center p-20 text-center">
             <span className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-100 dark:bg-slate-800 text-slate-400">

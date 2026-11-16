@@ -11,6 +11,8 @@
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint .",
+    "db:check": "node scripts/check-database.cjs",
+    "test:rollout": "node --experimental-strip-types tests/rollout.integration.mjs",
     "test:smoke": "k6 run load-tests/smoke-test.js",
     "test:load": "k6 run load-tests/load-test.js",
     "test:api": "k6 run load-tests/api-load-test.js",
@@ -49,6 +51,8 @@
     "zustand": "^5.0.12"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "0.5.16",
+    "@electric-sql/pglite-socket": "0.2.19",
     "@types/node": "25.5.0",
     "@types/nodemailer": "^8.0.1",
     "@types/react": "^19.2.14",
