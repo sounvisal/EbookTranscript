@@ -26,8 +26,8 @@ const QUICK_SUGGESTIONS = [
   'Microservices'
 ]
 
-export default function AdvancedOptionsDrawer() {
-  const [isOpen, setIsOpen] = useState(false)
+export default function AdvancedOptionsDrawer({ defaultOpen = false }: { defaultOpen?: boolean }) {
+  const [isOpen, setIsOpen] = useState(defaultOpen)
   const [termInput, setTermInput] = useState('')
 
   const {
@@ -74,6 +74,7 @@ export default function AdvancedOptionsDrawer() {
       {/* Accordion Header */}
       <button
         type="button"
+        aria-expanded={isOpen}
         onClick={() => setIsOpen(!isOpen)}
         className="flex w-full items-center justify-between px-4 sm:px-5 py-3.5 text-left text-xs sm:text-sm font-semibold text-slate-800 dark:text-slate-200 hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors cursor-pointer"
       >

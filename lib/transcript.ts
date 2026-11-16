@@ -2,9 +2,11 @@ export type TranscriptSegment = {
   start: number
   end?: number
   text: string
+  words?: Array<{ text: string; start: number; end: number }>
 }
 
 type TranscriptSegmentInput = {
+  words?: unknown
   start?: unknown
   end?: unknown
   text?: unknown
@@ -375,6 +377,7 @@ export function normalizeTranscriptSegments(inputSegments?: TranscriptSegmentInp
 
   const segments = inputSegments
     .map((segment) => {
+      if (!segment || typeof segment !== 'object') return null
       const rawStart = segment.start ?? segment.start_time ?? segment.startTime
       const rawEnd = segment.end ?? segment.end_time ?? segment.endTime
       const rawText = segment.text ?? segment.content ?? segment.transcription
@@ -389,7 +392,14 @@ export function normalizeTranscriptSegments(inputSegments?: TranscriptSegmentInp
       return {
         start,
         ...(end !== null ? { end } : {}),
-        text: text.trim()
+        text: text.trim(),
+        ...(Array.isArray(segment.words) ? { words: segment.words.flatMap((word) => {
+          if (!word || typeof word.text !== 'string') return []
+          const wordStart = toFiniteSeconds(word.start)
+          const wordEnd = toFiniteSeconds(word.end)
+          return wordStart !== null && wordEnd !== null && wordEnd > wordStart
+            ? [{ text: word.text, start: wordStart, end: wordEnd }] : []
+        }) } : {})
       }
     })
     .filter((segment): segment is TranscriptSegment => Boolean(segment))
@@ -680,6 +690,16 @@ export function buildDisplaySegments(text: string, segments?: TranscriptSegmentI
   })
 
   return withSegmentEnds(displaySegments)
+}
+
+/** Keep timing in the existing text column; plain-text consumers still use getPlainTranscriptText. */
+export function serializeTranscriptForStorage(text: string, segments?: TranscriptSegment[] | null) {
+  const cleanText = getPlainTranscriptText(text)
+  const normalized = normalizeTranscriptSegments(segments)
+  const segmentText = getPlainTranscriptText(normalized.map(segment => segment.text).join('\n\n'))
+  const compact = (value: string) => value.replace(/\s+/gu, '')
+  if (!normalized.length || compact(segmentText) !== compact(cleanText)) return cleanText
+  return JSON.stringify({ text: cleanText, segments: normalized })
 }
 
 export function formatTimestamp(seconds: number) {

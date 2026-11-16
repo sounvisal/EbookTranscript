@@ -119,9 +119,9 @@ function TranscribeContent() {
   }, [targetId, authStatus, accountId, currentTranscript?.id, status, setTranscriptWithAudio])
 
   return (
-    <div className="mx-auto w-full max-w-5xl px-4 pb-24 pt-8 sm:px-6 sm:pt-10 space-y-8">
+    <div className={`mx-auto w-full max-w-5xl px-4 pb-24 sm:space-y-8 sm:px-6 sm:pt-10 ${status === 'complete' ? 'space-y-3 pt-3' : 'space-y-8 pt-8'}`}>
       {/* Top Workspace Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200/60 dark:border-slate-800">
+      <div className={`flex-col justify-between gap-4 border-b border-slate-200/60 pb-4 dark:border-slate-800 sm:flex sm:flex-row sm:items-center ${status === 'complete' ? 'hidden' : 'flex'}`}>
         <div className="space-y-1">
           <div className="flex items-center gap-2">
             <Link

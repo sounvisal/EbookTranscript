@@ -6,6 +6,7 @@ import { setTimeout as wait } from 'node:timers/promises'
 import { PGlite } from '@electric-sql/pglite'
 import { PGLiteSocketServer } from '@electric-sql/pglite-socket'
 import { hashPassword } from '../lib/password.ts'
+import { testTranscriptPanel } from './panel-browser.mjs'
 
 const db = await PGlite.create()
 const database = new PGLiteSocketServer({ db, host: '127.0.0.1', port: 0 })
@@ -112,6 +113,7 @@ try {
       }
     }
     await checkAdmin(2, 0)
+    if (process.argv.includes('--panel')) await testTranscriptPanel({ base, cookie: owner, db, userId: users[0] })
     const legacyHistory = await (await expectStatus(historyBefore, 200)).json()
     assert.equal(legacyHistory.total, 1)
     assert.equal(legacyHistory.items[0].id, users[0] + '-history')
@@ -127,12 +129,14 @@ try {
       headers: { ...json(owner, {}).headers, 'x-stream': '1' }
     }), 200)
     const events = (await fallback.text()).trim().split('\n').map(line => JSON.parse(line))
+    assert.ok(!events.some(event => event.type === 'status' && event.phase === 'uploading'), 'a signed upload must not appear to upload again')
     const result = events.find(event => event.type === 'result')
     assert.ok(result?.text.includes('example recording'), JSON.stringify(events))
     const saved = await (await expectStatus(await fetch(base + '/api/history', json(owner, {
-      text: result.text, source: 'file', filename: 'legacy-batch.mp4', expectedUserId: users[0], cacheId: 'legacy'
+      text: result.text, segments: result.segments, source: 'file', filename: 'legacy-batch.mp4', expectedUserId: users[0], cacheId: 'legacy'
     })), 201)).json()
     assert.ok(saved.id)
+    assert.deepEqual(JSON.parse((await db.query('SELECT text FROM "Transcript" WHERE id=$1', [saved.id])).rows[0].text).segments, result.segments)
     assert.equal((await (await fetch(base + '/api/history', { headers: ownerHeaders })).json()).total, 2)
     const savedUrl = base + '/api/history?id=' + saved.id
     await expectStatus(await fetch(savedUrl, { method: 'DELETE', headers: { cookie: other } }), 404)

@@ -1,6 +1,6 @@
 'use client'
 
-import { downloadSrt, downloadTxt, downloadVtt } from '@/lib/download'
+import TranscriptToolbar from './TranscriptToolbar'
 import {
   buildDisplaySegments,
   formatTimestamp,
@@ -33,11 +33,11 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSession, signIn } from 'next-auth/react'
-import ReportErrorButton from '@/components/common/ReportErrorButton'
 import AudioPlayer from '@/components/transcript/AudioPlayer'
 import { transcribeWithProgress } from '@/lib/transcribeClient'
-import { TranscriptSearch } from '@/components/transcript/TranscriptSearch'
 import { useUndoRedo } from '@/hooks/useUndoRedo'
+import { useTranscriptPersistence, type TranscriptSnapshot } from '@/hooks/useTranscriptPersistence'
+import { buildWordTimeline } from '@/lib/transcriptSync'
 import { getMediaBlob, saveMediaBlob } from '@/lib/mediaStorage'
 import { createTranscriptSlug } from '@/lib/transcriptSlug'
 import Link from 'next/link'
@@ -109,6 +109,7 @@ export default function TranscriptPanel() {
   const { transcript, file, audioBlob, audioUrl: storeAudioUrl, customAudioUrl, resetAll: storeResetAll, updateTranscriptContent, advancedOptions } = useTranscriptStore()
 
   const resetAll = () => {
+    if (hasUnsavedChanges && !window.confirm("Leave this transcript with unsaved changes?")) return
     storeResetAll()
     if (typeof window !== 'undefined') {
       window.history.pushState(null, '', '/transcribe')
@@ -117,9 +118,14 @@ export default function TranscriptPanel() {
   const [viewMode, setViewMode] = useState<'paragraphs' | 'timestamps'>('timestamps')
   const [wordSyncEnabled, setWordSyncEnabled] = useState(true)
   const [copied, setCopied] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
   const hasSaved = useRef(false)
+  const recordId = useRef(transcript?.id)
+  const [followPlayback, setFollowPlayback] = useState(true)
+  const [followPaused, setFollowPaused] = useState(false)
+  const [syncOffset, setSyncOffset] = useState(0)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const toolbarRef = useRef<HTMLDivElement>(null)
+  const [seekRequest, setSeekRequest] = useState<{ time: number; sequence: number }>()
 
   // High-sensitivity re-scan state
   const [isRetryingSensitivity, setIsRetryingSensitivity] = useState(false)
@@ -129,13 +135,16 @@ export default function TranscriptPanel() {
   const [editingSegmentIdx, setEditingSegmentIdx] = useState<number | null>(null)
   const [editingParagraphIdx, setEditingParagraphIdx] = useState<number | null>(null)
   const [editDraft, setEditDraft] = useState<string>('')
-  const [isPatchingHistory, setIsPatchingHistory] = useState<boolean>(false)
   const [copiedShareLink, setCopiedShareLink] = useState<boolean>(false)
   const [saveSuccessMessage, setSaveSuccessMessage] = useState<string | null>(null)
 
   // Audio Playback & Synchronization State
   const [currentTime, setCurrentTime] = useState(0)
   const activeWordRef = useRef<HTMLSpanElement | null>(null)
+  const requestSeek = useCallback((time: number) => {
+    setCurrentTime(time)
+    setSeekRequest(previous => ({ time, sequence: (previous?.sequence ?? 0) + 1 }))
+  }, [setCurrentTime, setSeekRequest])
 
   const rawText = transcript?.text || 'Mock transcript content.'
   const baseText = useMemo(
@@ -168,9 +177,15 @@ export default function TranscriptPanel() {
 
   const liveSegments = historyState.segments
   const liveText = historyState.text
+  const localContent = useRef<string | null>(null)
+  const publishContent = useCallback((text: string, segments: TranscriptSegment[]) => {
+    localContent.current = JSON.stringify({ text: getPlainTranscriptText(text, segments), segments: buildDisplaySegments(text, segments, transcript?.duration) })
+    updateTranscriptContent(text, segments)
+  }, [updateTranscriptContent, transcript?.duration])
 
   // Synchronize live state when the underlying transcript / segments change externally
   useEffect(() => {
+    if (localContent.current === JSON.stringify({ text: baseText, segments: initialSegments })) return
     resetHistory({
       text: baseText,
       segments: initialSegments
@@ -182,15 +197,18 @@ export default function TranscriptPanel() {
 
   const handleSearchJump = useCallback((segmentIndex: number, time: number) => {
     setHighlightedSegmentIdx(segmentIndex)
-    setCurrentTime(time)
+    requestSeek(time)
+    setFollowPaused(true)
     setViewMode('timestamps')
     setTimeout(() => {
       const el = document.getElementById(`segment-${segmentIndex}`)
-      if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      const container = scrollRef.current
+      if (el && container) {
+        container.scrollTo({ top: container.scrollTop + el.getBoundingClientRect().top - container.getBoundingClientRect().top - (toolbarRef.current?.offsetHeight || 0) - 24,
+          behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
       }
     }, 50)
-  }, [])
+  }, [requestSeek, setFollowPaused, setViewMode, setHighlightedSegmentIdx])
 
   const handleSearchClear = useCallback(() => {
     setHighlightedSegmentIdx(null)
@@ -235,100 +253,77 @@ export default function TranscriptPanel() {
     return null
   }, [storeAudioUrl, customAudioUrl, file, audioBlob])
 
-  // Find active segment index
-  const activeSegmentIndex = useMemo(() => {
-    if (liveSegments.length === 0) return -1
-    return liveSegments.findIndex((seg, i) => {
-      const nextSeg = liveSegments[i + 1]
-      const end = typeof seg.end === 'number' && seg.end > seg.start ? seg.end : (nextSeg ? nextSeg.start : seg.start + 5)
-      return currentTime >= seg.start && currentTime < end
+  const timelines = useMemo(() => liveSegments.map((segment, i) =>
+    buildWordTimeline(segment, extractSpeaker(segment.text).body, liveSegments[i + 1]?.start)), [liveSegments])
+  const syncTime = currentTime + syncOffset
+  const activeSegmentIndex = liveSegments.findIndex((segment, i) => syncTime >= segment.start && syncTime < timelines[i].end)
+  const activeTokenIndex = activeSegmentIndex < 0 ? -1 : timelines[activeSegmentIndex].tokens.findIndex(token =>
+    token.start !== undefined && token.end !== undefined && syncTime >= token.start && syncTime < token.end)
+
+  const scrollToActive = useCallback((smooth = false) => {
+    const container = scrollRef.current
+    const target = activeWordRef.current || container?.querySelector<HTMLElement>('[data-active-segment="true"]')
+    if (!container || !target) return
+    const viewport = container.getBoundingClientRect()
+    const rect = target.getBoundingClientRect()
+    const inset = (toolbarRef.current?.offsetHeight || 0) + 20
+    if (rect.top < viewport.top + inset || rect.bottom > viewport.bottom - 24) {
+      container.scrollTo({ top: container.scrollTop + rect.top - viewport.top - inset - 30,
+        behavior: smooth && !window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'smooth' : 'auto' })
+    }
+  }, [])
+  useEffect(() => {
+    if (followPlayback && !followPaused && editingSegmentIdx === null && editingParagraphIdx === null) scrollToActive()
+  }, [activeSegmentIndex, activeTokenIndex, followPlayback, followPaused, editingSegmentIdx, editingParagraphIdx, scrollToActive])
+
+  const activePanel = useRef(true)
+  useEffect(() => {
+    activePanel.current = true
+    return () => { activePanel.current = false }
+  }, [])
+  const persistSnapshot = useCallback(async (snapshot: TranscriptSnapshot) => {
+    const accountId = session?.user?.id
+    if (!accountId || !transcript || !activePanel.current || useTranscriptStore.getState().accountId !== accountId) throw new Error('Account unavailable')
+    const id = recordId.current
+    const response = await fetch('/api/history', {
+      method: id ? 'PATCH' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...snapshot, id, expectedUserId: accountId, source: transcript.source || file?.name || 'file',
+        filename: file?.name, duration: transcript.duration, language: transcript.language, cacheId: transcript.cacheId })
     })
-  }, [currentTime, liveSegments])
-
-  // Auto-scroll active word into view smoothly when active segment changes
-  useEffect(() => {
-    if (wordSyncEnabled && activeSegmentIndex !== -1 && activeWordRef.current) {
-      activeWordRef.current.scrollIntoView({
-        behavior: 'smooth',
-        block: 'nearest',
-        inline: 'nearest'
-      })
-    }
-  }, [activeSegmentIndex, wordSyncEnabled])
-
-  // Check if transcript was loaded from history or was already saved
-  const isAlreadySaved = Boolean(transcript?.alreadySaved || transcript?.id)
-
-  useEffect(() => {
-    // If this transcript is already saved in history, do not save it again!
-    if (isAlreadySaved) {
-      setSaved(true)
-      hasSaved.current = true
-      return
-    }
-
-    const autoSave = async () => {
-      const accountId = session?.user?.id
-      if (!accountId || !transcript || hasSaved.current || saved || saving || isAlreadySaved) return
-
-      hasSaved.current = true
-      setSaving(true)
-
-      try {
-        const payload = {
-          text: liveText,
-          expectedUserId: accountId,
-          cacheId: transcript.cacheId,
-          source: transcript.source || (file ? 'file' : transcript.source === 'LIVE VOICE' ? 'live_voice' : 'voice_record'),
-          filename: file ? file.name : undefined,
-          duration: transcript.duration || 0,
-          wordCount,
-          language: transcript.language || 'auto'
-        }
-
-        const res = await fetch('/api/history', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        })
-
-        if (res.ok) {
-          const data = await res.json().catch(() => null)
-          const store = useTranscriptStore.getState()
-          if (data?.id && store.accountId === accountId && store.transcript === transcript) {
-            store.setTranscript({ ...transcript, id: data.id, alreadySaved: true })
-            const media = file || audioBlob
-            if (media) {
-              try {
-                if (res.status === 201 || !await getMediaBlob(accountId, data.id)) {
-                  await saveMediaBlob(accountId, data.id, media)
-                }
-              } catch {
-                setSaveSuccessMessage('Transcript saved. Local audio storage is unavailable.')
-              }
-            }
-
-            // Sync clean path URL without reloading
-            const slug = createTranscriptSlug(transcript.source || file?.name, data.id)
-            if (typeof window !== 'undefined' && slug && useTranscriptStore.getState().accountId === accountId) {
-              window.history.replaceState(null, '', '/transcribe/' + encodeURIComponent(slug))
-            }
-          }
-          setSaved(true)
-        } else {
-          hasSaved.current = false
-        }
-      } catch (e) {
-        console.error('Autosave failed:', e)
-        hasSaved.current = false
-      } finally {
-        setSaving(false)
+    if (!response.ok) throw new Error('Save failed')
+    const result = await response.json()
+    if (!id && !result.id) throw new Error('Save was not confirmed')
+    if (!activePanel.current || useTranscriptStore.getState().accountId !== accountId) return
+    if (!id) {
+      recordId.current = result.id
+      const store = useTranscriptStore.getState()
+      if (store.transcript) store.setTranscript({ ...store.transcript, id: result.id, alreadySaved: true })
+      const media = file || audioBlob
+      if (media) {
+        try {
+          if (response.status === 201 || !await getMediaBlob(accountId, result.id)) await saveMediaBlob(accountId, result.id, media)
+        } catch { setSaveSuccessMessage('Transcript saved. Local audio storage is unavailable.') }
       }
+      const slug = createTranscriptSlug(transcript.source || file?.name, result.id)
+      window.history.replaceState(null, '', '/transcribe/' + encodeURIComponent(slug))
     }
-
-    autoSave()
-  }, [session, transcript, file, audioBlob, saved, saving, liveText, wordCount, isAlreadySaved])
-
+  }, [session?.user?.id, transcript, file, audioBlob, setSaveSuccessMessage])
+  const { status: saveStatus, save: saveSnapshot } = useTranscriptPersistence(Boolean(transcript?.id), persistSnapshot)
+  const draftDirty = editingSegmentIdx !== null ? editDraft !== liveSegments[editingSegmentIdx]?.text
+    : editingParagraphIdx !== null ? editDraft !== paragraphs[editingParagraphIdx] : false
+  const hasUnsavedChanges = draftDirty || saveStatus !== 'saved'
+  useEffect(() => {
+    if (!session?.user?.id || !transcript || transcript.id || hasSaved.current) return
+    hasSaved.current = true
+    void saveSnapshot({ text: liveText, segments: liveSegments })
+  }, [session?.user?.id, transcript, liveText, liveSegments, saveSnapshot])
+  useEffect(() => {
+    if (!hasUnsavedChanges) return
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = '' }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [hasUnsavedChanges])
   const handleCopy = () => {
     navigator.clipboard.writeText(liveText)
     setCopied(true)
@@ -373,7 +368,7 @@ export default function TranscriptPanel() {
   }
 
   const handleSeekToSegment = (startTime: number) => {
-    setCurrentTime(startTime)
+    requestSeek(startTime)
   }
 
   // In-line Edit Handlers
@@ -408,35 +403,6 @@ export default function TranscriptPanel() {
     setTimeout(() => setCopiedShareLink(false), 2000)
   }
 
-  const persistToHistory = useCallback(async (newText: string) => {
-    const transcriptId = transcript?.id
-    if (!transcriptId) {
-      setSaveSuccessMessage('Edited & synced')
-      setTimeout(() => setSaveSuccessMessage(null), 2500)
-      return
-    }
-
-    setIsPatchingHistory(true)
-    try {
-      const res = await fetch('/api/history', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: transcriptId, text: newText })
-      })
-      if (res.ok) {
-        setSaveSuccessMessage('Saved to history ✓')
-      } else {
-        setSaveSuccessMessage('Edited locally')
-      }
-    } catch (err) {
-      console.error('Failed to sync edit to history:', err)
-      setSaveSuccessMessage('Edited locally')
-    } finally {
-      setIsPatchingHistory(false)
-      setTimeout(() => setSaveSuccessMessage(null), 2500)
-    }
-  }, [transcript?.id])
-
   const handleSaveSegment = async (idx: number, e?: React.MouseEvent) => {
     if (e) e.stopPropagation()
     const trimmed = editDraft.trim()
@@ -446,16 +412,16 @@ export default function TranscriptPanel() {
     }
 
     const updatedSegments = liveSegments.map((seg, i) =>
-      i === idx ? { ...seg, text: trimmed } : seg
+      i === idx ? { ...seg, text: trimmed, words: undefined } : seg
     )
     const updatedText = updatedSegments.map((s) => s.text).join('\n\n')
 
     setHistoryState({ text: updatedText, segments: updatedSegments })
     setEditingSegmentIdx(null)
     setEditDraft('')
-    updateTranscriptContent(updatedText, updatedSegments)
+    publishContent(updatedText, updatedSegments)
 
-    await persistToHistory(updatedText)
+    await saveSnapshot({ text: updatedText, segments: updatedSegments })
   }
 
   const handleSaveParagraph = async (idx: number, e?: React.MouseEvent) => {
@@ -470,35 +436,38 @@ export default function TranscriptPanel() {
     updatedParagraphs[idx] = trimmed
     const updatedText = updatedParagraphs.join('\n\n')
 
-    setHistoryState({ text: updatedText, segments: liveSegments })
+    const updatedSegments = paragraphs.length === liveSegments.length
+      ? liveSegments.map((segment, i) => i === idx ? { ...segment, text: trimmed, words: undefined } : segment)
+      : buildDisplaySegments(updatedText, undefined, transcript?.duration)
+    setHistoryState({ text: updatedText, segments: updatedSegments })
     setEditingParagraphIdx(null)
     setEditDraft('')
-    updateTranscriptContent(updatedText, liveSegments)
+    publishContent(updatedText, updatedSegments)
 
-    await persistToHistory(updatedText)
+    await saveSnapshot({ text: updatedText, segments: updatedSegments })
   }
 
   const handleUndo = useCallback(async () => {
     if (!canUndo) return
     const prev = undo()
     if (prev) {
-      updateTranscriptContent(prev.text, prev.segments)
+      publishContent(prev.text, prev.segments)
       setSaveSuccessMessage('Undone ↩')
       setTimeout(() => setSaveSuccessMessage(null), 2000)
-      await persistToHistory(prev.text)
+      await saveSnapshot({ text: prev.text, segments: prev.segments })
     }
-  }, [canUndo, undo, updateTranscriptContent, persistToHistory])
+  }, [canUndo, undo, publishContent, saveSnapshot, setSaveSuccessMessage])
 
   const handleRedo = useCallback(async () => {
     if (!canRedo) return
     const next = redo()
     if (next) {
-      updateTranscriptContent(next.text, next.segments)
+      publishContent(next.text, next.segments)
       setSaveSuccessMessage('Redone ↪')
       setTimeout(() => setSaveSuccessMessage(null), 2000)
-      await persistToHistory(next.text)
+      await saveSnapshot({ text: next.text, segments: next.segments })
     }
-  }, [canRedo, redo, updateTranscriptContent, persistToHistory])
+  }, [canRedo, redo, publishContent, saveSnapshot, setSaveSuccessMessage])
 
   // Global Undo / Redo keyboard shortcuts (Ctrl+Z / Cmd+Z, Ctrl+Y / Cmd+Shift+Z)
   useEffect(() => {
@@ -577,7 +546,7 @@ export default function TranscriptPanel() {
       )}
 
       {/* Header Card */}
-      <div className="border-b border-slate-200/60 dark:border-slate-800 bg-gradient-to-b from-white/90 to-slate-50/50 dark:from-slate-900/90 dark:to-slate-950/50 p-6 sm:flex sm:items-center sm:justify-between sm:p-7">
+      <div className="border-b border-slate-200/60 bg-gradient-to-b from-white/90 to-slate-50/50 p-3.5 dark:border-slate-800 dark:from-slate-900/90 dark:to-slate-950/50 sm:flex sm:items-center sm:justify-between sm:p-7">
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
             <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-ping" />
@@ -585,10 +554,10 @@ export default function TranscriptPanel() {
               <CheckCircle2 className="h-3.5 w-3.5" /> Transcription Finished
             </span>
           </div>
-          <h2 className="mt-2 truncate text-xl sm:text-2xl font-bold tracking-tight text-slate-950 dark:text-white" title={sourceName}>
+          <h2 className="mt-1 truncate text-base font-bold tracking-tight text-slate-950 dark:text-white sm:mt-2 sm:text-2xl" title={sourceName}>
             {sourceName}
           </h2>
-          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs font-medium text-slate-500 dark:text-slate-400">
+          <div className="mt-1.5 hidden flex-wrap items-center gap-2 text-xs font-medium text-slate-500 dark:text-slate-400 sm:flex">
             <span className="rounded-md bg-white dark:bg-slate-800 px-2 py-0.5 ring-1 ring-slate-200/70 dark:ring-slate-700 font-mono text-slate-700 dark:text-slate-300">
               {wordCount.toLocaleString()} words
             </span>
@@ -614,19 +583,15 @@ export default function TranscriptPanel() {
           </div>
         </div>
 
-        <div className="mt-4 sm:mt-0 flex items-center gap-2">
-          {isPatchingHistory && (
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 dark:bg-blue-950/60 px-3 py-1 text-xs font-semibold text-blue-700 dark:text-blue-300 ring-1 ring-blue-500/20">
-              <Loader2 className="h-3 w-3 animate-spin text-blue-600" />
-              Syncing edits…
-            </span>
-          )}
-          {saveSuccessMessage && !isPatchingHistory && (
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 dark:bg-emerald-950/60 px-3 py-1 text-xs font-semibold text-emerald-700 dark:text-emerald-300 ring-1 ring-emerald-500/20 animate-fade-in">
-              <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
-              {saveSuccessMessage}
-            </span>
-          )}
+        <div className="mt-2 flex flex-wrap items-center gap-2 sm:mt-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span role="status" aria-live="polite" data-testid="save-status" className={
+              'rounded-full px-3 py-1 text-xs font-semibold ' + (saveStatus === 'error' ? 'bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300'
+                : draftDirty || saveStatus !== 'saved' ? 'bg-amber-50 text-amber-800 dark:bg-amber-950 dark:text-amber-300' : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300')
+            }>{draftDirty ? 'Unsaved changes' : saveStatus === 'saving' ? 'Saving…' : saveStatus === 'saved' ? 'Saved' : saveStatus === 'error' ? 'Save failed — changes remain in this tab' : 'Not saved'}</span>
+            {saveStatus === 'error' && !draftDirty && <button type="button" onClick={() => saveSnapshot({ text: liveText, segments: liveSegments })} className="min-h-9 rounded-lg px-3 text-sm font-semibold text-red-700 underline dark:text-red-300">Retry save</button>}
+            {saveSuccessMessage && <span className="text-xs text-slate-500" role="status">{saveSuccessMessage}</span>}
+          </div>
           {transcript?.id && (
             <button
               onClick={handleCopyShareLink}
@@ -653,8 +618,7 @@ export default function TranscriptPanel() {
               className="inline-flex items-center gap-1.5 rounded-full bg-white/90 dark:bg-slate-900/90 px-3.5 py-1 text-xs font-medium text-slate-600 dark:text-slate-300 ring-1 ring-slate-200/80 dark:ring-slate-700 shadow-2xs hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
               title="View all transcripts in history"
             >
-              <span className={`h-1.5 w-1.5 rounded-full ${saving ? 'bg-amber-500 animate-pulse' : (saved || isAlreadySaved) ? 'bg-emerald-500' : 'bg-slate-400'}`} />
-              <span>{saving ? 'Saving to cloud…' : (saved || isAlreadySaved) ? 'Saved to history ↗' : 'Cloud Ready'}</span>
+              <span>Open history ↗</span>
             </Link>
           ) : (
             <span className="inline-flex items-center gap-1.5 rounded-full bg-white/90 dark:bg-slate-900/90 px-3.5 py-1 text-xs font-medium text-slate-600 dark:text-slate-300 ring-1 ring-slate-200/80 dark:ring-slate-700 shadow-2xs">
@@ -665,14 +629,22 @@ export default function TranscriptPanel() {
         </div>
       </div>
 
-      {/* Embedded Synchronized Audio Player */}
-      <div className="border-b border-slate-200/60 dark:border-slate-800 p-4 sm:px-7 bg-slate-50/40 dark:bg-slate-900/40">
+      <div ref={scrollRef} tabIndex={0} aria-label="Transcript reading area" className="max-h-[72dvh] overflow-y-auto overscroll-contain sm:max-h-[85dvh]"
+        onWheel={() => setFollowPaused(true)}
+        onTouchMove={event => { if (!toolbarRef.current?.contains(event.target as Node)) setFollowPaused(true) }}
+        onPointerDown={event => { if (event.target === event.currentTarget) setFollowPaused(true) }}
+        onKeyDown={event => {
+          if (!toolbarRef.current?.contains(event.target as Node) && ['PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown'].includes(event.key)) setFollowPaused(true)
+        }}>
+      <div ref={toolbarRef} className="sticky top-0 z-20 bg-white dark:bg-slate-950">
+      <div className="border-b border-slate-200/60 bg-slate-50/60 dark:border-slate-800 dark:bg-slate-900/60 sm:p-4 sm:px-7">
         <AudioPlayer
           src={audioUrl}
           text={liveText}
           duration={transcript?.duration || 0}
           currentTime={currentTime}
-          onSeek={setCurrentTime}
+          seekRequest={seekRequest}
+          onSeek={requestSeek}
           onTimeUpdate={setCurrentTime}
           onAttachFile={(attached) => {
             const accountId = session?.user?.id
@@ -688,137 +660,18 @@ export default function TranscriptPanel() {
         />
       </div>
 
-      {/* Floating Apple Action Toolbar */}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/50 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/70 p-3.5 sm:px-7">
-        <div className="flex flex-wrap items-center gap-2.5">
-          {/* Segmented View Switcher */}
-          <div className="flex rounded-xl bg-slate-200/60 dark:bg-slate-800 p-1 text-xs font-semibold ring-1 ring-black/5 dark:ring-white/5">
-            <button
-              onClick={() => setViewMode('paragraphs')}
-              className={`rounded-lg px-3.5 py-1.5 transition-all duration-200 cursor-pointer ${
-                viewMode === 'paragraphs' ? 'bg-white dark:bg-slate-900 text-slate-950 dark:text-white shadow-xs' : 'text-slate-600 dark:text-slate-400 hover:text-slate-950 dark:hover:text-white'
-              }`}
-            >
-              Full Text
-            </button>
-            <button
-              onClick={() => setViewMode('timestamps')}
-              className={`rounded-lg px-3.5 py-1.5 transition-all duration-200 cursor-pointer ${
-                viewMode === 'timestamps' ? 'bg-white dark:bg-slate-900 text-slate-950 dark:text-white shadow-xs' : 'text-slate-600 dark:text-slate-400 hover:text-slate-950 dark:hover:text-white'
-              }`}
-            >
-              Karaoke Sync ({liveSegments.length})
-            </button>
-          </div>
-
-          {/* Edit Hint Tag */}
-          <span className="hidden lg:inline-flex items-center gap-1 text-[11px] text-slate-400 dark:text-slate-500 font-medium">
-            <Edit3 className="h-3 w-3 text-slate-400" /> Click ✎ or double-click to edit
-          </span>
-
-          {/* Karaoke Word Marker Indicator */}
-          <button
-            onClick={() => setWordSyncEnabled(!wordSyncEnabled)}
-            className={`hidden sm:flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-semibold transition-all ${
-              wordSyncEnabled
-                ? 'border-blue-300 dark:border-blue-800 bg-blue-50/80 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 shadow-2xs'
-                : 'border-slate-200 dark:border-slate-800 bg-white/70 dark:bg-slate-900 text-slate-500'
-            }`}
-            title="Toggle word-by-word active tracking"
-          >
-            <Wand2 className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" />
-            <span>Word Tracking: {wordSyncEnabled ? 'ON' : 'OFF'}</span>
-          </button>
-
-          {/* Undo / Redo controls */}
-          <div className="flex items-center rounded-xl bg-white/80 dark:bg-slate-800 p-0.5 ring-1 border border-slate-200/80 dark:border-slate-700 shadow-2xs">
-            <button
-              type="button"
-              onClick={handleUndo}
-              disabled={!canUndo}
-              className="p-1.5 rounded-lg text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent transition-colors cursor-pointer"
-              title="Undo inline edit (Ctrl+Z / Cmd+Z)"
-            >
-              <Undo2 className="h-3.5 w-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={handleRedo}
-              disabled={!canRedo}
-              className="p-1.5 rounded-lg text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent transition-colors cursor-pointer"
-              title="Redo inline edit (Ctrl+Y / Cmd+Shift+Z)"
-            >
-              <Redo2 className="h-3.5 w-3.5" />
-            </button>
-          </div>
-
-          {/* Primary Copy Pill */}
-          <button
-            onClick={handleCopy}
-            className={`flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs sm:text-sm font-semibold transition-all duration-200 cursor-pointer ${
-              copied
-                ? 'bg-emerald-600 text-white shadow-xs'
-                : 'apple-btn-primary text-white'
-            }`}
-          >
-            {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-            <span>{copied ? 'Copied' : 'Copy All'}</span>
-          </button>
-
-          {/* Export Action Pills */}
-          <div className="flex items-center rounded-xl bg-white/80 dark:bg-slate-800 p-0.5 ring-1 ring-slate-200/70 dark:ring-slate-700">
-            <button
-              onClick={() => downloadTxt(liveText, sourceName)}
-              className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors cursor-pointer"
-            >
-              <Download className="h-3 w-3 text-slate-400" /> TXT
-            </button>
-            <button
-              onClick={() => downloadSrt(liveText, sourceName, liveSegments)}
-              className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors cursor-pointer"
-            >
-              <Download className="h-3 w-3 text-slate-400" /> SRT
-            </button>
-            <button
-              onClick={() => downloadVtt(liveText, sourceName, liveSegments)}
-              className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors cursor-pointer"
-            >
-              <Download className="h-3 w-3 text-slate-400" /> VTT
-            </button>
-          </div>
-        </div>
-
-        <div className="ml-auto flex flex-wrap items-center gap-2">
-          {/* Transcript Search Box */}
-          <TranscriptSearch
-            segments={liveSegments}
-            onJumpTo={handleSearchJump}
-            onClear={handleSearchClear}
-          />
-
-          <ReportErrorButton
-            errorMessage="User reported inaccurate transcript or quality issue"
-            filename={sourceName}
-            inputType="file"
-            transcriptSnippet={
-              liveText.length > 500
-                ? liveText.slice(0, 500).replace(/\s+\S*$/, '') + '...'
-                : liveText
-            }
-            detectedLanguage={transcript?.language}
-            className="text-slate-600 dark:text-slate-300 border-slate-200/80 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl"
-          />
-          <button
-            onClick={resetAll}
-            className="flex items-center gap-1.5 rounded-xl border border-slate-200/80 dark:border-slate-700 bg-white/90 dark:bg-slate-900/90 px-3.5 py-2 text-xs sm:text-sm font-medium text-slate-600 dark:text-slate-300 transition-all hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-950 dark:hover:text-white active:scale-95 cursor-pointer"
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-          </button>
-        </div>
+      <TranscriptToolbar viewMode={viewMode} setViewMode={setViewMode} segments={liveSegments} text={liveText}
+        sourceName={sourceName} language={transcript?.language} onSearchJump={handleSearchJump} onSearchClear={handleSearchClear}
+        onUndo={handleUndo} onRedo={handleRedo} canUndo={canUndo} canRedo={canRedo} copied={copied} onCopy={handleCopy} onReset={resetAll}
+        wordSync={wordSyncEnabled} setWordSync={setWordSyncEnabled} follow={followPlayback}
+        setFollow={enabled => { setFollowPlayback(enabled); setFollowPaused(false) }} followPaused={followPaused}
+        onReturn={() => { setFollowPlayback(true); setFollowPaused(false); scrollToActive(true) }}
+        editing={editingSegmentIdx !== null || editingParagraphIdx !== null} hasAudio={Boolean(audioUrl)}
+        estimated={timelines.some(item => item.estimated)} offset={syncOffset} setOffset={setSyncOffset} />
       </div>
 
       {/* Editorial Content Area with Word-by-Word Karaoke Highlighting & In-Line Editing */}
-      <div className="p-5 sm:p-8">
+      <div className="p-2 sm:p-8">
         {isNoDialogueDetected && (
           <div className="mb-6 rounded-2xl border border-amber-300 dark:border-amber-800/80 bg-amber-50/90 dark:bg-amber-950/40 p-5 shadow-sm backdrop-blur-md">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -865,7 +718,7 @@ export default function TranscriptPanel() {
         )}
 
         <div
-          className="max-h-[580px] overflow-y-auto pr-2 text-base leading-relaxed text-slate-800 dark:text-slate-200 outline-none"
+          className="pr-2 text-base leading-relaxed text-slate-800 dark:text-slate-200 outline-none"
           onCopy={handleTranscriptCopy}
         >
           {viewMode === 'paragraphs' ? (
@@ -939,7 +792,7 @@ export default function TranscriptPanel() {
                       <button
                         type="button"
                         onClick={(e) => handleStartEditParagraph(pIdx, e)}
-                        className="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-slate-500 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-slate-800 cursor-pointer"
+                        className="sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100 transition-opacity inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-slate-500 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-slate-800 cursor-pointer"
                         title="Edit paragraph"
                       >
                         <Pencil className="h-3.5 w-3.5" />
@@ -960,13 +813,6 @@ export default function TranscriptPanel() {
                 const isEditingThisSeg = editingSegmentIdx === segIdx
                 const { speaker, body: segmentBody } = extractSpeaker(segment.text)
                 const speakerStyle = speaker ? getSpeakerStyle(speaker) : null
-
-                const segStart = segment.start
-                const nextSeg = liveSegments[segIdx + 1]
-                const segEnd = typeof segment.end === 'number' && segment.end > segStart
-                  ? segment.end
-                  : (nextSeg ? nextSeg.start : segStart + 4)
-                const segDuration = Math.max(0.5, segEnd - segStart)
 
                 if (isEditingThisSeg) {
                   return (
@@ -1019,21 +865,16 @@ export default function TranscriptPanel() {
                   )
                 }
 
-                // Split segment body into words while preserving spacing
-                const wordsList = segmentBody.trim().split(/(\s+)/)
-                const realWords = wordsList.filter((w) => w.trim().length > 0)
-                const totalRealWords = Math.max(1, realWords.length)
-
-                let wordCounter = 0
+                const tokens = timelines[segIdx].tokens
                 const isSearchMatch = highlightedSegmentIdx === segIdx
 
                 return (
                   <div
                     key={`${segment.start}-${segIdx}`}
                     id={`segment-${segIdx}`}
-                    onClick={() => handleSeekToSegment(segment.start)}
+                    data-active-segment={isSegmentActive}
                     onDoubleClick={(e) => handleStartEditSegment(segIdx, e)}
-                    className={`group grid grid-cols-[4rem_minmax(0,1fr)] sm:grid-cols-[5rem_minmax(0,1fr)] gap-3 sm:gap-4 rounded-2xl p-3.5 cursor-pointer transition-all duration-200 relative ${
+                    className={`group grid grid-cols-[2.75rem_minmax(0,1fr)] gap-2 rounded-2xl p-2.5 transition-all duration-200 sm:grid-cols-[5rem_minmax(0,1fr)] sm:gap-4 sm:p-3.5 ${
                       isSearchMatch
                         ? 'ring-2 ring-amber-400 bg-amber-50/90 dark:bg-amber-950/40 shadow-sm border-l-4 border-amber-500'
                         : isSegmentActive
@@ -1043,7 +884,7 @@ export default function TranscriptPanel() {
                   >
                     {/* Timestamp pill */}
                     <div className="flex items-start gap-1 select-none pt-0.5">
-                      <span
+                      <button type="button" aria-label={"Play from " + formatTimestamp(segment.start)} onClick={() => handleSeekToSegment(segment.start)}
                         className={`font-mono text-xs font-bold tabular-nums transition-colors ${
                           isSegmentActive
                             ? 'text-blue-600 dark:text-blue-400 font-extrabold'
@@ -1051,12 +892,12 @@ export default function TranscriptPanel() {
                         }`}
                       >
                         {formatTimestamp(segment.start)}
-                      </span>
+                      </button>
                     </div>
 
                     {/* Word-by-word rendered paragraph with speaker badge */}
                     <div className="min-w-0">
-                      <div className="mb-1.5 flex items-center justify-between">
+                      <div className="mb-0.5 flex items-center justify-between sm:mb-1.5">
                         {speaker ? (
                           <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold tracking-wide shadow-2xs ${speakerStyle?.badge}`}>
                             <span className={`h-1.5 w-1.5 rounded-full ${speakerStyle?.dot}`} />
@@ -1069,7 +910,7 @@ export default function TranscriptPanel() {
                         <button
                           type="button"
                           onClick={(e) => handleStartEditSegment(segIdx, e)}
-                          className="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity inline-flex items-center gap-1 rounded-lg px-2 py-0.5 text-xs font-medium text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-slate-800 cursor-pointer"
+                          className={`inline-flex min-h-8 items-center gap-1 rounded-lg px-2 text-xs font-semibold transition-opacity hover:bg-blue-50 focus-visible:opacity-100 dark:hover:bg-slate-800 ${isSegmentActive ? 'bg-white/80 text-blue-700 dark:bg-slate-900 dark:text-blue-300' : 'text-slate-600 dark:text-slate-300 sm:opacity-0 sm:group-hover:opacity-100'}`}
                           title="Click to edit segment (or double-click text)"
                         >
                           <Pencil className="h-3 w-3" />
@@ -1078,41 +919,13 @@ export default function TranscriptPanel() {
                       </div>
 
                       <p className="whitespace-pre-wrap leading-relaxed text-slate-800 dark:text-slate-200 text-sm sm:text-base">
-                        {wordsList.map((token, tokenIdx) => {
-                          const isWhitespace = token.trim().length === 0
-                          if (isWhitespace) {
-                            return <span key={tokenIdx}>{token}</span>
-                          }
-
-                          const currentWordIndex = wordCounter
-                          wordCounter += 1
-
-                          const wStart = segStart + (currentWordIndex / totalRealWords) * segDuration
-                          const wEnd = segStart + ((currentWordIndex + 1) / totalRealWords) * segDuration
-
-                          const isThisWordActive = isSegmentActive && wordSyncEnabled && currentTime >= wStart && currentTime < wEnd
-                          const isPastWord = wordSyncEnabled && (currentTime >= wEnd)
-
-                          return (
-                            <span
-                              key={tokenIdx}
-                              ref={isThisWordActive ? activeWordRef : null}
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                setCurrentTime(wStart)
-                              }}
-                              className={`transition-all duration-150 inline-block rounded cursor-pointer ${
-                                isThisWordActive
-                                  ? 'bg-blue-600 text-white font-bold px-1.5 py-0.5 shadow-sm scale-[1.06] ring-2 ring-blue-400/40'
-                                  : isPastWord && isSegmentActive
-                                  ? 'text-blue-900 dark:text-blue-300 font-medium hover:underline'
-                                  : 'hover:bg-blue-100/60 dark:hover:bg-blue-900/40 hover:text-blue-600'
-                              }`}
-                              title={`Jump to ${formatTimestamp(wStart)} (Double-click segment to edit)`}
-                            >
-                              {token}
-                            </span>
-                          )
+                        {tokens.map((token, tokenIdx) => {
+                          if (token.start === undefined || token.end === undefined) return <span key={tokenIdx}>{token.text}</span>
+                          const isThisWordActive = Boolean(audioUrl) && isSegmentActive && wordSyncEnabled && tokenIdx === activeTokenIndex
+                          return <span key={tokenIdx} ref={isThisWordActive ? activeWordRef : null} data-active-word={isThisWordActive}
+                            onClick={event => { event.stopPropagation(); if (!window.getSelection()?.toString()) requestSeek(Math.max(0, token.start! - syncOffset)) }}
+                            className={isThisWordActive ? 'rounded-sm bg-blue-600 text-white ring-2 ring-blue-600' : 'cursor-pointer rounded-sm hover:bg-blue-100 dark:hover:bg-blue-950'}
+                            title={'Jump to ' + formatTimestamp(token.start)}>{token.text}</span>
                         })}
                       </p>
                     </div>
@@ -1122,6 +935,7 @@ export default function TranscriptPanel() {
             </div>
           )}
         </div>
+      </div>
       </div>
     </div>
   )

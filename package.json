@@ -14,6 +14,8 @@
     "db:check": "node scripts/check-database.cjs",
     "test:rollout": "node --experimental-strip-types tests/rollout.integration.mjs",
     "test:audio": "node tests/browser-audio.mjs",
+    "test:sync": "node --experimental-strip-types tests/transcript-sync.mjs",
+    "test:panel": "node --experimental-strip-types tests/rollout.integration.mjs --panel",
     "test:smoke": "k6 run load-tests/smoke-test.js",
     "test:load": "k6 run load-tests/load-test.js",
     "test:api": "k6 run load-tests/api-load-test.js",

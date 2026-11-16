@@ -22,6 +22,7 @@ type AudioPlayerProps = {
   text?: string
   duration?: number
   currentTime: number
+  seekRequest?: { time: number; sequence: number }
   onSeek: (time: number) => void
   onTimeUpdate: (time: number) => void
 }
@@ -34,11 +35,11 @@ export default function AudioPlayer({
   text,
   duration = 0,
   currentTime,
+  seekRequest,
   onSeek,
   onTimeUpdate
 }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null)
-  const timerRef = useRef<NodeJS.Timeout | null>(null)
   const synthRef = useRef<SpeechSynthesisUtterance | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
@@ -134,15 +135,32 @@ export default function AudioPlayer({
       onTimeUpdate(audio.currentTime)
     }
 
+    let frame = 0
+    let lastUpdate = 0
+    const tick = (now: number) => {
+      if (audio.paused || audio.ended) return
+      if (now - lastUpdate >= 32) {
+        onTimeUpdate(audio.currentTime)
+        lastUpdate = now
+      }
+      frame = requestAnimationFrame(tick)
+    }
+
     const handleEnded = () => {
+      cancelAnimationFrame(frame)
+      handleTimeUpdate()
       setIsPlaying(false)
     }
 
     const handlePlay = () => {
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(tick)
       setIsPlaying(true)
     }
 
     const handlePause = () => {
+      cancelAnimationFrame(frame)
+      handleTimeUpdate()
       setIsPlaying(false)
     }
 
@@ -151,8 +169,10 @@ export default function AudioPlayer({
     audio.addEventListener('ended', handleEnded)
     audio.addEventListener('play', handlePlay)
     audio.addEventListener('pause', handlePause)
+    if (!audio.paused) handlePlay()
 
     return () => {
+      cancelAnimationFrame(frame)
       audio.removeEventListener('loadedmetadata', handleLoadedMetadata)
       audio.removeEventListener('timeupdate', handleTimeUpdate)
       audio.removeEventListener('ended', handleEnded)
@@ -161,48 +181,15 @@ export default function AudioPlayer({
     }
   }, [hasNativeAudio, onTimeUpdate, src])
 
-  const currentTimeRef = useRef(currentTime)
+  // Only explicit seek requests may change playback position. Clock updates never seek.
   useEffect(() => {
-    currentTimeRef.current = currentTime
-  }, [currentTime])
-
-  // 2. Synthetic Playback / Timer Synchronizer when no native audio file is attached
-  useEffect(() => {
-    if (hasNativeAudio) return
-
-    if (isPlaying) {
-      const intervalMs = 100
-      timerRef.current = setInterval(() => {
-        const next = currentTimeRef.current + (intervalMs / 1000) * playbackSpeed
-        if (next >= audioDuration) {
-          setIsPlaying(false)
-          onTimeUpdate(audioDuration)
-        } else {
-          onTimeUpdate(next)
-        }
-      }, intervalMs)
-    } else {
-      if (timerRef.current) {
-        clearInterval(timerRef.current)
-        timerRef.current = null
-      }
-    }
-
-    return () => {
-      if (timerRef.current) {
-        clearInterval(timerRef.current)
-        timerRef.current = null
-      }
-    }
-  }, [isPlaying, hasNativeAudio, playbackSpeed, audioDuration, onTimeUpdate])
-
-  // 3. Sync external seek (when user clicks a timestamp or word in transcript)
-  useEffect(() => {
+    if (!seekRequest) return
     const audio = audioRef.current
-    if (audio && hasNativeAudio && Math.abs(audio.currentTime - currentTime) > 0.3) {
-      audio.currentTime = currentTime
-    }
-  }, [currentTime, hasNativeAudio])
+    if (audio && hasNativeAudio) audio.currentTime = seekRequest.time
+    else if (isPlaying) startSpeechSynthesis(seekRequest.time)
+    // Playback state is intentionally excluded: pressing Play must not reapply an old seek.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seekRequest, hasNativeAudio, src])
 
   // 4. Keyboard Shortcuts: Space (play/pause), ArrowLeft/Right (-5s/+5s)
   useEffect(() => {
@@ -210,8 +197,10 @@ export default function AudioPlayer({
       // Ignore if typing in an input, textarea, or contentEditable
       const target = e.target as HTMLElement
       if (
+        e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey ||
         target.tagName === 'INPUT' ||
         target.tagName === 'TEXTAREA' ||
+        target.closest('button, select, summary, a') ||
         target.isContentEditable
       ) {
         return
@@ -242,7 +231,6 @@ export default function AudioPlayer({
         audioRef.current.play().catch((err) => {
           console.warn('Native audio playback could not start:', err)
         })
-        setIsPlaying(true)
       }
     } else {
       // When native audio is not attached, play via browser SpeechSynthesis
@@ -258,21 +246,11 @@ export default function AudioPlayer({
 
   const handleSkip = (seconds: number) => {
     const newTime = Math.max(0, Math.min(audioDuration, currentTime + seconds))
-    if (hasNativeAudio && audioRef.current) {
-      audioRef.current.currentTime = newTime
-    } else if (isPlaying) {
-      startSpeechSynthesis(newTime)
-    }
     onSeek(newTime)
   }
 
   const handleScrubberChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newTime = Number.parseFloat(e.target.value)
-    if (hasNativeAudio && audioRef.current) {
-      audioRef.current.currentTime = newTime
-    } else if (isPlaying) {
-      startSpeechSynthesis(newTime)
-    }
     onSeek(newTime)
   }
 
@@ -332,7 +310,7 @@ export default function AudioPlayer({
   }, [])
 
   return (
-    <div className="apple-glass-card rounded-2xl p-4 sm:p-5 transition-all shadow-xs border border-slate-200/80 dark:border-slate-800">
+    <div className="px-3 py-2 sm:apple-glass-card sm:rounded-2xl sm:border sm:border-slate-200/80 sm:p-5 sm:shadow-xs sm:dark:border-slate-800">
       {hasNativeAudio && src && (
         <audio
           ref={audioRef}
@@ -342,15 +320,15 @@ export default function AudioPlayer({
         />
       )}
 
-      <div className="flex flex-col gap-3.5">
+      <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 sm:flex sm:flex-col sm:items-stretch sm:gap-3.5">
         {/* Header Indicator */}
-        <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
-          <div className="flex items-center gap-2 font-medium">
+        <div className={`${hasNativeAudio ? 'hidden sm:flex' : 'col-span-3 row-start-2 flex sm:order-none'} items-center justify-between text-xs text-slate-500 dark:text-slate-400`}>
+          <div className="flex flex-wrap items-center gap-2 font-medium">
             <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-950 text-blue-600 dark:text-blue-400">
               <Headphones className="h-3.5 w-3.5" />
             </span>
             <span className="font-semibold text-slate-900 dark:text-white">
-              {hasNativeAudio ? 'Original Audio Playback' : 'Voice Reader & Karaoke'}
+              {hasNativeAudio ? 'Original audio' : 'Voice reader'}
             </span>
             {hasNativeAudio ? (
               <span className="rounded-md bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 text-[10px] font-bold text-emerald-700 dark:text-emerald-300">
@@ -358,7 +336,7 @@ export default function AudioPlayer({
               </span>
             ) : (
               <div className="flex items-center gap-1.5">
-                <span className="rounded-md bg-blue-50 dark:bg-blue-950/60 px-2 py-0.5 text-[10px] font-semibold text-blue-700 dark:text-blue-300 flex items-center gap-1">
+                <span className="hidden rounded-md bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-700 dark:bg-blue-950/60 dark:text-blue-300 sm:flex sm:items-center sm:gap-1">
                   <Volume2 className="h-3 w-3" /> Voice Reader (TTS)
                 </span>
                 <input
@@ -393,7 +371,7 @@ export default function AudioPlayer({
         </div>
 
         {/* Visual Waveform + Interactive Seeking */}
-        <div className="relative h-10 w-full flex items-center gap-0.5 px-1 py-1 rounded-xl bg-slate-100/60 dark:bg-slate-800/50 overflow-hidden cursor-pointer group">
+        <div className="relative hidden h-10 w-full items-center gap-0.5 overflow-hidden rounded-xl bg-slate-100/60 px-1 py-1 dark:bg-slate-800/50 sm:flex">
           {waveBars.map((heightPercent, idx) => {
             const barPosPercent = (idx / waveBars.length) * 100
             const isPlayed = barPosPercent <= progressPercent
@@ -402,11 +380,6 @@ export default function AudioPlayer({
                 key={idx}
                 onClick={() => {
                   const targetTime = (idx / waveBars.length) * displayTotal
-                  if (hasNativeAudio && audioRef.current) {
-                    audioRef.current.currentTime = targetTime
-                  } else if (isPlaying) {
-                    startSpeechSynthesis(targetTime)
-                  }
                   onSeek(targetTime)
                 }}
                 className="flex-1 h-full flex items-center justify-center transition-all"
@@ -426,12 +399,12 @@ export default function AudioPlayer({
         </div>
 
         {/* Scrubber and Time Indicators */}
-        <div className="flex items-center gap-3">
-          <span className="w-14 text-right font-mono text-xs font-bold text-slate-800 dark:text-slate-200 tabular-nums">
+        <div className="col-start-2 row-start-1 flex min-w-0 items-center gap-1.5 sm:gap-3">
+          <span className="shrink-0 text-right font-mono text-[10px] font-bold text-slate-800 tabular-nums dark:text-slate-200 sm:w-14 sm:text-xs">
             {formatTimestamp(currentTime)}
           </span>
 
-          <div className="relative flex-1 flex items-center">
+          <div className="relative flex min-w-0 flex-1 items-center">
             <input
               type="range"
               min="0"
@@ -439,25 +412,26 @@ export default function AudioPlayer({
               step="0.1"
               value={currentTime}
               onChange={handleScrubberChange}
-              className="h-2 w-full cursor-pointer appearance-none rounded-full bg-slate-200/80 dark:bg-slate-700/80 accent-blue-600 transition-all focus:outline-none"
+              aria-label="Playback position"
+              className="h-2 w-full min-w-0 cursor-pointer appearance-none rounded-full bg-slate-200/80 accent-blue-600 focus-visible:ring-2 focus-visible:ring-blue-500 dark:bg-slate-700/80"
               style={{
                 background: `linear-gradient(to right, #0071e3 ${progressPercent}%, rgba(203, 213, 225, 0.6) ${progressPercent}%)`
               }}
             />
           </div>
 
-          <span className="w-14 font-mono text-xs font-semibold text-slate-500 dark:text-slate-400 tabular-nums">
+          <span className="shrink-0 font-mono text-[10px] font-semibold text-slate-500 tabular-nums dark:text-slate-400 sm:w-14 sm:text-xs">
             {formatTimestamp(displayTotal)}
           </span>
         </div>
 
         {/* Controls Toolbar */}
-        <div className="flex items-center justify-between pt-1">
-          <div className="flex items-center gap-2">
+        <div className="contents sm:flex sm:items-center sm:justify-between sm:pt-1">
+          <div className="contents sm:flex sm:items-center sm:gap-2">
             {/* Skip Back 5s */}
             <button
               onClick={() => handleSkip(-5)}
-              className="rounded-xl p-2 text-slate-600 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white transition-colors cursor-pointer"
+              className="hidden rounded-xl p-2 text-slate-600 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white sm:block"
               title="Skip back 5 seconds (Left Arrow)"
             >
               <RotateCcw className="h-4 w-4" />
@@ -466,7 +440,8 @@ export default function AudioPlayer({
             {/* Play / Pause Primary Button */}
             <button
               onClick={togglePlay}
-              className="apple-btn-primary flex h-11 w-11 items-center justify-center rounded-full text-white shadow-md shadow-blue-500/20 transition-transform active:scale-95 cursor-pointer"
+              className="apple-btn-primary col-start-1 row-start-1 flex h-10 w-10 items-center justify-center rounded-full text-white shadow-md shadow-blue-500/20 transition-transform active:scale-95 sm:h-11 sm:w-11"
+              aria-label={isPlaying ? 'Pause' : 'Play'}
               title={isPlaying ? 'Pause (Space)' : 'Play (Space)'}
             >
               {isPlaying ? <Pause className="h-5 w-5 fill-white" /> : <Play className="h-5 w-5 fill-white ml-0.5" />}
@@ -475,7 +450,7 @@ export default function AudioPlayer({
             {/* Skip Forward 5s */}
             <button
               onClick={() => handleSkip(5)}
-              className="rounded-xl p-2 text-slate-600 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white transition-colors cursor-pointer"
+              className="hidden rounded-xl p-2 text-slate-600 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white sm:block"
               title="Skip forward 5 seconds (Right Arrow)"
             >
               <RotateCw className="h-4 w-4" />
@@ -493,20 +468,20 @@ export default function AudioPlayer({
             )}
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="contents sm:flex sm:items-center sm:gap-2">
             {/* Speed Selector */}
             <button
               onClick={cycleSpeed}
-              className="flex items-center gap-1.5 rounded-full border border-slate-200/80 bg-white/90 px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 transition-all cursor-pointer shadow-2xs"
+              className="col-start-3 row-start-1 flex min-h-10 min-w-10 items-center justify-center gap-1.5 rounded-full border border-slate-200/80 bg-white/90 px-2 text-xs font-bold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 sm:min-h-0 sm:px-3 sm:py-1.5"
               title="Change playback speed"
             >
-              <Gauge className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" />
+              <Gauge className="hidden h-3.5 w-3.5 text-blue-600 dark:text-blue-400 sm:block" />
               <span>{playbackSpeed}x</span>
             </button>
 
             {/* Volume Control (Only for native audio) */}
             {hasNativeAudio && (
-              <div className="relative flex items-center">
+              <div className="relative hidden items-center sm:flex">
                 <button
                   onClick={toggleMute}
                   onMouseEnter={() => setShowVolumeSlider(true)}

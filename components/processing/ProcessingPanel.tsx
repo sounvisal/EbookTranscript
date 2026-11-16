@@ -1,141 +1,41 @@
 'use client'
 
-import { motion } from 'framer-motion'
-import { useEffect, useState, useRef } from 'react'
-import { Sparkles, Brain, Cpu, CheckCircle, Clock } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Loader2 } from 'lucide-react'
+import { formatTimestamp } from '@/lib/transcript'
+import { transcriptionStageLabels } from '@/lib/transcriptionActivity'
 import { useTranscriptStore } from '@/store/transcriptStore'
 
-const STATUS_STEPS = [
-  { label: 'Ingesting media & extracting speech audio', detail: 'Audio spectrogram normalization' },
-  { label: 'Neural speech-to-text analysis', detail: 'Khmer & multilingual language modeling' },
-  { label: 'Timestamp segmenting & verbatim alignment', detail: 'Precision sentence boundary detection' },
-  { label: 'Finalizing formatting & intelligence review', detail: 'High-accuracy output synthesis' }
-]
-
 export default function ProcessingPanel() {
-  const [stepIndex, setStepIndex] = useState(0)
-  const progress = useTranscriptStore((state) => state.progress)
-  const [eta, setEta] = useState<number | null>(null)
-  const startTimeRef = useRef<number>(Date.now())
-  const lastProgressRef = useRef<number>(0)
+  const fileName = useTranscriptStore(state => state.file?.name)
+  const { stage, uploadPercent, background } = useTranscriptStore(state => state.transcriptionActivity)
+  const [elapsed, setElapsed] = useState(0)
 
   useEffect(() => {
-    startTimeRef.current = Date.now()
-    lastProgressRef.current = 0
-  }, [])
-
-  useEffect(() => {
-    if (progress <= 0 || progress >= 100) {
-      setEta(null)
-      return
-    }
-
-    const now = Date.now()
-    const elapsed = Math.max(0.5, (now - startTimeRef.current) / 1000)
-    const progressDelta = progress - lastProgressRef.current
-
-    if (progressDelta > 0) {
-      const rate = progress / elapsed
-      const remaining = 100 - progress
-      const estimatedSeconds = remaining / Math.max(0.2, rate)
-
-      setEta((prev) => {
-        if (prev === null) return Math.round(estimatedSeconds)
-        return Math.round(prev * 0.65 + estimatedSeconds * 0.35)
-      })
-
-      lastProgressRef.current = progress
-    }
-  }, [progress])
-
-  const formatETA = (seconds: number | null) => {
-    if (seconds === null || !Number.isFinite(seconds) || seconds <= 0) return null
-    if (seconds < 60) return `~${Math.ceil(seconds)}s left`
-    const mins = Math.ceil(seconds / 60)
-    return `~${mins} min${mins > 1 ? 's' : ''} left`
-  }
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setStepIndex((current) => (current + 1) % STATUS_STEPS.length)
-    }, 2800)
-    return () => clearInterval(interval)
+    const startedAt = Date.now()
+    const timer = setInterval(() => setElapsed(Math.floor((Date.now() - startedAt) / 1000)), 1000)
+    return () => clearInterval(timer)
   }, [])
 
   return (
-    <div className="apple-glass mx-auto w-full max-w-3xl overflow-hidden rounded-3xl p-8 sm:p-12 transition-all">
-      <div className="mx-auto max-w-lg text-center">
-        {/* Apple Intelligence Soundwave Halo */}
-        <div className="relative mx-auto mb-6 flex h-24 w-24 items-center justify-center">
-          {/* Animated pulsing soundwave rings */}
-          <motion.span
-            className="absolute inset-0 rounded-full bg-blue-500/20"
-            animate={{ scale: [1, 1.35, 1], opacity: [0.6, 0, 0.6] }}
-            transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
-          />
-          <motion.span
-            className="absolute inset-2 rounded-full bg-purple-500/20"
-            animate={{ scale: [1, 1.25, 1], opacity: [0.5, 0.1, 0.5] }}
-            transition={{ duration: 2, delay: 0.3, repeat: Infinity, ease: 'easeInOut' }}
-          />
-          <div className="relative flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-600 text-white shadow-lg shadow-blue-500/30">
-            <Sparkles className="h-8 w-8 animate-pulse text-white" />
-          </div>
+    <section aria-label="Transcription progress" className="apple-glass mx-auto w-full max-w-2xl rounded-3xl p-5 sm:p-8">
+      <div className="flex items-start gap-3">
+        <Loader2 aria-hidden="true" className="mt-0.5 h-5 w-5 shrink-0 text-blue-600 motion-safe:animate-spin dark:text-blue-400" />
+        <div className="min-w-0 flex-1">
+          <h2 role="status" className="text-lg font-bold text-slate-950 dark:text-white">{transcriptionStageLabels[stage]}</h2>
+          {fileName && <p className="break-words text-sm text-slate-600 dark:text-slate-300">{fileName}</p>}
         </div>
-
-        <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-950 dark:text-white">
-          Transcribing your media
-        </h2>
-
-        {/* Dynamic status phase */}
-        <div className="mt-3 min-h-[48px]">
-          <motion.p
-            key={stepIndex}
-            initial={{ opacity: 0, y: 4 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -4 }}
-            className="text-sm font-semibold text-blue-600 dark:text-blue-400"
-          >
-            {STATUS_STEPS[stepIndex].label}
-          </motion.p>
-          <p className="mt-0.5 text-xs text-slate-400 dark:text-slate-500">
-            {STATUS_STEPS[stepIndex].detail}
-          </p>
-        </div>
-
-        {/* Apple Shimmering Progress Bar */}
-        <div className="mt-8">
-          <div className="flex items-center justify-between text-xs font-semibold text-slate-600 dark:text-slate-400">
-            <span className="flex items-center gap-1.5">
-              <Cpu className="h-3.5 w-3.5 text-blue-500 dark:text-blue-400" /> Speech Engine Active
-            </span>
-            <div className="flex items-center gap-2.5">
-              {formatETA(eta) && (
-                <span className="inline-flex items-center gap-1 rounded-md bg-blue-50 dark:bg-blue-950/60 px-2 py-0.5 text-[11px] font-semibold text-blue-600 dark:text-blue-400 font-mono ring-1 ring-blue-500/20">
-                  <Clock className="h-3 w-3" />
-                  <span>{formatETA(eta)}</span>
-                </span>
-              )}
-              <span className="font-mono text-sm font-bold text-blue-600 dark:text-blue-400">{Math.floor(progress)}%</span>
-            </div>
-          </div>
-
-          <div className="relative mt-3 h-3 overflow-hidden rounded-full bg-slate-200/70 dark:bg-slate-800/80 p-0.5 ring-1 ring-black/5 dark:ring-white/5">
-            <motion.div
-              className="relative h-full rounded-full bg-gradient-to-r from-blue-500 via-indigo-500 to-blue-600 shadow-xs"
-              animate={{ width: `${Math.max(5, progress)}%` }}
-              transition={{ duration: 0.35, ease: 'easeOut' }}
-            >
-              {/* Shimmer light bar */}
-              <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/40 to-transparent animate-shimmer" />
-            </motion.div>
-          </div>
-        </div>
-
-        <p className="mt-7 text-xs leading-relaxed text-slate-400 dark:text-slate-500">
-          Large files and videos process smoothly in real time. Please keep this tab open.
-        </p>
       </div>
-    </div>
+      {stage === 'uploading' && uploadPercent !== undefined && (
+        <div className="mt-4 flex items-center gap-3">
+          <progress aria-label="File upload" value={uploadPercent} max={100} className="h-2 w-full accent-blue-600" />
+          <span className="text-sm font-medium tabular-nums text-slate-700 dark:text-slate-300">{uploadPercent}%</span>
+        </div>
+      )}
+      <p className="mt-4 text-sm text-slate-600 dark:text-slate-300">
+        {background ? 'This job can continue in the background. Reopen it from Recent jobs.' : 'Keep this tab open while the file is processed.'}
+      </p>
+      <p className="mt-1 text-xs tabular-nums text-slate-500 dark:text-slate-400">Elapsed {formatTimestamp(elapsed)}</p>
+    </section>
   )
 }

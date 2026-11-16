@@ -1,5 +1,7 @@
 import { create } from 'zustand'
 import type { TranscriptSegment } from '@/lib/transcript'
+import type { TranscriptionActivity } from '@/lib/transcriptionActivity'
+import type { TranscriptionRecovery } from '@/lib/transcribeClient'
 
 type TranscriptResult = {
   id?: string
@@ -24,7 +26,8 @@ interface TranscriptState {
   accountId: string | null
   file: File | null
   status: 'idle' | 'uploading' | 'processing' | 'complete' | 'error'
-  progress: number
+  transcriptionActivity: TranscriptionActivity
+  transcriptionRecovery: TranscriptionRecovery | null
   transcript: TranscriptResult | null
   errorMessage: string | null
   language: string
@@ -50,7 +53,6 @@ interface TranscriptState {
   setAccountId: (accountId: string | null) => void
   setFile: (file: File | null) => void
   setStatus: (status: 'idle' | 'uploading' | 'processing' | 'complete' | 'error') => void
-  setProgress: (progress: number) => void
   setTranscript: (transcript: TranscriptResult | null) => void
   setTranscriptWithAudio: (
     transcript: TranscriptResult | null,
@@ -89,7 +91,8 @@ export const useTranscriptStore = create<TranscriptState>((set) => ({
   accountId: null,
   file: null,
   status: 'idle',
-  progress: 0,
+  transcriptionActivity: { stage: 'preparing' },
+  transcriptionRecovery: null,
   transcript: null,
   errorMessage: null,
   language: 'auto',
@@ -120,11 +123,10 @@ export const useTranscriptStore = create<TranscriptState>((set) => ({
   setFile: (file) =>
     set((state) => {
       revokeAudioUrl(state.audioUrl)
-      return { file, audioUrl: file ? URL.createObjectURL(file) : null, audioBlob: null, customAudioUrl: null }
+      return { file, audioUrl: file ? URL.createObjectURL(file) : null, audioBlob: null, customAudioUrl: null, transcriptionRecovery: null }
     }),
   setStatus: (status) => set({ status }),
-  setProgress: (progress) => set({ progress }),
-  setTranscript: (transcript) => set({ transcript, status: 'complete', errorMessage: null }),
+  setTranscript: (transcript) => set({ transcript, status: 'complete', errorMessage: null, transcriptionRecovery: null }),
   setTranscriptWithAudio: (transcript, audioUrl = null, file = null, audioBlob = null) =>
     set((state) => {
       const media = audioBlob || file
@@ -134,6 +136,7 @@ export const useTranscriptStore = create<TranscriptState>((set) => ({
         transcript: transcript ? { ...transcript, alreadySaved: Boolean(transcript.id) } : null,
         status: 'complete',
         errorMessage: null,
+        transcriptionRecovery: null,
         customAudioUrl: url,
         audioUrl: url,
         file,
@@ -220,7 +223,8 @@ export const useTranscriptStore = create<TranscriptState>((set) => ({
       return {
         file: null,
         status: 'idle',
-        progress: 0,
+        transcriptionActivity: { stage: 'preparing' },
+        transcriptionRecovery: null,
         transcript: null,
         errorMessage: null,
         isListening: false,

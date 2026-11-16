@@ -5,7 +5,7 @@ import { prisma } from '@/lib/prisma'
 import { deleteGeminiFile } from '@/lib/gemini'
 import { getConfiguredKeys } from '@/lib/geminiConfig'
 import { geminiKeyFingerprint } from '@/lib/uploadSession'
-import { getPlainTranscriptText } from '@/lib/transcript'
+import { getPlainTranscriptText, serializeTranscriptForStorage } from '@/lib/transcript'
 import { estimateTokens } from '@/lib/telemetry'
 import { classifyTranscriptionError, MODEL_NAME, transcribeUploadedMedia, type TranscribeOptions } from '@/lib/transcriptionPipeline'
 
@@ -95,7 +95,7 @@ export async function runTranscriptionJob(jobId: string, retryBusyDelivery = tru
       const transcript = await tx.transcript.create({
         data: {
           userId: job.userId,
-          text,
+          text: serializeTranscriptForStorage(text, result.segments),
           source: job.fileName,
           filename: job.fileName,
           duration: result.duration,

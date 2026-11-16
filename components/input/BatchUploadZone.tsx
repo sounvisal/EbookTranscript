@@ -8,7 +8,8 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { MAX_MEDIA_UPLOAD_BYTES, MAX_MEDIA_UPLOAD_MB } from '@/lib/uploadLimits'
 import { getPlainTranscriptText, type TranscriptSegment } from '@/lib/transcript'
 import { downloadTxt, downloadFile } from '@/lib/download'
-import { transcribeWithProgress } from '@/lib/transcribeClient'
+import { getTranscriptionRecovery, transcribeWithProgress, transcriptionRetryLabel, type TranscriptionRecovery } from '@/lib/transcribeClient'
+import { transcriptionStageLabels, updateTranscriptionActivity, type TranscriptionActivity } from '@/lib/transcriptionActivity'
 import ReportErrorButton from '@/components/common/ReportErrorButton'
 import AdvancedOptionsDrawer from './AdvancedOptionsDrawer'
 import { useTranscriptStore } from '@/store/transcriptStore'
@@ -47,10 +48,11 @@ type BatchJob = {
   id: string
   file: File
   status: BatchJobStatus
-  progress: number
+  activity?: TranscriptionActivity
   transcript?: BatchTranscript
   error?: string
   message?: string
+  recovery?: TranscriptionRecovery
   assignedKeyIndex?: number
 }
 
@@ -77,6 +79,7 @@ export default function BatchUploadZone() {
   const [totalFleetKeys, setTotalFleetKeys] = useState<number>(9)
   const [concurrency, setConcurrency] = useState<number>(DEFAULT_CONCURRENT_JOBS)
   const savedRef = useRef<Set<string>>(new Set())
+  const batchLock = useRef(false)
 
   // Detect total configured keys in the Gemini Fleet on mount
   useEffect(() => {
@@ -104,8 +107,7 @@ export default function BatchUploadZone() {
       const incoming = acceptedFiles.slice(0, remainingSlots).map((file) => ({
         id: createId(),
         file,
-        status: 'queued' as BatchJobStatus,
-        progress: 0
+        status: 'queued' as const
       }))
       return [...current, ...incoming]
     })
@@ -143,6 +145,7 @@ export default function BatchUploadZone() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           text: plainText,
+          segments: job.transcript?.segments,
           expectedUserId: accountId,
           cacheId: job.transcript?.cacheId,
           source: 'file',
@@ -173,7 +176,8 @@ export default function BatchUploadZone() {
       const assignedKeyIndex = totalFleetKeys > 0 ? workerIndex % totalFleetKeys : workerIndex
       updateJob(job.id, {
         status: 'processing',
-        progress: 0,
+        activity: { stage: 'preparing' },
+        recovery: undefined,
         error: undefined,
         message: undefined,
         assignedKeyIndex
@@ -184,14 +188,16 @@ export default function BatchUploadZone() {
         const data = await transcribeWithProgress(
           { file: job.file },
           (event) => {
-            if (event.type === 'progress') {
-              updateJob(job.id, { progress: event.progress })
-            } else if (event.type === 'status' && event.message) {
-              updateJob(job.id, { message: event.message })
-            }
+            if (event.type === 'progress') return
+            setJobs(current => current.map(item => item.id !== job.id ? item : {
+              ...item,
+              activity: updateTranscriptionActivity(item.activity || { stage: 'preparing' }, event),
+              message: event.type === 'status' ? event.message : item.message
+            }))
           },
           advancedOptions,
-          assignedKeyIndex
+          assignedKeyIndex,
+          job.recovery
         )
 
         const transcript: BatchTranscript = {
@@ -203,12 +209,12 @@ export default function BatchUploadZone() {
           language: data.language,
           duration: data.duration
         }
-        updateJob(job.id, { status: 'complete', progress: 100, transcript })
+        updateJob(job.id, { status: 'complete', transcript })
 
         if (transcript.id && accountId && useTranscriptStore.getState().accountId === accountId) {
-          if (!await getMediaBlob(accountId, transcript.id)) {
-            await saveMediaBlob(accountId, transcript.id, job.file).catch(() => {})
-          }
+          try {
+            if (!await getMediaBlob(accountId, transcript.id)) await saveMediaBlob(accountId, transcript.id, job.file)
+          } catch { /* A local audio storage error does not invalidate the finished transcript. */ }
         } else if (!transcript.id) {
           const plainText = getPlainTranscriptText(transcript.text || '', transcript.segments)
           await saveToHistory({ ...job, transcript }, plainText)
@@ -217,7 +223,7 @@ export default function BatchUploadZone() {
         const errorMsg = error instanceof Error ? error.message : 'Transcription failed'
         updateJob(job.id, {
           status: 'error',
-          progress: 0,
+          recovery: getTranscriptionRecovery(error),
           error: errorMsg
         })
 
@@ -237,10 +243,9 @@ export default function BatchUploadZone() {
     [updateJob, totalFleetKeys, saveToHistory, accountId]
   )
 
-  const runAll = async () => {
-    const pending = jobs.filter((job) => job.status === 'queued' || job.status === 'error')
-    if (!pending.length) return
-
+  const runBatch = async (pending: BatchJob[]) => {
+    if (!pending.length || batchLock.current) return
+    batchLock.current = true
     setRunning(true)
 
     let cursor = 0
@@ -258,8 +263,12 @@ export default function BatchUploadZone() {
       }
     )
 
-    await Promise.all(workers)
-    setRunning(false)
+    try {
+      await Promise.all(workers)
+    } finally {
+      batchLock.current = false
+      setRunning(false)
+    }
   }
 
   const handleCopy = (job: BatchJob) => {
@@ -293,7 +302,9 @@ export default function BatchUploadZone() {
   }
 
   const completedCount = jobs.filter((job) => job.status === 'complete').length
-  const hasPending = jobs.some((job) => job.status === 'queued' || job.status === 'error')
+  const waiting = jobs.filter(job => job.status === 'queued')
+  const failed = jobs.filter(job => job.status === 'error')
+  const activeCount = jobs.filter(job => job.status === 'processing').length
 
   return (
     <div className="flex flex-col gap-6">
@@ -339,6 +350,12 @@ export default function BatchUploadZone() {
             <span>
               {jobs.length} of {maxBatchFiles} files · {completedCount} completed
             </span>
+            {failed.length > 0 && (
+              <button type="button" disabled={running} onClick={() => void runBatch(failed)}
+                className="rounded-lg border border-amber-300 px-2.5 py-2 text-xs font-semibold text-amber-900 disabled:opacity-50 dark:border-amber-800 dark:text-amber-300">
+                Retry failed ({failed.length})
+              </button>
+            )}
             {completedCount > 1 && (
               <button
                 type="button"
@@ -442,7 +459,7 @@ export default function BatchUploadZone() {
                 </div>
 
                 <div className="flex shrink-0 items-center gap-2">
-                  <StatusBadge status={job.status} />
+                  <StatusBadge status={job.status} label={job.status === 'processing' && job.activity ? transcriptionStageLabels[job.activity.stage] : undefined} />
                   {job.status === 'queued' && !running && (
                     <button
                       onClick={() => removeJob(job.id)}
@@ -455,13 +472,10 @@ export default function BatchUploadZone() {
                 </div>
               </div>
 
-              {job.status === 'processing' && (
-                <div className="mt-3 relative h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800 ring-1 ring-black/5 dark:ring-white/5">
-                  <motion.div
-                    className="h-full rounded-full bg-gradient-to-r from-purple-500 to-indigo-600"
-                    animate={{ width: `${job.progress}%` }}
-                    transition={{ duration: 0.35, ease: 'linear' }}
-                  />
+              {job.status === 'processing' && job.activity?.stage === 'uploading' && job.activity.uploadPercent !== undefined && (
+                <div className="mt-3 flex items-center gap-2">
+                  <progress aria-label={`Upload ${job.file.name}`} value={job.activity.uploadPercent} max={100} className="h-2 w-full accent-purple-600" />
+                  <span className="text-xs tabular-nums">{job.activity.uploadPercent}%</span>
                 </div>
               )}
 
@@ -477,12 +491,12 @@ export default function BatchUploadZone() {
                   </div>
                   <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
                     <button
-                      onClick={() => runJob(job)}
+                      onClick={() => void runBatch([job])}
                       disabled={running}
                       className="flex items-center gap-1 rounded-lg bg-amber-600 dark:bg-amber-500 px-2.5 py-1 text-xs font-bold text-white shadow-xs transition-all hover:bg-amber-700 active:scale-95 disabled:opacity-50 cursor-pointer"
                     >
                       <RefreshCw className="h-3 w-3" />
-                      <span>Retry</span>
+                      <span>{transcriptionRetryLabel(job.recovery)}</span>
                     </button>
                   </div>
                 </div>
@@ -547,23 +561,22 @@ export default function BatchUploadZone() {
       {/* Advanced Options Drawer */}
       <AdvancedOptionsDrawer />
 
-      {jobs.length > 0 && (
+      {(running || waiting.length > 0) && (
         <button
-          onClick={runAll}
-          disabled={running || !hasPending}
+          onClick={() => void runBatch(waiting)}
+          disabled={running || waiting.length === 0}
           className={`apple-btn-primary mt-2 flex w-full items-center justify-center gap-2.5 rounded-2xl py-4 text-base font-bold text-white transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed`}
         >
           {running ? (
             <>
               <Loader2 className="h-5 w-5 animate-spin" />
-              <span>Processing Queue ({concurrency} Parallel Workers Active)…</span>
+              <span>Running batch · {activeCount} active · {waiting.length} waiting</span>
             </>
           ) : (
             <>
               <Sparkles className="h-5 w-5 animate-pulse" />
               <span>
-                Transcribe {jobs.filter((job) => job.status === 'queued' || job.status === 'error').length} Queue Item
-                {jobs.filter((job) => job.status === 'queued' || job.status === 'error').length === 1 ? '' : 's'} ({concurrency}x Parallel)
+                Transcribe {waiting.length} {waiting.length === 1 ? 'file' : 'files'}
               </span>
             </>
           )}
@@ -573,13 +586,13 @@ export default function BatchUploadZone() {
   )
 }
 
-function StatusBadge({ status }: { status: BatchJobStatus }) {
+function StatusBadge({ status, label }: { status: BatchJobStatus; label?: string }) {
   const config: Record<BatchJobStatus, { label: string; className: string }> = {
     queued: { label: 'Queued', className: 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400' },
     processing: { label: 'Processing', className: 'bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 ring-1 ring-blue-500/20' },
     complete: { label: 'Complete', className: 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 ring-1 ring-emerald-500/20' },
     error: { label: 'Failed', className: 'bg-red-50 dark:bg-red-950/60 text-red-700 dark:text-red-400 ring-1 ring-red-500/20' }
   }
-  const { label, className } = config[status]
-  return <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${className}`}>{label}</span>
+  const badge = config[status]
+  return <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${badge.className}`}>{label || badge.label}</span>
 }

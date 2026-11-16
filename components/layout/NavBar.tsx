@@ -20,7 +20,7 @@ export default function NavBar() {
 
   return (
     <nav className="sticky top-0 z-40 border-b border-slate-200/60 bg-white/85 backdrop-blur-md dark:border-slate-800/60 dark:bg-slate-950/85 transition-colors">
-      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:px-6">
+      <div className="mx-auto grid min-h-16 max-w-6xl grid-cols-[1fr_auto] items-center gap-3 px-4 py-3 sm:px-6 md:grid-cols-[auto_1fr_auto]">
         {/* Brand */}
         <Link href="/" className="flex items-center gap-2.5 group">
           <div className="relative flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-b from-blue-50 to-blue-100/60 dark:from-blue-950/80 dark:to-blue-900/40 p-1.5 shadow-xs ring-1 ring-black/5 dark:ring-white/10 transition-transform duration-200 group-hover:scale-105">
@@ -35,8 +35,8 @@ export default function NavBar() {
         </Link>
 
         {/* Navigation items & Auth & Theme */}
-        <div className="flex items-center gap-2 sm:gap-3">
-          <div className="flex items-center rounded-full bg-slate-100/80 dark:bg-slate-900/80 p-1 ring-1 ring-slate-200/50 dark:ring-slate-800/50">
+        <div className="contents">
+          <div className="col-span-2 row-start-2 flex min-w-0 items-center overflow-x-auto whitespace-nowrap rounded-full bg-slate-100/80 dark:bg-slate-900/80 p-1 ring-1 ring-slate-200/50 dark:ring-slate-800/50 md:col-span-1 md:row-start-auto md:justify-self-end">
             <Link href="/" className={linkClass('/')}>Home</Link>
             <Link href="/transcribe" className={linkClass('/transcribe')}>Transcribe</Link>
             <Link href="/history" className={linkClass('/history')}>History</Link>
@@ -50,6 +50,7 @@ export default function NavBar() {
             )}
           </div>
 
+          <div className="flex items-center gap-2 whitespace-nowrap sm:gap-3">
           <ThemeToggle />
 
           {session ? (
@@ -67,6 +68,7 @@ export default function NavBar() {
               Sign in
             </button>
           )}
+          </div>
         </div>
       </div>
     </nav>

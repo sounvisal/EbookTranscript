@@ -3,10 +3,31 @@ import { recoverPendingMedia, savePendingMedia } from '@/lib/mediaStorage'
 import type { TranscriptSegment } from '@/lib/transcript'
 import { prepareMediaForUpload } from '@/lib/clientAudio'
 import { useTranscriptStore } from '@/store/transcriptStore'
+import type { TranscribeProgressEvent } from '@/lib/transcriptionActivity'
+import type { AdvancedOptions } from '@/store/transcriptStore'
 
-export type TranscribeProgressEvent =
-  | { type: 'status'; phase: 'uploading' | 'processing'; duration?: number; message?: string }
-  | { type: 'progress'; progress: number }
+type UploadedMedia = { kind: 'transcription'; uploadToken: string; duration: number; streaming?: boolean }
+
+export type TranscriptionRecovery =
+  | { kind: 'upload' }
+  | UploadedMedia
+  | { kind: 'job'; id: string; upload?: UploadedMedia }
+
+export class TranscriptionAttemptError extends Error {
+  constructor(message: string, readonly recovery: TranscriptionRecovery) {
+    super(message)
+  }
+}
+
+export function getTranscriptionRecovery(error: unknown): TranscriptionRecovery {
+  return error instanceof TranscriptionAttemptError ? error.recovery : { kind: 'upload' }
+}
+
+export function transcriptionRetryLabel(recovery?: TranscriptionRecovery | null) {
+  if (recovery?.kind === 'job') return 'Reconnect'
+  if (recovery?.kind === 'transcription') return 'Retry transcription'
+  return 'Retry upload'
+}
 
 export type TranscribeResult = {
   id?: string
@@ -21,13 +42,17 @@ export type TranscribeResult = {
 
 type TranscriptionJob = {
   status: 'queued' | 'running' | 'interrupted' | 'complete' | 'failed'
-  progress: number
   error?: string
   transcriptId?: string
   result?: TranscribeResult
 }
 
 class BackgroundJobsUnavailable extends Error {}
+class TranscriptionJobRequestError extends Error {
+  constructor(message: string, readonly status: number, readonly id?: string) {
+    super(message)
+  }
+}
 
 async function requestTranscriptionJob(payload: object): Promise<string> {
   const response = await fetch('/api/transcribe/jobs', {
@@ -40,40 +65,58 @@ async function requestTranscriptionJob(payload: object): Promise<string> {
     if (response.status === 503 && data?.code === 'DATABASE_MIGRATION_REQUIRED') {
       throw new BackgroundJobsUnavailable(data.error)
     }
-    throw new Error(data?.error || `Unable to start transcription (HTTP ${response.status}).`)
+    throw new TranscriptionJobRequestError(data?.error || `Unable to start transcription (HTTP ${response.status}).`,
+      response.status, typeof data?.id === 'string' ? data.id : undefined)
   }
-  return (await response.json()).id
+  const { id } = await response.json()
+  if (typeof id !== 'string' || !id) throw new Error('Could not confirm that transcription started.')
+  return id
 }
 
 export async function resumeTranscriptionJob(
   id: string,
   onEvent?: (event: TranscribeProgressEvent) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  upload?: UploadedMedia
 ) {
-  await requestTranscriptionJob({ id })
-  return waitForTranscriptionJob(id, onEvent, signal)
+  onEvent?.({ type: 'status', phase: 'reconnecting' })
+  try {
+    await requestTranscriptionJob({ id })
+    return await waitForTranscriptionJob(id, onEvent, signal, upload && { ...upload, streaming: true })
+  } catch (error) {
+    if (error instanceof TranscriptionAttemptError) throw error
+    const expired = error instanceof TranscriptionJobRequestError && error.status === 404
+    throw new TranscriptionAttemptError(error instanceof Error ? error.message : 'Unable to reconnect.',
+      expired ? { kind: 'upload' } : { kind: 'job', id, upload })
+  }
 }
 
 async function waitForTranscriptionJob(
   id: string,
   onEvent?: (event: TranscribeProgressEvent) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  failedJobRecovery: TranscriptionRecovery = { kind: 'upload' }
 ): Promise<TranscribeResult> {
   const deadline = Date.now() + 12 * 60 * 1000
   let resumed = false
   while (Date.now() < deadline) {
     const response = await fetch(`/api/transcribe/jobs?id=${encodeURIComponent(id)}`, { cache: 'no-store', signal })
-    if (!response.ok) throw new Error(await readError(response, 'Open Recent jobs to reconnect.'))
+    if (response.status === 404) {
+      throw new TranscriptionAttemptError(await readError(response, 'The job is unavailable.'), { kind: 'upload' })
+    }
+    if (!response.ok) throw new Error(await readError(response, 'Unable to check transcription progress.'))
     const job: TranscriptionJob = await response.json()
     if (job.status === 'complete' && job.transcriptId && job.result) {
       return { ...job.result, id: job.transcriptId, alreadySaved: true }
     }
-    if (job.status === 'failed') throw new Error(job.error || 'Transcription timed out. Please upload the file again.')
+    if (job.status === 'failed') {
+      throw new TranscriptionAttemptError(job.error || 'Transcription did not finish.', failedJobRecovery)
+    }
     if (job.status === 'interrupted' && !resumed) {
       resumed = true
       await requestTranscriptionJob({ id })
     }
-    onEvent?.({ type: 'progress', progress: job.progress })
+    onEvent?.({ type: 'status', phase: job.status === 'queued' ? 'queued' : 'processing', background: true })
     await new Promise((resolve) => setTimeout(resolve, 2000))
   }
   throw new Error('Transcription is still in progress. Open Recent jobs to reconnect.')
@@ -82,7 +125,7 @@ async function waitForTranscriptionJob(
 type StreamEvent =
   | TranscribeProgressEvent
   | ({ type: 'result' } & TranscribeResult)
-  | { type: 'error'; error: string }
+  | { type: 'error'; error: string; code?: 'UPLOAD_EXPIRED' }
 
 /**
  * Uploads a file directly to Gemini Files API from the browser.
@@ -150,7 +193,7 @@ async function uploadToResumableUrl(
     if (xhr.upload && onProgress) {
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable && e.total > 0) {
-          const percent = Math.min(99, Math.round((e.loaded / e.total) * 100))
+          const percent = Math.min(100, Math.round((e.loaded / e.total) * 100))
           onProgress(percent)
         }
       }
@@ -200,7 +243,7 @@ async function readError(response: Response, fallback: string) {
 export async function uploadMediaForProcessing(
   file: File,
   purpose: 'transcription' | 'report',
-  onProgress?: (progress: number) => void,
+  onProgress?: (progress: number | undefined) => void,
   preferredKeyIndex?: number
 ): Promise<string> {
   if (!file.size || file.size > MAX_MEDIA_UPLOAD_BYTES) {
@@ -231,14 +274,12 @@ export async function uploadMediaForProcessing(
       throw new Error('Direct upload to Google failed. Check your connection or try another network, or upload a smaller file.')
     }
     // The first upload may already have reached Google. Use a fresh session for the fallback.
+    onProgress?.(undefined)
     const proxySession = await requestSession()
     await uploadViaServerProxy(proxySession.uploadToken, file)
-    onProgress?.(99)
     return proxySession.uploadToken
   }
 }
-
-import type { AdvancedOptions } from '@/store/transcriptStore'
 
 /**
  * Reads newline-delimited JSON stream from /api/transcribe and emits progress & results.
@@ -252,6 +293,7 @@ async function readTranscriptionStream(
   let buffer = ''
   let result: TranscribeResult | null = null
   let errorMessage = ''
+  let uploadExpired = false
   let chunkCount = 0
 
   const handleLine = (line: string) => {
@@ -271,6 +313,7 @@ async function readTranscriptionStream(
       result = rest
     } else if (event.type === 'error') {
       errorMessage = event.error
+      uploadExpired = event.code === 'UPLOAD_EXPIRED'
     } else {
       onEvent?.(event)
     }
@@ -293,6 +336,7 @@ async function readTranscriptionStream(
   }
 
   if (errorMessage) {
+    if (uploadExpired) throw new TranscriptionAttemptError(errorMessage, { kind: 'upload' })
     throw new Error(errorMessage)
   }
 
@@ -320,13 +364,22 @@ export async function transcribeWithProgress(
   input: { file?: File; url?: string },
   onEvent?: (event: TranscribeProgressEvent) => void,
   options?: AdvancedOptions,
-  preferredKeyIndex?: number
+  preferredKeyIndex?: number,
+  recovery?: TranscriptionRecovery | null
 ): Promise<TranscribeResult> {
   if (!input.file) throw new Error('Please select an audio or video file to transcribe.')
   if (input.file.size > MAX_MEDIA_UPLOAD_BYTES) throw new Error('This file exceeds the supported upload size.')
   const accountId = useTranscriptStore.getState().accountId
+  if (recovery?.kind === 'job') {
+    const result = await resumeTranscriptionJob(recovery.id, onEvent, undefined, recovery.upload)
+    if (accountId && result.id) await recoverPendingMedia(accountId, recovery.id, result.id).catch(() => {})
+    return result
+  }
+  if (recovery?.kind === 'transcription') {
+    return transcribeFromUpload(input.file, recovery, options, accountId, onEvent)
+  }
 
-  onEvent?.({ type: 'status', phase: 'uploading' })
+  onEvent?.({ type: 'status', phase: 'preparing' })
   let file = input.file
   let duration = 0
   try {
@@ -341,6 +394,7 @@ export async function transcribeWithProgress(
     file = input.file
   }
 
+  onEvent?.({ type: 'status', phase: 'uploading' })
   if (file.size <= MAX_INLINE_UPLOAD_BYTES && duration < 150) {
     const formData = new FormData()
     formData.append('file', file, input.file.name)
@@ -360,29 +414,59 @@ export async function transcribeWithProgress(
   }
 
   const uploadToken = await uploadMediaForProcessing(file, 'transcription', (progress) => {
-    onEvent?.({ type: 'progress', progress })
+    onEvent?.({ type: 'upload-progress', percent: progress })
   }, preferredKeyIndex)
-  onEvent?.({ type: 'status', phase: 'processing', duration })
-  let id: string
-  try {
-    id = await requestTranscriptionJob({ uploadToken, duration, options })
-  } catch (error) {
-    if (!(error instanceof BackgroundJobsUnavailable)) throw error
-    // Only fall back when the server confirms no job could have been created.
-    // Send the signed reference, never the large file, through the function.
-    onEvent?.({ type: 'status', phase: 'processing', message: 'Keep this tab open until transcription finishes.' })
+  return transcribeFromUpload(input.file, { kind: 'transcription', uploadToken, duration }, options, accountId, onEvent)
+}
+
+async function transcribeFromUpload(
+  file: File,
+  upload: UploadedMedia,
+  options: AdvancedOptions | undefined,
+  accountId: string | null,
+  onEvent?: (event: TranscribeProgressEvent) => void
+): Promise<TranscribeResult> {
+  const { uploadToken, duration } = upload
+  const stream = async () => {
+    onEvent?.({ type: 'status', phase: 'processing' })
     const response = await fetch('/api/transcribe', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-stream': '1' },
       body: JSON.stringify({ uploadToken, duration, options })
     })
     if (!response.ok || !response.body) {
-      throw new Error(await readError(response, `Transcription request failed (${response.status}).`))
+      const expired = response.status === 403 || response.status === 404
+      throw new TranscriptionAttemptError(await readError(response, `Transcription request failed (${response.status}).`),
+        expired ? { kind: 'upload' } : { ...upload, streaming: true })
     }
     return readTranscriptionStream(response.body, onEvent)
   }
-  if (accountId) await savePendingMedia(accountId, id, input.file).catch(() => {})
-  const result = await waitForTranscriptionJob(id, onEvent)
-  if (accountId && result.id) await recoverPendingMedia(accountId, id, result.id).catch(() => {})
-  return result
+
+  let recovery: TranscriptionRecovery = upload
+  try {
+    if (upload.streaming) return await stream()
+    onEvent?.({ type: 'status', phase: 'queued' })
+    const id = await requestTranscriptionJob({ uploadToken, duration, options })
+    recovery = { kind: 'job', id, upload }
+    if (accountId) await savePendingMedia(accountId, id, file).catch(() => {})
+    onEvent?.({ type: 'status', phase: 'queued', background: true })
+    const result = await waitForTranscriptionJob(id, onEvent, undefined, { ...upload, streaming: true })
+    if (accountId && result.id) await recoverPendingMedia(accountId, id, result.id).catch(() => {})
+    return result
+  } catch (error) {
+    if (error instanceof TranscriptionAttemptError) throw error
+    if (error instanceof BackgroundJobsUnavailable && recovery.kind === 'transcription' && !upload.streaming) {
+      // The server confirmed it could not create a background job. Stream with the signed upload.
+      return transcribeFromUpload(file, { ...upload, streaming: true }, options, accountId, onEvent)
+    }
+    if (error instanceof TranscriptionJobRequestError && recovery.kind === 'transcription') {
+      if (error.id) {
+        if (accountId) await savePendingMedia(accountId, error.id, file).catch(() => {})
+        recovery = { kind: 'job', id: error.id, upload }
+      } else if (error.status === 403 || error.status === 404) {
+        recovery = { kind: 'upload' }
+      }
+    }
+    throw new TranscriptionAttemptError(error instanceof Error ? error.message : 'Transcription failed.', recovery)
+  }
 }

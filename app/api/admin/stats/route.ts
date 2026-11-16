@@ -4,6 +4,7 @@ import { authOptions, isUserAdmin } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { getFleetStatusSnapshot } from '@/lib/fleet'
 import { logAdminAction } from '@/lib/auditLog'
+import { getPlainTranscriptText } from '@/lib/transcript'
 
 export const dynamic = 'force-dynamic'
 
@@ -559,8 +560,8 @@ export async function GET(req: Request) {
         createdAt: t.createdAt.toISOString(),
         userEmail: t.user?.email || 'Guest / System',
         userId: t.userId,
-        textExcerpt: (t.text || '').slice(0, 2500),
-        fullTextLength: (t.text || '').length
+        textExcerpt: getPlainTranscriptText(t.text || '').slice(0, 2500),
+        fullTextLength: getPlainTranscriptText(t.text || '').length
       })),
       errors: {
         totalErrors: errorCountTotal,

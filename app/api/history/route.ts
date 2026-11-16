@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
-import { getPlainTranscriptText } from '@/lib/transcript'
+import { getPlainTranscriptText, serializeTranscriptForStorage } from '@/lib/transcript'
 import { getDatabaseCapabilities } from '@/lib/databaseCapabilities'
 
 // Explicit selection keeps existing history readable before additive migrations.
@@ -109,16 +109,17 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Unauthorized access' }, { status: 401 })
     }
 
-    const { text, source, filename, duration, wordCount, language, cacheId, expectedUserId } = await req.json()
+    const { text, segments, source, filename, duration, wordCount, language, cacheId, expectedUserId } = await req.json()
     if (expectedUserId && expectedUserId !== session.user.id) {
       return NextResponse.json({ error: 'The signed-in account changed.' }, { status: 403 })
     }
 
-    if (!text || !source) {
+    if (typeof text !== 'string' || !text || !source || (segments !== undefined && !Array.isArray(segments))) {
       return NextResponse.json({ error: 'Text and source are required' }, { status: 400 })
     }
 
     const cleanText = getPlainTranscriptText(text)
+    const storedText = serializeTranscriptForStorage(text, segments)
     const computedWordCount = wordCount || cleanText.split(/\s+/).filter(Boolean).length
     const computedDuration = (typeof duration === 'number' && Number.isFinite(duration) && duration > 0)
       ? duration
@@ -130,7 +131,7 @@ export async function POST(req: Request) {
     const existing = await prisma.transcript.findFirst({
       where: {
         userId: session.user.id,
-        text: cleanText,
+        text: { in: [cleanText, storedText] },
         ...(effectiveFilename
           ? { OR: [{ filename: effectiveFilename }, { filename: null, source: effectiveFilename }] }
           : { filename: null, source })
@@ -158,7 +159,7 @@ export async function POST(req: Request) {
 
     const transcript = await prisma.transcript.create({
       data: {
-        text: cleanText,
+        text: storedText,
         source,
         filename: effectiveFilename || filename,
         duration: computedDuration,
@@ -222,8 +223,8 @@ export async function PATCH(req: Request) {
       return NextResponse.json({ error: 'Unauthorized access' }, { status: 401 })
     }
 
-    const { id, text } = await req.json()
-    if (!id || typeof text !== 'string') {
+    const { id, text, segments } = await req.json()
+    if (!id || typeof text !== 'string' || (segments !== undefined && !Array.isArray(segments))) {
       return NextResponse.json({ error: 'ID and text are required' }, { status: 400 })
     }
 
@@ -233,7 +234,7 @@ export async function PATCH(req: Request) {
     const updated = await prisma.transcript.updateMany({
       where: { id, userId: session.user.id },
       data: {
-        text: cleanText,
+        text: serializeTranscriptForStorage(text, segments),
         wordCount
       }
     })

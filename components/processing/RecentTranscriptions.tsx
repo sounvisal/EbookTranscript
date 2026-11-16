@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { getMediaBlob } from '@/lib/mediaStorage'
 import { resumeTranscriptionJob } from '@/lib/transcribeClient'
+import { transcriptionStageLabels } from '@/lib/transcriptionActivity'
 import { createTranscriptSlug } from '@/lib/transcriptSlug'
 import { useTranscriptStore } from '@/store/transcriptStore'
 
@@ -44,7 +45,7 @@ export default function RecentTranscriptions({ accountId }: { accountId: string 
     setMessage('Connecting to transcription…')
     try {
       const transcript = await resumeTranscriptionJob(job.id, (event) => {
-        if (event.type === 'progress') setMessage(`Transcribing… ${event.progress}%`)
+        if (event.type === 'status') setMessage(`${transcriptionStageLabels[event.phase]}…`)
       }, request.signal)
       if (!transcript.id) throw new Error('The transcript is unavailable.')
 

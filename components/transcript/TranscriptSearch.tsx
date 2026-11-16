@@ -80,6 +80,7 @@ export function TranscriptSearch({
 
       <input
         type="text"
+        aria-label="Find in transcript"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         onKeyDown={handleKeyDown}

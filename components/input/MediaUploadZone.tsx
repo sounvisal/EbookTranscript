@@ -7,7 +7,8 @@ import { useTranscriptStore } from '@/store/transcriptStore'
 import { motion, AnimatePresence } from 'framer-motion'
 import { MAX_MEDIA_UPLOAD_BYTES, MAX_MEDIA_UPLOAD_MB } from '@/lib/uploadLimits'
 import { getMediaBlob, saveMediaBlob } from '@/lib/mediaStorage'
-import { transcribeWithProgress } from '@/lib/transcribeClient'
+import { getTranscriptionRecovery, transcribeWithProgress, transcriptionRetryLabel, type TranscriptionRecovery } from '@/lib/transcribeClient'
+import { updateTranscriptionActivity } from '@/lib/transcriptionActivity'
 import AdvancedOptionsDrawer from './AdvancedOptionsDrawer'
 import { useSession, signIn } from 'next-auth/react'
 import { loadDemoSample } from '@/lib/demoSample'
@@ -23,11 +24,10 @@ export default function MediaUploadZone() {
     setFile,
     status,
     setStatus,
-    setProgress,
     setTranscript,
-    setCustomAudioUrl,
     errorMessage,
     setErrorMessage,
+    transcriptionRecovery,
     advancedOptions
   } = useTranscriptStore()
 
@@ -48,8 +48,8 @@ export default function MediaUploadZone() {
     maxSize: MAX_MEDIA_UPLOAD_BYTES
   })
 
-  const submitRequest = async (input: { file?: File; url?: string }) => {
-    if (!session && typeof window !== 'undefined') {
+  const submitRequest = async (file: File, recovery?: TranscriptionRecovery | null) => {
+    if (!session && !recovery && typeof window !== 'undefined') {
       const guestCount = Number(localStorage.getItem('signal_guest_count') || '0')
       if (guestCount >= 3) {
         signIn()
@@ -58,49 +58,49 @@ export default function MediaUploadZone() {
       localStorage.setItem('signal_guest_count', String(guestCount + 1))
     }
 
+    const store = useTranscriptStore
     const accountId = session?.user?.id ?? null
-    setStatus('uploading')
-    setErrorMessage(null)
-    setProgress(0)
+    const isCurrent = () => store.getState().accountId === accountId && store.getState().file === file
+    if (!isCurrent() || ['uploading', 'processing'].includes(store.getState().status)) return
+    store.setState({ status: 'uploading', errorMessage: null, transcriptionRecovery: null, transcriptionActivity: { stage: 'preparing' } })
 
     try {
       // Real progress streamed from the direct-to-Gemini transcribe client.
       const data = await transcribeWithProgress(
-        input,
+        { file },
         (event) => {
-          if (useTranscriptStore.getState().accountId !== accountId) return
-          if (event.type === 'status' && event.phase === 'processing') {
-            setStatus('processing')
-          }
-          if (event.type === 'progress') {
-            setProgress(event.progress)
-          }
+          if (!isCurrent()) return
+          const previous = store.getState().transcriptionActivity
+          const activity = updateTranscriptionActivity(previous, event)
+          if (activity !== previous) store.setState({ transcriptionActivity: activity })
         },
-        advancedOptions
+        advancedOptions,
+        undefined,
+        recovery
       )
 
-      if (useTranscriptStore.getState().accountId !== accountId) return
-      if (data.id && accountId && input.file) {
-        if (!await getMediaBlob(accountId, data.id)) await saveMediaBlob(accountId, data.id, input.file).catch(() => {})
+      if (!isCurrent()) return
+      if (data.id && accountId) {
+        try {
+          if (!await getMediaBlob(accountId, data.id)) await saveMediaBlob(accountId, data.id, file)
+        } catch { /* The transcript is ready even if local audio storage fails. */ }
       }
-      if (useTranscriptStore.getState().accountId !== accountId) return
+      if (!isCurrent()) return
       setTranscript({
         id: data.id,
         alreadySaved: data.alreadySaved,
         text: data.text,
         segments: data.segments,
-        source: data.source || input.file?.name || input.url || 'MEDIA INPUT',
+        source: data.source || file.name,
         language: data.language,
         duration: data.duration,
         cacheId: data.cacheId,
         kind: 'transcript'
       })
     } catch (error) {
-      if (useTranscriptStore.getState().accountId !== accountId) return
-      console.error(error)
+      if (!isCurrent()) return
       const errorMsg = error instanceof Error ? error.message : 'Transcription failed.'
-      setErrorMessage(errorMsg)
-      setStatus('error')
+      store.setState({ errorMessage: errorMsg, status: 'error', transcriptionRecovery: getTranscriptionRecovery(error) })
 
       // Automatically dispatch error incident alert in background
       fetch('/api/report-error', {
@@ -108,9 +108,9 @@ export default function MediaUploadZone() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           errorMessage: errorMsg,
-          filename: input.file?.name || input.url,
-          fileSizeBytes: input.file?.size,
-          inputType: input.file ? 'file' : 'url',
+          filename: file.name,
+          fileSizeBytes: file.size,
+          inputType: 'file',
           userComment: 'Automated failure detection alert'
         })
       }).catch(() => {})
@@ -119,28 +119,25 @@ export default function MediaUploadZone() {
 
   return (
     <div className="flex flex-col gap-6">
-      {status === 'error' && (
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3.5 rounded-2xl border border-amber-200/80 dark:border-amber-900/60 bg-amber-50/90 dark:bg-amber-950/40 p-4 text-sm text-amber-900 dark:text-amber-200 backdrop-blur-md">
+      {status === 'error' && file && (
+        <div role="alert" className="flex flex-col sm:flex-row sm:items-center justify-between gap-3.5 rounded-2xl border border-amber-200/80 dark:border-amber-900/60 bg-amber-50/90 dark:bg-amber-950/40 p-4 text-sm text-amber-900 dark:text-amber-200 backdrop-blur-md">
           <div className="flex items-center gap-3">
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-100 dark:bg-amber-900/60 text-amber-700 dark:text-amber-300">
               <AlertCircle className="h-5 w-5" />
             </div>
             <div>
-              <p className="font-semibold text-slate-900 dark:text-white">Unable to process media</p>
-              <p className="text-xs text-slate-600 dark:text-slate-400">Please try again or try another audio/video file.</p>
+              <p className="break-all font-semibold text-slate-900 dark:text-white">{file.name}</p>
+              <p className="text-xs text-slate-600 dark:text-slate-400">{errorMessage || 'Transcription failed.'}</p>
             </div>
           </div>
           <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
             <button
               type="button"
-              onClick={() => {
-                setStatus('idle')
-                if (file) submitRequest({ file })
-              }}
+              onClick={() => submitRequest(file, transcriptionRecovery)}
               className="flex items-center gap-1.5 rounded-xl bg-amber-600 dark:bg-amber-500 px-3.5 py-2 text-xs font-bold text-white shadow-xs transition-all hover:bg-amber-700 active:scale-95 cursor-pointer"
             >
               <RefreshCw className="h-3.5 w-3.5" />
-              <span>Try Again</span>
+              <span>{transcriptionRetryLabel(transcriptionRecovery)}</span>
             </button>
             <button
               type="button"
@@ -151,7 +148,7 @@ export default function MediaUploadZone() {
               }}
               className="rounded-xl border border-slate-200/80 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors cursor-pointer"
             >
-              Reset
+              Remove file
             </button>
           </div>
         </div>
@@ -247,7 +244,7 @@ export default function MediaUploadZone() {
 
               <button
                 type="button"
-                onClick={() => setFile(null)}
+                onClick={() => { setFile(null); setErrorMessage(null); setStatus('idle') }}
                 className="flex items-center gap-1.5 rounded-full border border-slate-200/80 dark:border-slate-700 bg-white/90 dark:bg-slate-800 px-3.5 py-1.5 text-xs font-semibold text-slate-600 dark:text-slate-300 transition-all hover:bg-red-50 dark:hover:bg-red-950/40 hover:border-red-200 hover:text-red-600 active:scale-95 cursor-pointer"
               >
                 <X className="h-3.5 w-3.5" />
@@ -265,17 +262,17 @@ export default function MediaUploadZone() {
             </div>
 
             {/* Advanced Options Drawer in File Preview */}
-            <AdvancedOptionsDrawer />
+            <AdvancedOptionsDrawer defaultOpen={status === 'error'} />
 
             {/* Apple Primary Action Button */}
-            <button
+            {status !== 'error' && <button
               type="button"
-              onClick={() => submitRequest({ file })}
+              onClick={() => submitRequest(file)}
               className="apple-btn-primary flex w-full items-center justify-center gap-2.5 rounded-2xl py-4 text-base font-bold text-white transition-all cursor-pointer"
             >
               <Sparkles className="h-5 w-5 animate-pulse text-white" />
               <span className="tracking-tight text-white">Start Transcription Now</span>
-            </button>
+            </button>}
           </motion.div>
         )}
       </AnimatePresence>

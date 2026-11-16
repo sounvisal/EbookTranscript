@@ -74,7 +74,7 @@ export async function POST(req: Request) {
         } catch (error) {
           console.error('Transcription error:', error)
           const classified = classifyTranscriptionError(error)
-          emit({ type: 'error', error: classified.message })
+          emit({ type: 'error', error: classified.message, code: classified.code })
           
           // Log error report for admin debugging
           try {

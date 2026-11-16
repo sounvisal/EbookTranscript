@@ -195,6 +195,12 @@ function parseWavDuration(buffer: Buffer): number {
   return 0
 }
 
+class ExpiredUploadError extends Error {
+  constructor() {
+    super('Invalid or expired upload session. Please upload the file again.')
+  }
+}
+
 async function getMediaInputFromRequest(req: Request, userId: string, keys: string[]): Promise<MediaInput> {
   const contentType = req.headers.get('content-type') || ''
 
@@ -203,10 +209,10 @@ async function getMediaInputFromRequest(req: Request, userId: string, keys: stri
     if (body?.uploadToken) {
       const upload = readUploadToken(body.uploadToken, userId)
       if (!upload || upload.purpose !== 'transcription' || !isSupportedMimeType(upload.mimeType)) {
-        throw new Error('Invalid or expired upload session. Please upload the file again.')
+        throw new ExpiredUploadError()
       }
       const keyIndex = keys.findIndex((key) => geminiKeyFingerprint(key) === upload.keyFingerprint)
-      if (keyIndex < 0) throw new Error('Invalid or expired upload session. Please upload the file again.')
+      if (keyIndex < 0) throw new ExpiredUploadError()
 
       return {
         fileUri: upload.fileName,
@@ -462,9 +468,10 @@ export type ProgressEvent =
   | { type: 'status'; phase: 'uploading' | 'processing'; duration?: number; message?: string }
   | { type: 'progress'; progress: number }
   | { type: 'result' } & TranscriptResultPayload
-  | { type: 'error'; error: string }
+  | { type: 'error'; error: string; code?: 'UPLOAD_EXPIRED' }
 
 export function classifyTranscriptionError(error: unknown) {
+  if (error instanceof ExpiredUploadError) return { message: error.message, status: 400, code: 'UPLOAD_EXPIRED' as const }
   const message = error instanceof Error ? error.message : 'Failed to transcribe media.'
   let status = 500
 
@@ -1125,7 +1132,10 @@ export async function runTranscriptionPipeline(
     return buildMockResult()
   }
 
-  emit({ type: 'status', phase: 'uploading' })
+  // A JSON request references media that is already uploaded or fetched by the server.
+  if (!(req.headers.get('content-type') || '').includes('application/json')) {
+    emit({ type: 'status', phase: 'uploading' })
+  }
   const mediaInput = await getMediaInputFromRequest(req, userId, keys)
   const models = getGeminiModels(mediaInput.durationSeconds)
   const promptText = buildTranscriptionPrompt(mediaInput.options)
