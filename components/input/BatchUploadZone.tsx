@@ -10,6 +10,7 @@ import { getPlainTranscriptText, type TranscriptSegment } from '@/lib/transcript
 import { downloadTxt, downloadFile } from '@/lib/download'
 import { getTranscriptionRecovery, transcribeWithProgress, transcriptionRetryLabel, type TranscriptionRecovery } from '@/lib/transcribeClient'
 import { transcriptionStageLabels, updateTranscriptionActivity, type TranscriptionActivity } from '@/lib/transcriptionActivity'
+import MediaProgress from '@/components/processing/MediaProgress'
 import ReportErrorButton from '@/components/common/ReportErrorButton'
 import AdvancedOptionsDrawer from './AdvancedOptionsDrawer'
 import { useTranscriptStore } from '@/store/transcriptStore'
@@ -188,7 +189,7 @@ export default function BatchUploadZone() {
         const data = await transcribeWithProgress(
           { file: job.file },
           (event) => {
-            if (event.type === 'progress') return
+            if (event.type === 'progress' && !event.sections) return
             setJobs(current => current.map(item => item.id !== job.id ? item : {
               ...item,
               activity: updateTranscriptionActivity(item.activity || { stage: 'preparing' }, event),
@@ -472,11 +473,8 @@ export default function BatchUploadZone() {
                 </div>
               </div>
 
-              {job.status === 'processing' && job.activity?.stage === 'uploading' && job.activity.uploadPercent !== undefined && (
-                <div className="mt-3 flex items-center gap-2">
-                  <progress aria-label={`Upload ${job.file.name}`} value={job.activity.uploadPercent} max={100} className="h-2 w-full accent-purple-600" />
-                  <span className="text-xs tabular-nums">{job.activity.uploadPercent}%</span>
-                </div>
+              {job.status === 'processing' && job.activity && (
+                <MediaProgress activity={job.activity} fileName={job.file.name} />
               )}
 
               {job.status === 'processing' && job.message && (

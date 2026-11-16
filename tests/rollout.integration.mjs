@@ -6,7 +6,7 @@ import { setTimeout as wait } from 'node:timers/promises'
 import { PGlite } from '@electric-sql/pglite'
 import { PGLiteSocketServer } from '@electric-sql/pglite-socket'
 import { hashPassword } from '../lib/password.ts'
-import { testTranscriptPanel } from './panel-browser.mjs'
+import { silentWave, testTranscriptPanel } from './panel-browser.mjs'
 
 const db = await PGlite.create()
 const database = new PGLiteSocketServer({ db, host: '127.0.0.1', port: 0 })
@@ -188,6 +188,18 @@ try {
     await checkAdmin(2, 2)
     console.log('Passed admin data, cache eviction, and authorization on both schemas.')
     console.log('Passed migrations, credentials authentication, upload ownership, resumable jobs and reports, idempotent history and usage, and cascade deletion.')
+
+    const chunkedMedia = new FormData()
+    chunkedMedia.set('file', new File([silentWave(160, 8000)], 'chunked.wav', { type: 'audio/wav' }))
+    const chunked = await expectStatus(await fetch(base + '/api/transcribe', {
+      method: 'POST', headers: { cookie: owner, 'x-stream': '1' }, body: chunkedMedia
+    }), 200)
+    const chunkEvents = (await chunked.text()).trim().split('\n').map(line => JSON.parse(line))
+    assert.deepEqual(chunkEvents.flatMap(event => event.sections ? [event.sections] : []), [
+      { completed: 0, total: 2 }, { completed: 1, total: 2 }, { completed: 2, total: 2 }
+    ])
+    assert.equal(chunkEvents.at(-1).type, 'result')
+    console.log('Passed confirmed section progress for a split audio file.')
 
   }
 } finally {

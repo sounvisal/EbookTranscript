@@ -22,6 +22,7 @@ import {
 import { getConfiguredModels } from '@/lib/geminiConfig'
 import { geminiKeyFingerprint, readUploadToken } from '@/lib/uploadSession'
 import { MAX_INLINE_UPLOAD_BYTES } from '@/lib/uploadLimits'
+import type { EngineProgressEvent } from '@/lib/transcriptionActivity'
 import {
   getOptimalModelOrder,
   recordModelSuccess,
@@ -466,7 +467,7 @@ const TRANSCRIPTION_PROMPT = BASE_TRANSCRIPTION_PROMPT
 
 export type ProgressEvent =
   | { type: 'status'; phase: 'uploading' | 'processing'; duration?: number; message?: string }
-  | { type: 'progress'; progress: number }
+  | EngineProgressEvent
   | { type: 'result' } & TranscriptResultPayload
   | { type: 'error'; error: string; code?: 'UPLOAD_EXPIRED' }
 
@@ -1225,6 +1226,7 @@ export async function runTranscriptionPipeline(
 
     if (chunks.length > 1) {
       emit({ type: 'status', phase: 'processing', duration: audioInput.durationSeconds || chunks.length * CHUNK_DURATION_SECONDS })
+      emit({ type: 'progress', progress: 0, sections: { completed: 0, total: chunks.length } })
 
       const baseKeyIndex = typeof mediaInput.keyIndex === 'number' && mediaInput.keyIndex >= 0
         ? mediaInput.keyIndex
@@ -1251,7 +1253,11 @@ export async function runTranscriptionPipeline(
           chunkKeyIndex
         )
         completed += 1
-        emit({ type: 'progress', progress: Math.min(99, Math.round((completed / chunks.length) * 100)) })
+        emit({
+          type: 'progress',
+          progress: Math.min(99, Math.round((completed / chunks.length) * 100)),
+          sections: { completed, total: chunks.length }
+        })
         return { chunk, result }
       })
 

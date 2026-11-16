@@ -4,11 +4,11 @@ import { createServer } from 'node:http'
 import { setTimeout as wait } from 'node:timers/promises'
 import { chromium } from 'playwright-core'
 
-function silentWave(seconds) {
-  const pcm = Buffer.alloc(44 + seconds * 16000 * 2)
+export function silentWave(seconds, sampleRate = 16000) {
+  const pcm = Buffer.alloc(44 + seconds * sampleRate * 2)
   pcm.write('RIFF', 0); pcm.writeUInt32LE(pcm.length - 8, 4); pcm.write('WAVEfmt ', 8)
   pcm.writeUInt32LE(16, 16); pcm.writeUInt16LE(1, 20); pcm.writeUInt16LE(1, 22)
-  pcm.writeUInt32LE(16000, 24); pcm.writeUInt32LE(32000, 28); pcm.writeUInt16LE(2, 32); pcm.writeUInt16LE(16, 34)
+  pcm.writeUInt32LE(sampleRate, 24); pcm.writeUInt32LE(sampleRate * 2, 28); pcm.writeUInt16LE(2, 32); pcm.writeUInt16LE(16, 34)
   pcm.write('data', 36); pcm.writeUInt32LE(pcm.length - 44, 40)
   return pcm
 }
@@ -97,10 +97,38 @@ async function exerciseUploadRecovery(page, base, id, uploadUrl, countUploads) {
   await page.goto(base + '/transcribe')
   await page.getByRole('button', { name: 'Sign out', exact: true }).waitFor()
   await page.getByRole('button', { name: 'Batch Queue' }).click()
+  await page.evaluate(() => {
+    const fetchResponse = window.fetch.bind(window)
+    window.fetch = async (request, options) => {
+      const response = await fetchResponse(request, options)
+      if (!(options?.body instanceof FormData) || options.body.get('file')?.name !== 'good.wav') return response
+      const result = await response.text()
+      const encoder = new TextEncoder()
+      return new Response(new ReadableStream({
+        start(controller) {
+          const send = (event) => controller.enqueue(encoder.encode(JSON.stringify(event) + '\n'))
+          send({ type: 'status', phase: 'processing' })
+          send({ type: 'progress', progress: 50, sections: { completed: 2, total: 4 } })
+          send({ type: 'progress', progress: 85 })
+          window.finishSectionTest = () => {
+            controller.enqueue(encoder.encode(result))
+            controller.close()
+          }
+        }
+      }))
+    }
+  })
   await page.locator('input[type=file]').setInputFiles(['good', 'retry'].map(file => ({
     name: `${file}.wav`, mimeType: 'audio/wav', buffer: silentWave(2)
   })))
   await page.getByRole('button', { name: 'Transcribe 2 files' }).click()
+  const sections = page.getByRole('progressbar', { name: 'Transcription sections for good.wav' })
+  await sections.waitFor()
+  assert.equal(await sections.getAttribute('aria-valuetext'), '2 of 4 sections complete')
+  assert.equal(await page.getByText('50%', { exact: true }).count(), 1)
+  assert.equal(await page.getByText('85%', { exact: true }).count(), 0)
+  assert.equal(await page.getByRole('progressbar', { name: 'Transcription sections for retry.wav' }).count(), 0)
+  await page.evaluate(() => window.finishSectionTest())
   await page.getByText('1 completed', { exact: false }).waitFor()
   await page.getByRole('button', { name: 'Retry failed (1)', exact: true }).click()
   await page.getByText('2 completed', { exact: false }).waitFor()
