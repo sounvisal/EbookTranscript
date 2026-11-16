@@ -224,6 +224,13 @@ function AdminDashboardContent() {
         onOpenTelegram={telegramHook.openTelegramModal}
       />
 
+      {statsHook.errorMsg && (
+        <div role="alert" className="flex items-center justify-between gap-4 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+          <span>{statsHook.errorMsg}{stats ? ' Displaying the last successful update.' : ' Dashboard data is currently unavailable.'}</span>
+          <button type="button" disabled={statsHook.isSyncing} onClick={handleSync} className="shrink-0 font-semibold underline disabled:opacity-50">Try again</button>
+        </div>
+      )}
+
       {/* Time Machine Filter */}
       <TimeMachineFilter
         selectedRange={statsHook.selectedRange}

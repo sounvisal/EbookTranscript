@@ -20,6 +20,7 @@ for (const user of users) {
   await db.query('INSERT INTO "User"(id, email, "passwordHash") VALUES ($1, $2, $3)', [user, user + '@example.test', passwordHash])
   await db.query(`INSERT INTO "Transcript"(id,text,source,"userId","updatedAt") VALUES ($1,'Saved before upgrade','file',$2,NOW())`, [user + '-history', user])
 }
+await db.query('UPDATE "User" SET role = $1 WHERE id = $2', ['admin', users[0]])
 await database.start()
 const databaseConnection = database.getServerConn()
 const port = 3218
@@ -85,7 +86,10 @@ try {
   const other = await login(users[1])
   const ownerHeaders = { cookie: owner }
   const historyBefore = await fetch(base + '/api/history', { headers: ownerHeaders })
-  if (process.env.REPRODUCE_OLD_BUILD === 'true') {
+  if (process.env.REPRODUCE_ADMIN_FAILURE === 'true') {
+    await expectStatus(await fetch(base + '/api/admin/stats?range=all', { headers: ownerHeaders }), 500)
+    console.log('REPRODUCED: admin statistics fail against the existing schema while saved history is readable.')
+  } else if (process.env.REPRODUCE_OLD_BUILD === 'true') {
     assert.equal(historyBefore.status, 500, 'old build cannot read baseline history')
     const oldToken = await upload(owner, 'transcription', 'video/mp4')
     const brokenJob = await fetch(base + '/api/transcribe/jobs', json(owner, { uploadToken: oldToken, duration: 4 }))
@@ -93,6 +97,21 @@ try {
     assert.equal((await db.query('SELECT count(*)::int AS total FROM "Transcript"')).rows[0].total, 2)
     console.log('REPRODUCED: old build returns 500 for history and job creation, while original transcripts remain intact.')
   } else {
+    const checkAdmin = async (expectedTranscripts, expectedRequests) => {
+      const response = await expectStatus(await fetch(base + '/api/admin/stats?range=all', { headers: ownerHeaders }), 200)
+      const stats = await response.json()
+      assert.equal(stats.overview.allTimeTranscripts, expectedTranscripts)
+      assert.equal(stats.overview.totalUsers, 2)
+      assert.equal(stats.recentTranscripts.length, expectedTranscripts)
+      assert.equal(stats.models.reduce((sum, model) => sum + model.requests, 0), expectedRequests)
+      // The proxy deliberately conceals admin endpoints from non-admin users.
+      await expectStatus(await fetch(base + '/api/admin/stats', { headers: { cookie: other } }), 404)
+      for (const path of ['/api/admin/users', '/api/admin/users?id=' + users[1], '/api/admin/cache', '/api/admin/audit-logs', '/api/admin/fleet']) {
+        await expectStatus(await fetch(base + path, { headers: ownerHeaders }), 200)
+        await expectStatus(await fetch(base + path, { headers: { cookie: other } }), 404)
+      }
+    }
+    await checkAdmin(2, 0)
     const legacyHistory = await (await expectStatus(historyBefore, 200)).json()
     assert.equal(legacyHistory.total, 1)
     assert.equal(legacyHistory.items[0].id, users[0] + '-history')
@@ -120,6 +139,10 @@ try {
     await expectStatus(await fetch(savedUrl, { method: 'DELETE', headers: ownerHeaders }), 200)
     assert.equal((await db.query('SELECT count(*)::int AS total FROM "Transcript"')).rows[0].total, 2)
     console.log('Passed baseline schema: existing history, detail ownership, signed-upload streaming, save and deletion.')
+    await checkAdmin(2, 1)
+    await db.exec(`INSERT INTO "TranscriptCache"(id, "audioHash", text) VALUES ('evict-fixture', 'evict-hash', 'cache fixture')`)
+    await expectStatus(await fetch(base + '/api/admin/cache?id=evict-fixture', { method: 'DELETE', headers: ownerHeaders }), 200)
+    assert.equal((await db.query('SELECT count(*)::int AS total FROM "TranscriptCache"')).rows[0].total, 1)
 
     // Migrate with the same process running to catch stale capability caching.
     await db.exec(await migration('20261115000001_scope_transcript_cache'))
@@ -158,6 +181,8 @@ try {
     const summary = await expectStatus(await fetch(base + '/api/report', json(owner, { mode: 'summary', uploadToken: report })), 200)
     assert.equal((await summary.json()).kind, 'summary')
     assert.equal((await (await fetch(legacyUrl, { headers: ownerHeaders })).json()).text, 'Saved before upgrade')
+    await checkAdmin(2, 2)
+    console.log('Passed admin data, cache eviction, and authorization on both schemas.')
     console.log('Passed migrations, credentials authentication, upload ownership, resumable jobs and reports, idempotent history and usage, and cascade deletion.')
 
   }

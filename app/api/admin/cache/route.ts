@@ -114,12 +114,15 @@ export async function DELETE(req: Request) {
     }
 
     if (id) {
-      const existing = await prisma.transcriptCache.findUnique({ where: { id } })
+      const existing = await prisma.transcriptCache.findUnique({
+        where: { id },
+        select: { id: true, audioHash: true, language: true, duration: true }
+      })
       if (!existing) {
         return NextResponse.json({ error: 'Cache entry not found.' }, { status: 404 })
       }
 
-      await prisma.transcriptCache.delete({ where: { id } })
+      await prisma.transcriptCache.delete({ where: { id }, select: { id: true } })
 
       await logAdminAction({
         adminId: session.user.id || 'admin',

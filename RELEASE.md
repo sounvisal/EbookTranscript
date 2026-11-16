@@ -2,6 +2,14 @@
 
 Use Node 22 and install from the lockfile. Run `npm run lint` separately from `npm run build`.
 
+## November 16 admin and upload repair
+
+Admin statistics now select only the columns used by the dashboard, so the original database schema remains supported. Cache eviction also avoids selecting migration-only fields. Dashboard fetch failures show a retry message and retain the last successful data instead of leaving the panel blank.
+
+Video audio extraction is restored for clips up to 64 MiB and five minutes. Batch requests decode one clip at a time at a requested 16 kHz sample rate, release decoder resources, and use the extracted WAV only if it is smaller than the source. Audio is not trimmed. Compressed audio, larger/longer videos, unknown-duration media, and unsupported codecs retain their original file. The 4 MB inline request limit remains enforced after preparation; larger uploads still go directly to Google.
+
+Run `npm run test:audio` with Microsoft Edge installed (or set `AUDIO_TEST_BROWSER=chrome` for installed Chrome). This headless browser test generates local media with FFmpeg and checks extraction, actual inline upload requests, batch decode concurrency, duration/size limits, and failure cleanup. It sends no requests to Gemini. `npm run test:rollout` now also verifies admin statistics, users, cache, audit logs, fleet access, and authorization on both database schemas. These tests do not measure live provider latency.
+
 ## November 15 rollout repair
 
 The initial Next 16 update assumed the database migrations had already run. On the old schema, history reads joined the missing `TranscriptionJob` table and large uploads failed when creating a background job. The history page also displayed an empty state after a failed fetch.
@@ -14,7 +22,7 @@ Run `npm run db:check` against the intended deployment database before enabling 
 
 ## Database rollout
 
-For an empty database, run `npx prisma migrate deploy`. An existing database previously managed without migration history must be baselined first. After checking that its schema matches the baseline migration and taking a backup, record the baseline with `npx prisma migrate resolve --applied 20261115000000_baseline`, then run `npx prisma migrate deploy`. Apply the migrations before rolling out this app version.
+For an empty database, run `npx prisma migrate deploy`. An existing database previously managed without migration history must be baselined first. After checking that its schema matches the baseline migration and taking a backup, record the baseline with `npx prisma migrate resolve --applied 20261115000000_baseline`, then run `npx prisma migrate deploy`. The compatibility repairs can run on the original schema; migrations are required for reconnectable background jobs and account-scoped caching.
 
 The account-isolation migration clears the previous shared cache because those entries have no recorded owner. Saved transcript history is preserved. Cache entries stop serving after seven days, and subsequent cache writes remove expired entries.
 

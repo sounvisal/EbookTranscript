@@ -1,7 +1,7 @@
 import { MAX_INLINE_UPLOAD_BYTES, MAX_MEDIA_UPLOAD_BYTES } from '@/lib/uploadLimits'
 import { recoverPendingMedia, savePendingMedia } from '@/lib/mediaStorage'
 import type { TranscriptSegment } from '@/lib/transcript'
-import { getMediaDuration, prepareMediaForUpload } from '@/lib/clientAudio'
+import { prepareMediaForUpload } from '@/lib/clientAudio'
 import { useTranscriptStore } from '@/store/transcriptStore'
 
 export type TranscribeProgressEvent =
@@ -330,15 +330,12 @@ export async function transcribeWithProgress(
   let file = input.file
   let duration = 0
   try {
-    if (file.size > MAX_INLINE_UPLOAD_BYTES) {
-      duration = await getMediaDuration(file, false)
-    } else {
-      const prepared = await prepareMediaForUpload(file)
-      file = prepared.file
-      duration = prepared.duration
-      if (file !== input.file && useTranscriptStore.getState().file === input.file) {
-        useTranscriptStore.getState().setAudioBlob(file)
-      }
+    // The preparation function bounds video decoding independently of the HTTP body limit.
+    const prepared = await prepareMediaForUpload(file)
+    file = prepared.file
+    duration = prepared.duration
+    if (file !== input.file && useTranscriptStore.getState().file === input.file) {
+      useTranscriptStore.getState().setAudioBlob(file)
     }
   } catch {
     file = input.file

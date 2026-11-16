@@ -1,26 +1,43 @@
 /**
- * Fast client-side audio extraction using the browser's native Web Audio API.
- * 
- * Video files (MP4, WebM, MOV) contain heavy video frames (95% of file size).
- * This utility strips the video track in the browser in ~150ms and extracts
- * a compact mono 16kHz speech WAV audio file.
- * 
- * Why this is essential:
- * 1. Bypasses Vercel's 4.5MB Serverless request body limit (eliminating HTTP 413 errors).
- * 2. Makes uploads 10x-50x faster (a 25MB video becomes a 1MB audio file).
- * 3. Saves bandwidth and battery for users.
+ * Extract audio from bounded-size video clips before uploading. Larger or long
+ * recordings keep the direct-upload path to avoid unbounded browser decoding.
  */
+
+export const MAX_CLIENT_VIDEO_BYTES = 64 * 1024 * 1024
+export const MAX_CLIENT_VIDEO_SECONDS = 300
+
+// Batch uploads may run many network workers, but only one decode at a time.
+let extractionQueue: Promise<void> = Promise.resolve()
+
+async function withExtractionSlot<T>(work: () => Promise<T>): Promise<T> {
+  const previous = extractionQueue
+  let release!: () => void
+  extractionQueue = new Promise<void>((resolve) => { release = resolve })
+  await previous
+  try {
+    return await work()
+  } finally {
+    release()
+  }
+}
 
 export async function getMediaDuration(file: File, allowDecodeFallback = true): Promise<number> {
   if (typeof window === 'undefined') return 0
   return new Promise((resolve) => {
     let resolved = false
     let url = ''
+    let element: HTMLMediaElement | undefined
 
     const cleanup = (d: number) => {
       if (resolved) return
       resolved = true
       clearTimeout(timer)
+      if (element) {
+        element.onloadedmetadata = element.ondurationchange = element.oncanplay = element.onerror = null
+        element.pause()
+        element.removeAttribute('src')
+        element.load()
+      }
       if (url) {
         try { URL.revokeObjectURL(url) } catch {}
       }
@@ -52,14 +69,14 @@ export async function getMediaDuration(file: File, allowDecodeFallback = true): 
     }, 8000)
 
     const isVideo = file.type.startsWith('video/') || /\.(mp4|mov|webm|m4v|mkv|avi)$/i.test(file.name)
-    const element = isVideo
+    element = isVideo
       ? document.createElement('video')
       : document.createElement('audio')
 
     element.preload = 'metadata'
 
     const checkDuration = () => {
-      const d = element.duration
+      const d = element!.duration
       if (Number.isFinite(d) && d > 0 && d !== Infinity) {
         cleanup(d)
       }
@@ -74,60 +91,65 @@ export async function getMediaDuration(file: File, allowDecodeFallback = true): 
 }
 
 export async function prepareMediaForUpload(file: File): Promise<{ file: File; duration: number }> {
+  const duration = await getMediaDuration(file, false).catch(() => 0)
   // If it's already a native audio file (MP3, M4A, WAV, AAC, FLAC, OGG), preserve its compressed format!
   const isPureAudio = file.type.startsWith('audio/') || /\.(mp3|m4a|wav|aac|ogg|flac|wma)$/i.test(file.name)
   if (isPureAudio) {
-    const duration = await getMediaDuration(file).catch(() => 0)
     return { file, duration }
   }
 
   // Only perform video track stripping for video formats (MP4, MOV, WebM, MKV)
-  if (typeof window === 'undefined') return { file, duration: 0 }
+  const isVideo = file.type.startsWith('video/') || /\.(mp4|mov|webm|m4v|mkv|avi)$/i.test(file.name)
+  if (typeof window === 'undefined' || !isVideo || file.size > MAX_CLIENT_VIDEO_BYTES
+    || duration <= 0 || duration > MAX_CLIENT_VIDEO_SECONDS) return { file, duration }
   const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
   if (!AudioContextClass) {
-    const duration = await getMediaDuration(file).catch(() => 0)
     return { file, duration }
   }
 
-  try {
-    const arrayBuffer = await file.arrayBuffer()
-    const audioCtx = new AudioContextClass()
-    
-    // Decode audio track from MP4, MOV, WebM, WAV, AAC, MP3
-    const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer)
-    const duration = Number.isFinite(audioBuffer.duration) ? Math.round(audioBuffer.duration * 10) / 10 : 0
-    audioCtx.close().catch(() => {})
+  return withExtractionSlot(async () => {
+    let audioCtx: AudioContext | undefined
+    try {
+      const arrayBuffer = await file.arrayBuffer()
+      audioCtx = new AudioContextClass({ sampleRate: 16000 })
 
-    // Resample natively to mono 16kHz using fast OfflineAudioContext
-    const targetSampleRate = 16000
-    const OfflineCtxClass = window.OfflineAudioContext || (window as unknown as { webkitOfflineAudioContext?: typeof OfflineAudioContext }).webkitOfflineAudioContext
-    let targetBuffer = audioBuffer
+      // Decode audio track from MP4, MOV, WebM, WAV, AAC, MP3
+      const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer)
+      const duration = Number.isFinite(audioBuffer.duration) ? Math.round(audioBuffer.duration * 10) / 10 : 0
+      if (duration <= 0 || duration > MAX_CLIENT_VIDEO_SECONDS) return { file, duration }
 
-    if (OfflineCtxClass && audioBuffer.sampleRate !== targetSampleRate) {
-      try {
-        const targetFrames = Math.ceil(audioBuffer.duration * targetSampleRate)
-        const offlineCtx = new OfflineCtxClass(1, targetFrames, targetSampleRate)
-        const source = offlineCtx.createBufferSource()
-        source.buffer = audioBuffer
-        source.connect(offlineCtx.destination)
-        source.start(0)
-        targetBuffer = await offlineCtx.startRendering()
-      } catch (resampleErr) {
-        console.warn('Native 16kHz resampling fallback:', resampleErr)
+      // Resample natively to mono 16kHz using fast OfflineAudioContext
+      const targetSampleRate = 16000
+      const OfflineCtxClass = window.OfflineAudioContext || (window as unknown as { webkitOfflineAudioContext?: typeof OfflineAudioContext }).webkitOfflineAudioContext
+      let targetBuffer = audioBuffer
+
+      if (OfflineCtxClass && audioBuffer.sampleRate !== targetSampleRate) {
+        try {
+          const targetFrames = Math.ceil(audioBuffer.duration * targetSampleRate)
+          const offlineCtx = new OfflineCtxClass(1, targetFrames, targetSampleRate)
+          const source = offlineCtx.createBufferSource()
+          source.buffer = audioBuffer
+          source.connect(offlineCtx.destination)
+          source.start(0)
+          targetBuffer = await offlineCtx.startRendering()
+        } catch (resampleErr) {
+          console.warn('Native 16kHz resampling fallback:', resampleErr)
+        }
       }
-    }
 
-    // Encode to compact mono 16kHz WAV without silence trimming (trimSilence = false)
-    // to preserve all audio from 0:00.0 without dropping opening syllables
-    const wavBlob = audioBufferToMonoWav(targetBuffer, false)
-    const baseName = file.name.replace(/\.[^/.]+$/, '')
-    const wavFile = new File([wavBlob], `${baseName}.wav`, { type: 'audio/wav' })
-    return { file: wavFile, duration }
-  } catch (err) {
-    console.warn('Client audio extraction failed; falling back to original file:', err)
-    const duration = await getMediaDuration(file).catch(() => 0)
-    return { file, duration }
-  }
+      // Encode to compact mono 16kHz WAV without silence trimming (trimSilence = false)
+      // to preserve all audio from 0:00.0 without dropping opening syllables
+      const wavBlob = audioBufferToMonoWav(targetBuffer, false)
+      const baseName = file.name.replace(/\.[^/.]+$/, '')
+      const wavFile = new File([wavBlob], `${baseName}.wav`, { type: 'audio/wav' })
+      return { file: wavFile.size < file.size ? wavFile : file, duration }
+    } catch (err) {
+      console.warn('Client audio extraction failed; falling back to original file:', err)
+      return { file, duration }
+    } finally {
+      await audioCtx?.close().catch(() => {})
+    }
+  })
 }
 
 /**

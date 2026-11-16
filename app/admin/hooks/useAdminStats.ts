@@ -46,9 +46,7 @@ export function useAdminStats() {
         setLastSyncTime(new Date())
       } catch (err) {
         console.error(err)
-        if (!silent) {
-          setErrorMsg(err instanceof Error ? err.message : 'Error loading dashboard.')
-        }
+        setErrorMsg(err instanceof Error ? err.message : 'Error loading dashboard.')
       } finally {
         if (!silent) setLoading(false)
         setIsSyncing(false)

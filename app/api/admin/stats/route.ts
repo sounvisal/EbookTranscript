@@ -169,7 +169,10 @@ export async function GET(req: Request) {
         take: 25,
         where: { createdAt: { gte: startTime, lte: endTime } },
         orderBy: { createdAt: 'desc' },
-        include: {
+        // Only read fields used by this response. The legacy schema has no cacheId.
+        select: {
+          id: true, filename: true, source: true, duration: true, wordCount: true,
+          language: true, createdAt: true, userId: true, text: true,
           user: {
             select: { email: true, name: true }
           }
