@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server'
+import { NextResponse, after } from 'next/server'
 import { handleTelegramOperations, isTelegramOperator } from '@/lib/telegramOperations'
 import {
   getBotCredentials,
@@ -22,6 +22,37 @@ import {
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
+
+// In-memory deduplication and concurrency control to prevent Telegram webhook timeout retries
+const recentUpdateIds = new Map<number, number>()
+const inFlightMediaMessages = new Set<string>()
+
+function isDuplicateTelegramUpdate(updateId: number): boolean {
+  const now = Date.now()
+  const seenAt = recentUpdateIds.get(updateId)
+  if (seenAt && now - seenAt < 15 * 60 * 1000) {
+    return true
+  }
+  recentUpdateIds.set(updateId, now)
+  if (recentUpdateIds.size > 2000) {
+    for (const [id, time] of recentUpdateIds) {
+      if (now - time > 15 * 60 * 1000) recentUpdateIds.delete(id)
+    }
+  }
+  return false
+}
+
+function claimInFlightMessage(chatId: string | number, messageId: number): boolean {
+  const key = `${chatId}:${messageId}`
+  if (inFlightMediaMessages.has(key)) return false
+  inFlightMediaMessages.add(key)
+  return true
+}
+
+function releaseInFlightMessage(chatId: string | number, messageId: number) {
+  const key = `${chatId}:${messageId}`
+  inFlightMediaMessages.delete(key)
+}
 
 interface TelegramWebhookUpdate {
   update_id: number
@@ -120,6 +151,11 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: 'Invalid JSON payload' }, { status: 400 })
   }
 
+  // Deduplication guard: ignore already-processed or in-flight update IDs from Telegram retries
+  if (Number.isSafeInteger(update.update_id) && isDuplicateTelegramUpdate(update.update_id)) {
+    return NextResponse.json({ ok: true, duplicate: true })
+  }
+
   // Extract Chat ID & sender
   const isCallback = Boolean(update.callback_query)
   const incomingChatId = isCallback
@@ -209,60 +245,104 @@ export async function POST(req: Request) {
 
   // 1. Direct Voice Note Dictation (e.g. user holds mic button in Telegram)
   if (msg?.voice) {
-    await handleTelegramAudioUpload({
-      chatId: incomingChatId,
-      fileId: msg.voice.file_id,
-      fileName: `voice-note-${new Date().toISOString().slice(11, 19).replace(/:/g, '')}.ogg`,
-      mimeType: msg.voice.mime_type || 'audio/ogg',
-      fileSize: msg.voice.file_size,
-      durationSeconds: msg.voice.duration,
-      sender,
-      replyToMessageId: msg.message_id
+    if (!claimInFlightMessage(incomingChatId, msg.message_id)) {
+      return NextResponse.json({ ok: true, already_processing: true })
+    }
+    after(async () => {
+      try {
+        await handleTelegramAudioUpload({
+          chatId: incomingChatId,
+          fileId: msg.voice!.file_id,
+          fileName: `voice-note-${new Date().toISOString().slice(11, 19).replace(/:/g, '')}.ogg`,
+          mimeType: msg.voice!.mime_type || 'audio/ogg',
+          fileSize: msg.voice!.file_size,
+          durationSeconds: msg.voice!.duration,
+          sender,
+          replyToMessageId: msg.message_id
+        })
+      } catch (err) {
+        console.error('[Telegram Voice Handler Background Error]', err)
+      } finally {
+        releaseInFlightMessage(incomingChatId, msg.message_id)
+      }
     })
     return NextResponse.json({ ok: true, type: 'voice' })
   }
 
   // 2. Direct Audio File Upload (.mp3, .m4a, .wav, .aac, etc.)
   if (msg?.audio) {
-    await handleTelegramAudioUpload({
-      chatId: incomingChatId,
-      fileId: msg.audio.file_id,
-      fileName: msg.audio.file_name || `audio-${Date.now()}.mp3`,
-      mimeType: msg.audio.mime_type || 'audio/mpeg',
-      fileSize: msg.audio.file_size,
-      durationSeconds: msg.audio.duration,
-      sender,
-      replyToMessageId: msg.message_id
+    if (!claimInFlightMessage(incomingChatId, msg.message_id)) {
+      return NextResponse.json({ ok: true, already_processing: true })
+    }
+    after(async () => {
+      try {
+        await handleTelegramAudioUpload({
+          chatId: incomingChatId,
+          fileId: msg.audio!.file_id,
+          fileName: msg.audio!.file_name || `audio-${Date.now()}.mp3`,
+          mimeType: msg.audio!.mime_type || 'audio/mpeg',
+          fileSize: msg.audio!.file_size,
+          durationSeconds: msg.audio!.duration,
+          sender,
+          replyToMessageId: msg.message_id
+        })
+      } catch (err) {
+        console.error('[Telegram Audio Handler Background Error]', err)
+      } finally {
+        releaseInFlightMessage(incomingChatId, msg.message_id)
+      }
     })
     return NextResponse.json({ ok: true, type: 'audio' })
   }
 
   // 3. Direct Video File Upload (.mp4, .mov, etc.)
   if (msg?.video) {
-    await handleTelegramAudioUpload({
-      chatId: incomingChatId,
-      fileId: msg.video.file_id,
-      fileName: msg.video.file_name || `video-${Date.now()}.mp4`,
-      mimeType: msg.video.mime_type || 'video/mp4',
-      fileSize: msg.video.file_size,
-      durationSeconds: msg.video.duration,
-      sender,
-      replyToMessageId: msg.message_id
+    if (!claimInFlightMessage(incomingChatId, msg.message_id)) {
+      return NextResponse.json({ ok: true, already_processing: true })
+    }
+    after(async () => {
+      try {
+        await handleTelegramAudioUpload({
+          chatId: incomingChatId,
+          fileId: msg.video!.file_id,
+          fileName: msg.video!.file_name || `video-${Date.now()}.mp4`,
+          mimeType: msg.video!.mime_type || 'video/mp4',
+          fileSize: msg.video!.file_size,
+          durationSeconds: msg.video!.duration,
+          sender,
+          replyToMessageId: msg.message_id
+        })
+      } catch (err) {
+        console.error('[Telegram Video Handler Background Error]', err)
+      } finally {
+        releaseInFlightMessage(incomingChatId, msg.message_id)
+      }
     })
     return NextResponse.json({ ok: true, type: 'video' })
   }
 
   // 3b. Video Note (Round camera bubble)
   if (msg?.video_note) {
-    await handleTelegramAudioUpload({
-      chatId: incomingChatId,
-      fileId: msg.video_note.file_id,
-      fileName: `video-note-${new Date().toISOString().slice(11, 19).replace(/:/g, '')}.mp4`,
-      mimeType: 'video/mp4',
-      fileSize: msg.video_note.file_size,
-      durationSeconds: msg.video_note.duration,
-      sender,
-      replyToMessageId: msg.message_id
+    if (!claimInFlightMessage(incomingChatId, msg.message_id)) {
+      return NextResponse.json({ ok: true, already_processing: true })
+    }
+    after(async () => {
+      try {
+        await handleTelegramAudioUpload({
+          chatId: incomingChatId,
+          fileId: msg.video_note!.file_id,
+          fileName: `video-note-${new Date().toISOString().slice(11, 19).replace(/:/g, '')}.mp4`,
+          mimeType: 'video/mp4',
+          fileSize: msg.video_note!.file_size,
+          durationSeconds: msg.video_note!.duration,
+          sender,
+          replyToMessageId: msg.message_id
+        })
+      } catch (err) {
+        console.error('[Telegram VideoNote Handler Background Error]', err)
+      } finally {
+        releaseInFlightMessage(incomingChatId, msg.message_id)
+      }
     })
     return NextResponse.json({ ok: true, type: 'video_note' })
   }
@@ -277,14 +357,25 @@ export async function POST(req: Request) {
       /\.(mp3|wav|m4a|aac|ogg|oga|opus|flac|mp4|mov|webm|mkv)$/i.test(docName)
 
     if (isMedia) {
-      await handleTelegramAudioUpload({
-        chatId: incomingChatId,
-        fileId: doc.file_id,
-        fileName: doc.file_name || `media-${Date.now()}.mp3`,
-        mimeType: doc.mime_type || 'audio/mpeg',
-        fileSize: doc.file_size,
-        sender,
-        replyToMessageId: msg.message_id
+      if (!claimInFlightMessage(incomingChatId, msg.message_id)) {
+        return NextResponse.json({ ok: true, already_processing: true })
+      }
+      after(async () => {
+        try {
+          await handleTelegramAudioUpload({
+            chatId: incomingChatId,
+            fileId: doc.file_id,
+            fileName: doc.file_name || `media-${Date.now()}.mp3`,
+            mimeType: doc.mime_type || 'audio/mpeg',
+            fileSize: doc.file_size,
+            sender,
+            replyToMessageId: msg.message_id
+          })
+        } catch (err) {
+          console.error('[Telegram Document Handler Background Error]', err)
+        } finally {
+          releaseInFlightMessage(incomingChatId, msg.message_id)
+        }
       })
       return NextResponse.json({ ok: true, type: 'document_media' })
     } else {
@@ -310,11 +401,23 @@ export async function POST(req: Request) {
   // Match YouTube URLs (e.g. https://youtu.be/..., https://www.youtube.com/watch?v=..., https://youtube.com/shorts/...)
   const ytMatch = text.match(/(https?:\/\/(?:www\.)?(?:youtube\.com|youtu\.be)\/[^\s]+)/i)
   if (ytMatch) {
-    await handleTelegramYouTubeLink({
-      chatId: incomingChatId,
-      url: ytMatch[1],
-      sender,
-      replyToMessageId: msg?.message_id
+    const replyMsgId = msg?.message_id
+    if (replyMsgId && !claimInFlightMessage(incomingChatId, replyMsgId)) {
+      return NextResponse.json({ ok: true, already_processing: true })
+    }
+    after(async () => {
+      try {
+        await handleTelegramYouTubeLink({
+          chatId: incomingChatId,
+          url: ytMatch[1],
+          sender,
+          replyToMessageId: replyMsgId
+        })
+      } catch (err) {
+        console.error('[Telegram YouTube Handler Background Error]', err)
+      } finally {
+        if (replyMsgId) releaseInFlightMessage(incomingChatId, replyMsgId)
+      }
     })
     return NextResponse.json({ ok: true, type: 'youtube_url' })
   }
