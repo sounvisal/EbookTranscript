@@ -100,7 +100,7 @@ export async function GET(req: Request) {
           break
         case 'all':
           startTime = new Date(0)
-          endTime = now
+          endTime = new Date(now.getTime() + 60000)
           daysCount = 60
           break
         case '30d':

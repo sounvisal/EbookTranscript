@@ -398,8 +398,9 @@ const BASE_TRANSCRIPTION_PROMPT = [
   '5. COMPLETE RECORDING CONTINUITY & VIRAL VIDEO HOOKS: Transcribe the entire duration verbatim from start to finish without stopping. Viral social media videos frequently begin with a 1-sentence opening hook, followed by a dramatic sound effect, laugh track, musical break, or scene transition, after which the narration continues. You MUST NOT STOP after the opening hook sentence. Keep listening past all pauses, music stingers, and sound effects all the way to the absolute end of the media.',
   '6. COMPILATIONS, COUNTDOWNS & MULTI-SCENE CONTINUITY: For countdowns and list videos (e.g. "Number 10" or "Number 9" down to "Number 1"), you MUST transcribe every single entry all the way through the final #1 reveal and outro conclusion. Never stop early at an intermediate number like #2 or #3. There are often 5-15 second transition pauses, action clips, or music between list numbers; continue listening past any pauses and transcribe all speech to the absolute end of the media.',
   '7. MULTI-ITEM COMMENTARY & ANIMAL / MEME COMPILATIONS: Videos showcasing multiple examples, animals, people, or stories often pause for dramatic effect or laughter after each item setup (e.g., "they turn into..."). Never stop transcribing when one item pauses or ends mid-thought. Spoken narration continues for all subsequent items and punchlines throughout the full video. Continue transcribing every single item until the recording ends completely.',
-  '8. NUMERIC SECONDS TIMESTAMPS: Every start and end timestamp in "segments" must be a raw number in seconds (e.g. 0.0, 4.5, 38.2, 145.6). Do NOT use formatted colon strings like "2:30".',
-  '9. QUOTATION MARKS: Inside transcript text strings, use single quotes (\'quote\') or properly escaped quotes (\\"quote\\") for spoken dialogue so that JSON formatting is strictly valid.',
+  '8. CLEAN PARAGRAPH STRUCTURE: Organize the output text into clean, readable paragraphs separated by blank lines (\\n\\n). Group coherent sentences or thoughts together (every 2-4 sentences per paragraph) instead of outputting one long continuous unbroken wall of text.',
+  '9. NUMERIC SECONDS TIMESTAMPS: Every start and end timestamp in "segments" must be a raw number in seconds (e.g. 0.0, 4.5, 38.2, 145.6). Do NOT use formatted colon strings like "2:30".',
+  '10. QUOTATION MARKS: Inside transcript text strings, use single quotes (\'quote\') or properly escaped quotes (\\"quote\\") for spoken dialogue so that JSON formatting is strictly valid.',
   'Format strictly as JSON with this exact shape:',
   '{"language":"Khmer","text":"Full continuous transcript text here","segments":[{"start":0.0,"end":4.5,"text":"phrase"}]}',
   'Ensure "text" contains the complete continuous transcript, and "segments" contains all timestamped phrases.',
@@ -432,24 +433,25 @@ function buildTranscriptionPrompt(options?: TranscribeOptions): string {
     '5. COMPLETE RECORDING CONTINUITY & VIRAL VIDEO HOOKS: Transcribe the entire duration verbatim from start to finish without stopping. Viral social media videos frequently begin with a 1-sentence opening hook, followed by a dramatic sound effect, laugh track, musical break, or scene transition, after which the narration continues. You MUST NOT STOP after the opening hook sentence. Keep listening past all pauses, music stingers, and sound effects all the way to the absolute end of the media.',
     '6. COMPILATIONS, COUNTDOWNS & MULTI-SCENE CONTINUITY: For countdowns and list videos (e.g. "Number 10" or "Number 9" down to "Number 1"), you MUST transcribe every single entry all the way through the final #1 reveal and outro conclusion. Never stop early at an intermediate number like #2 or #3. There are often 5-15 second transition pauses, action clips, or music between list numbers; continue listening past any pauses and transcribe all speech to the absolute end of the media.',
     '7. MULTI-ITEM COMMENTARY & ANIMAL / MEME COMPILATIONS: Videos showcasing multiple examples, animals, people, or stories often pause for dramatic effect or laughter after each item setup (e.g., "they turn into..."). Never stop transcribing when one item pauses or ends mid-thought. Spoken narration continues for all subsequent items and punchlines throughout the full video. Continue transcribing every single item until the recording ends completely.',
-    '8. NUMERIC SECONDS TIMESTAMPS: Every start and end timestamp in "segments" must be a raw number in seconds (e.g. 0.0, 4.5, 38.2, 145.6). Do NOT use formatted colon strings like "2:30".'
+    '8. CLEAN PARAGRAPH STRUCTURE: Organize the output text into clean, readable paragraphs separated by blank lines (\\n\\n). Group coherent sentences or thoughts together (every 2-4 sentences per paragraph) instead of outputting one long continuous unbroken wall of text.',
+    '9. NUMERIC SECONDS TIMESTAMPS: Every start and end timestamp in "segments" must be a raw number in seconds (e.g. 0.0, 4.5, 38.2, 145.6). Do NOT use formatted colon strings like "2:30".'
   ]
 
   if (diarization) {
     promptParts.push(
-      '9. SPEAKER DIARIZATION: Identify and differentiate distinct speakers across the audio. Prefix each speaker turn or dialogue with speaker labels (e.g., "Speaker 1: ...", "Speaker 2: ..."). Maintain consistent speaker tags across consecutive segments.'
+      '10. SPEAKER DIARIZATION: Identify and differentiate distinct speakers across the audio. Prefix each speaker turn or dialogue with speaker labels (e.g., "Speaker 1: ...", "Speaker 2: ..."). Maintain consistent speaker tags across consecutive segments.'
     )
   }
 
   if (customVocab.length > 0) {
     promptParts.push(
-      `10. DOMAIN VOCABULARY & KEYWORD HINTS: Pay special attention to the following specific proper nouns, technical terms, and keywords: ${customVocab.map((v) => `"${v}"`).join(', ')}. Whenever words sounding like or referring to these terms are spoken, transcribe them with these exact spellings.`
+      `11. DOMAIN VOCABULARY & KEYWORD HINTS: Pay special attention to the following specific proper nouns, technical terms, and keywords: ${customVocab.map((v) => `"${v}"`).join(', ')}. Whenever words sounding like or referring to these terms are spoken, transcribe them with these exact spellings.`
     )
   }
 
   if (options.highSensitivity) {
     promptParts.push(
-      '11. MAXIMUM AUDIO SENSITIVITY ACTIVE: The recording contains quiet dialogue, whispering, lyrics, or speech over background music/beats. Boost vocal channel detection and transcribe all audible utterances verbatim without omitting any words.'
+      '12. MAXIMUM AUDIO SENSITIVITY ACTIVE: The recording contains quiet dialogue, whispering, lyrics, or speech over background music/beats. Boost vocal channel detection and transcribe all audible utterances verbatim without omitting any words.'
     )
   }
 

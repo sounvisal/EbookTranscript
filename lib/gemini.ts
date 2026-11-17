@@ -523,8 +523,9 @@ export async function transcribeAudioBufferWithGemini(
     '2. VERBATIM SPEECH ACCURACY: Transcribe every spoken word accurately in the native script. For Khmer speech, output clean Khmer script (អក្សរខ្មែរ) with proper spacing and spelling. For English speech, output English.',
     '3. HIGH-SENSITIVITY: Transcribe verbatim even with background music, sound effects, noise, quiet speech, singing, or fast speaking.',
     '4. COMPLETE RECORDING CONTINUITY & COMPILATIONS: Transcribe the entire duration verbatim from start to finish without stopping. For compilations or countdowns (e.g. "Number 10" down to "Number 1" or Khmer countdowns), you MUST transcribe all entries completely all the way through the final #1 item and conclusion without stopping at intermediate pauses.',
+    '5. CLEAN PARAGRAPH STRUCTURE: Organize the spoken narrative into clean, well-spaced paragraphs separated by blank lines (\\n\\n). Group coherent sentences or thoughts together (every 2-4 sentences per paragraph) instead of outputting one single unbroken wall of text. For storytelling, dialogue, or news commentary, begin a new paragraph whenever the topic, scene, or speaker shifts.',
     'Format strictly as JSON with this exact shape:',
-    '{"language":"Khmer","text":"Full continuous transcript text here"}',
+    '{"language":"Khmer","text":"First paragraph of transcript.\\n\\nSecond paragraph of transcript."}',
     'Only return empty text if the audio is 100% complete dead silence or pure instrumental music with zero human words.'
   ].join(' ')
 

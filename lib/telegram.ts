@@ -964,10 +964,17 @@ export const TELEGRAM_TEAM_KEYBOARD = {
   is_persistent: false
 }
 
+export interface TelegramInlineKeyboardButton {
+  text: string
+  callback_data?: string
+  url?: string
+  copy_text?: { text: string }
+}
+
 export async function sendTelegramMessage(
   chatId: string | number,
   text: string,
-  inlineKeyboard?: Array<Array<{ text: string; callback_data?: string; url?: string }>>,
+  inlineKeyboard?: Array<Array<TelegramInlineKeyboardButton>>,
   includeMainKeyboard: boolean = false,
   replyToMessageId?: number
 ): Promise<{ success: boolean; messageId?: number }> {
@@ -1028,7 +1035,7 @@ export async function editTelegramMessage(
   chatId: string | number,
   messageId: number,
   text: string,
-  inlineKeyboard?: Array<Array<{ text: string; callback_data?: string; url?: string }>>
+  inlineKeyboard?: Array<Array<TelegramInlineKeyboardButton>>
 ): Promise<boolean> {
   const { token } = getBotCredentials()
   if (!token || !messageId) return false
@@ -1060,7 +1067,7 @@ export async function editTelegramMessage(
 export async function sendTelegramResponse(
   chatId: string | number,
   text: string,
-  inlineKeyboard?: Array<Array<{ text: string; callback_data?: string; url?: string }>>,
+  inlineKeyboard?: Array<Array<TelegramInlineKeyboardButton>>,
   includeMainKeyboard: boolean = true,
   replyToMessageId?: number
 ): Promise<boolean> {
@@ -1465,6 +1472,67 @@ export async function sendTelegramChatAction(
   }
 }
 
+/**
+ * Formats dense continuous transcript speech into clean, readable paragraphs.
+ * Groups coherent sentences (every 2-3 sentences or ~250-350 chars) with blank lines (\n\n),
+ * and handles English punctuation (. ! ?), dialogue quotation, and Khmer Khan (។).
+ */
+export function formatCleanParagraphs(rawText: string): string {
+  if (!rawText || typeof rawText !== 'string') return ''
+  const trimmed = rawText.trim()
+
+  // If already formatted into distinct paragraphs (2+ newlines), preserve and normalize
+  if (trimmed.includes('\n\n')) {
+    return trimmed
+      .split(/\n{2,}/)
+      .map((p) => p.trim())
+      .filter(Boolean)
+      .join('\n\n')
+  }
+
+  // If text has single newlines representing distinct lines/items, preserve if balanced
+  const singleLines = trimmed.split(/\n/).map((l) => l.trim()).filter(Boolean)
+  if (singleLines.length > 2 && singleLines.every((l) => l.length < 200)) {
+    return singleLines.join('\n\n')
+  }
+
+  // Split into sentences for English (. ! ?) and Khmer (។ ? !)
+  const sentenceRegex = /[^.!?។\n]+(?:[.!?។]+["'”’]?|\n|$)/g
+  const matches = trimmed.match(sentenceRegex)
+
+  if (!matches || matches.length <= 2) {
+    return trimmed
+  }
+
+  const paragraphs: string[] = []
+  let currentPara: string[] = []
+  let currentLen = 0
+
+  for (const sentence of matches) {
+    const s = sentence.trim()
+    if (!s) continue
+    currentPara.push(s)
+    currentLen += s.length
+
+    // Break paragraph every 2-3 sentences or around 240-360 chars
+    if (currentPara.length >= 3 || currentLen >= 260) {
+      paragraphs.push(currentPara.join(' '))
+      currentPara = []
+      currentLen = 0
+    }
+  }
+
+  if (currentPara.length > 0) {
+    if (paragraphs.length > 0 && currentPara.length === 1 && currentLen < 120) {
+      paragraphs[paragraphs.length - 1] += ' ' + currentPara.join(' ')
+    } else {
+      paragraphs.push(currentPara.join(' '))
+    }
+  }
+
+  return paragraphs.join('\n\n')
+}
+
 export async function sendTelegramDocument(
   chatId: string | number,
   fileName: string,
@@ -1617,8 +1685,9 @@ export async function handleTelegramAudioUpload(params: {
       return true
     }
 
-    // 7. Calculate metrics and save to Database (Full Cloud Sync with User Persistence)
-    const wordCount = text.trim().split(/\s+/).filter(Boolean).length
+    // 7. Calculate metrics, format clean readable paragraphs, and save to Database
+    const formattedText = formatCleanParagraphs(text)
+    const wordCount = formattedText.trim().split(/\s+/).filter(Boolean).length
     const durationSeconds = params.durationSeconds || Math.max(1, Math.round(buffer.length / 16000))
 
     // Resolve or create user in database
@@ -1627,10 +1696,10 @@ export async function handleTelegramAudioUpload(params: {
       return null
     })
 
-    // Save to prisma.transcript (accessible in Web History and User Directory)
+    // Save clean paragraphs to prisma.transcript (accessible in Web History and User Directory)
     await prisma.transcript.create({
       data: {
-        text,
+        text: formattedText,
         source: 'telegram-bot',
         filename: fileName,
         duration: durationSeconds,
@@ -1660,7 +1729,7 @@ export async function handleTelegramAudioUpload(params: {
       await deleteTelegramMessage(params.chatId, loadingMsgId)
     }
 
-    // 8. Deliver final transcript back to chat
+    // 8. Deliver final transcript back to chat in clean readable quoted paragraphs
     const mins = Math.floor(durationSeconds / 60)
     const secs = Math.round(durationSeconds % 60)
     const durationStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`
@@ -1676,27 +1745,31 @@ export async function handleTelegramAudioUpload(params: {
       ''
     ].join('\n')
 
-    const inlineKeyboard = [
+    const inlineKeyboard: Array<Array<TelegramInlineKeyboardButton>> = [
       [
-        { text: '🌐 View in Web History', url: 'https://ebook-transcript.vercel.app/history' },
-        ...(isChatIdAdmin(params.chatId) ? [{ text: '📊 Live Stats', callback_data: 'stats' }] : [])
-      ]
+        ...(formattedText.length <= 4096 ? [{ text: '📋 Copy Transcript', copy_text: { text: formattedText } }] : []),
+        { text: '🌐 View in Web History', url: 'https://ebook-transcript.vercel.app/history' }
+      ],
+      ...(isChatIdAdmin(params.chatId) ? [[{ text: '📊 Live Stats', callback_data: 'stats' }]] : [])
     ]
 
-    // If text fits in Telegram's 4096 char limit
-    if (text.length <= 3200) {
-      const fullMessage = `${header}${escapeHtml(text)}\n\n⚡ <i>Synced to your Web History & Dashboard.</i>`
+    // If text fits in Telegram's message limit (~3000 chars allows room for header and quote tags)
+    if (formattedText.length <= 3000) {
+      const fullMessage = `${header}<blockquote>${escapeHtml(formattedText)}</blockquote>\n\n⚡ <i>Synced to your Web History & Dashboard.</i>`
       await sendTelegramResponse(params.chatId, fullMessage, inlineKeyboard, true, params.replyToMessageId)
     } else {
-      // Long transcript: send preview + full document attachment
-      const previewText = text.slice(0, 2600) + '...\n\n<i>[Full transcript continues in the document attachment below ⬇️]</i>'
-      await sendTelegramResponse(params.chatId, `${header}${escapeHtml(previewText)}`, inlineKeyboard, true, params.replyToMessageId)
+      // Long transcript: send clean paragraph preview in quote + full document attachment
+      const previewText = formattedText.slice(0, 2400)
+      const lastBreak = previewText.lastIndexOf('\n\n')
+      const cleanPreview = lastBreak > 1600 ? previewText.slice(0, lastBreak) : previewText
+      const messageWithPreview = `${header}<blockquote>${escapeHtml(cleanPreview)}...\n\n<i>[Full transcript continues in document attachment below ⬇️]</i></blockquote>\n\n⚡ <i>Synced to your Web History & Dashboard.</i>`
+      await sendTelegramResponse(params.chatId, messageWithPreview, inlineKeyboard, true, params.replyToMessageId)
 
       const docName = `${fileName.replace(/\.[^/.]+$/, '')}_transcript.txt`
       await sendTelegramDocument(
         params.chatId,
         docName,
-        text,
+        formattedText,
         `📄 <b>Full Transcript Attachment:</b> <code>${escapeHtml(docName)}</code> (${wordCount.toLocaleString()} words)`,
         params.replyToMessageId
       )
@@ -1814,8 +1887,9 @@ export async function handleTelegramYouTubeLink(params: {
       return true
     }
 
-    // Calculate metrics and save to Database (Full Cloud Sync with User Persistence)
-    const wordCount = text.trim().split(/\s+/).filter(Boolean).length
+    // Calculate metrics, format clean readable paragraphs, and save to Database
+    const formattedText = formatCleanParagraphs(text)
+    const wordCount = formattedText.trim().split(/\s+/).filter(Boolean).length
     if (!durationSeconds) {
       durationSeconds = Math.max(1, Math.round(wordCount / 2.5))
     }
@@ -1826,10 +1900,10 @@ export async function handleTelegramYouTubeLink(params: {
       return null
     })
 
-    // Save to prisma.transcript (accessible in Web History and User Directory)
+    // Save clean paragraphs to prisma.transcript (accessible in Web History and User Directory)
     await prisma.transcript.create({
       data: {
-        text,
+        text: formattedText,
         source: 'telegram-bot',
         filename: `${fileName}.txt`,
         duration: durationSeconds,
@@ -1858,7 +1932,7 @@ export async function handleTelegramYouTubeLink(params: {
       await deleteTelegramMessage(params.chatId, loadingMsgId)
     }
 
-    // Deliver final transcript back to chat
+    // Deliver final transcript back to chat in clean readable quoted paragraphs
     const mins = Math.floor(durationSeconds / 60)
     const secs = Math.round(durationSeconds % 60)
     const durationStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`
@@ -1874,27 +1948,31 @@ export async function handleTelegramYouTubeLink(params: {
       ''
     ].join('\n')
 
-    const inlineKeyboard = [
+    const inlineKeyboard: Array<Array<TelegramInlineKeyboardButton>> = [
       [
-        { text: '🌐 View in Web History', url: 'https://ebook-transcript.vercel.app/history' },
-        ...(isChatIdAdmin(params.chatId) ? [{ text: '📊 Live Stats', callback_data: 'stats' }] : [])
-      ]
+        ...(formattedText.length <= 4096 ? [{ text: '📋 Copy Transcript', copy_text: { text: formattedText } }] : []),
+        { text: '🌐 View in Web History', url: 'https://ebook-transcript.vercel.app/history' }
+      ],
+      ...(isChatIdAdmin(params.chatId) ? [[{ text: '📊 Live Stats', callback_data: 'stats' }]] : [])
     ]
 
-    // If text fits in Telegram's 4096 char limit
-    if (text.length <= 3200) {
-      const fullMessage = `${header}${escapeHtml(text)}\n\n⚡ <i>Synced to your Web History & Dashboard.</i>`
+    // If text fits in Telegram's message limit (~3000 chars allows room for header and quote tags)
+    if (formattedText.length <= 3000) {
+      const fullMessage = `${header}<blockquote>${escapeHtml(formattedText)}</blockquote>\n\n⚡ <i>Synced to your Web History & Dashboard.</i>`
       await sendTelegramResponse(params.chatId, fullMessage, inlineKeyboard, true, params.replyToMessageId)
     } else {
-      // Long transcript: send preview + full document attachment
-      const previewText = text.slice(0, 2600) + '...\n\n<i>[Full transcript continues in the document attachment below ⬇️]</i>'
-      await sendTelegramResponse(params.chatId, `${header}${escapeHtml(previewText)}`, inlineKeyboard, true, params.replyToMessageId)
+      // Long transcript: send clean paragraph preview in quote + full document attachment
+      const previewText = formattedText.slice(0, 2400)
+      const lastBreak = previewText.lastIndexOf('\n\n')
+      const cleanPreview = lastBreak > 1600 ? previewText.slice(0, lastBreak) : previewText
+      const messageWithPreview = `${header}<blockquote>${escapeHtml(cleanPreview)}...\n\n<i>[Full transcript continues in document attachment below ⬇️]</i></blockquote>\n\n⚡ <i>Synced to your Web History & Dashboard.</i>`
+      await sendTelegramResponse(params.chatId, messageWithPreview, inlineKeyboard, true, params.replyToMessageId)
 
       const docName = `${fileName.replace(/[<>:"/\\|?*]/g, '').trim() || 'transcript'}_transcript.txt`
       await sendTelegramDocument(
         params.chatId,
         docName,
-        text,
+        formattedText,
         `📄 <b>Full Transcript Attachment:</b> <code>${escapeHtml(docName)}</code> (${wordCount.toLocaleString()} words)`,
         params.replyToMessageId
       )
