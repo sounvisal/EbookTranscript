@@ -34,7 +34,7 @@ export default function Footer() {
               <span className="relative flex h-2 w-2">
                 <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500 shadow-xs shadow-emerald-500/50"></span>
               </span>
-              <span>Gemini Fleet Active & Healthy</span>
+              <span>Powered by Gemini</span>
             </div>
           </div>
 

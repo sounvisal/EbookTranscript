@@ -112,6 +112,11 @@ export async function POST(req: Request) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         commands: [
+          { command: 'ops', description: 'Admin operations and interactive controls' },
+          { command: 'model', description: 'Switch model: 2.5-flash, 2.5-flash-lite, auto' },
+          { command: 'safe_mode', description: 'Pause or resume new transcription starts: on/off' },
+          { command: 'reset_quota', description: 'Reset today’s usage: user@email.com' },
+          { command: 'queue', description: 'View background processing and queue counts' },
           { command: 'start', description: '🚀 Open bot menu & control buttons' },
           { command: 'transcribe', description: '🎙️ Audio & Voice Transcriber' },
           { command: 'stats', description: '📊 Today Live Stats' },

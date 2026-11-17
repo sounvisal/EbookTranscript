@@ -7,6 +7,7 @@ import { getConfiguredKeys, GEMINI_UNAVAILABLE } from '@/lib/geminiConfig'
 import { geminiKeyFingerprint, readUploadToken } from '@/lib/uploadSession'
 import { dispatchTranscription, JOB_LEASE_MS, MAX_JOB_ATTEMPTS } from '@/lib/transcriptionJobs'
 import { getDatabaseCapabilities } from '@/lib/databaseCapabilities'
+import { getOperationsSettings } from '@/lib/operations'
 
 export const maxDuration = 300
 
@@ -76,6 +77,9 @@ async function startJob(req: Request) {
   const userId = session.user.id
   const body = await req.json().catch(() => null)
   if (!body) return NextResponse.json({ error: 'Invalid transcription request.' }, { status: 400 })
+  if ((await getOperationsSettings()).safeMode && typeof body.id !== 'string') {
+    return NextResponse.json({ error: 'New transcriptions are paused by Safe Mode.' }, { status: 503 })
+  }
 
   let job
   if (typeof body.id === 'string') {

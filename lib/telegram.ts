@@ -6,6 +6,7 @@
  */
 
 import { prisma } from './prisma'
+import { getOperationsSettings } from './operations'
 import { transcribeAudioBufferWithGemini } from './gemini'
 import { extractYouTubeMedia, extractYouTubeTranscript } from './youtube'
 
@@ -945,7 +946,7 @@ export const TELEGRAM_MAIN_KEYBOARD = {
     [{ text: '🎙️ Audio Transcribe' }, { text: '📊 Live Stats' }],
     [{ text: '🩺 System Health' }, { text: '🔑 Key Fleet' }],
     [{ text: '👥 Active Users' }, { text: '🔄 Run Daily Report' }],
-    [{ text: '🌐 Open Admin Web' }]
+    [{ text: '⚙️ Operations' }, { text: '🌐 Open Admin Web' }]
   ],
   resize_keyboard: true,
   is_persistent: false
@@ -1471,6 +1472,11 @@ export async function handleTelegramAudioUpload(params: {
 }): Promise<boolean> {
   const { token } = getBotCredentials()
   if (!token) return false
+  if ((await getOperationsSettings()).safeMode) {
+    await sendTelegramResponse(params.chatId, 'New transcriptions are paused by Safe Mode. Please try again later.')
+    return false
+  }
+
 
   // 1. Check file size limit (Telegram Bot API allows up to 20MB downloads)
   if (params.fileSize && params.fileSize > 20 * 1024 * 1024) {
@@ -1665,6 +1671,11 @@ export async function handleTelegramYouTubeLink(params: {
 }): Promise<boolean> {
   const { token } = getBotCredentials()
   if (!token) return false
+  if ((await getOperationsSettings()).safeMode) {
+    await sendTelegramResponse(params.chatId, 'New transcriptions are paused by Safe Mode. Please try again later.')
+    return false
+  }
+
 
   const cleanUrl = params.url.trim()
 

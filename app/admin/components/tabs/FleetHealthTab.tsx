@@ -35,6 +35,9 @@ export function FleetHealthTab({
   onProbeFleet,
   onOpenTelegram
 }: FleetHealthTabProps) {
+  const probes = keyFleet.flatMap(key => pingResults[key.index] ? [pingResults[key.index]] : [])
+  const healthyCount = probes.filter(probe => probe.status === 'healthy').length
+  const lastChecked = probes.map(probe => probe.lastChecked).sort().at(-1)
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-4 rounded-3xl border border-slate-200/80 dark:border-slate-800 bg-white/80 dark:bg-slate-900/60 p-6 shadow-xs backdrop-blur-md">
@@ -60,7 +63,7 @@ export function FleetHealthTab({
             ) : (
               <Activity className="h-4 w-4" />
             )}
-            <span>Ping All Keys ({keyFleet?.length || 1})</span>
+            <span>Ping All Keys ({keyFleet?.length || 0})</span>
           </button>
         </div>
 
@@ -94,21 +97,22 @@ export function FleetHealthTab({
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-4 rounded-2xl bg-gradient-to-r from-amber-500/10 via-purple-500/10 to-blue-500/10 border border-slate-200/80 dark:border-slate-800">
           <div>
             <span className="text-[11px] text-slate-500 dark:text-slate-400 block font-medium">Fleet Size</span>
-            <p className="text-lg font-bold text-slate-900 dark:text-white font-mono mt-0.5">{keyFleet?.length || 1} API Keys</p>
+            <p className="text-lg font-bold text-slate-900 dark:text-white font-mono mt-0.5">{keyFleet?.length || 0} API Keys</p>
           </div>
           <div>
             <span className="text-[11px] text-slate-500 dark:text-slate-400 block font-medium">Daily Quota Capacity</span>
-            <p className="text-lg font-bold text-emerald-600 dark:text-emerald-400 font-mono mt-0.5">{((keyFleet?.length || 1) * 1500).toLocaleString()} reqs/day</p>
+            <p className="text-sm font-medium text-slate-600 dark:text-slate-300 mt-0.5">Not measured</p>
           </div>
           <div>
             <span className="text-[11px] text-slate-500 dark:text-slate-400 block font-medium">Instant Bandwidth</span>
-            <p className="text-lg font-bold text-blue-600 dark:text-blue-400 font-mono mt-0.5">{(keyFleet?.length || 1) * 15} RPM max</p>
+            <p className="text-sm font-medium text-slate-600 dark:text-slate-300 mt-0.5">Not measured</p>
           </div>
           <div>
             <span className="text-[11px] text-slate-500 dark:text-slate-400 block font-medium">Probe Health</span>
             <p className="text-lg font-bold text-purple-600 dark:text-purple-400 font-mono mt-0.5">
-              {Object.values(pingResults).filter((p) => p.status === 'healthy').length || keyFleet?.length || 1} / {keyFleet?.length || 1} Operational
+              {probes.length ? `${healthyCount} / ${keyFleet.length} healthy` : 'Not checked'}
             </p>
+            {lastChecked && <p className="mt-1 text-xs text-slate-500">Checked {new Date(lastChecked).toLocaleTimeString()} · {probes.length - healthyCount} need attention</p>}
           </div>
         </div>
 
@@ -157,9 +161,9 @@ export function FleetHealthTab({
                         : 'Error'}
                     </span>
                   ) : (
-                    <span className="flex items-center gap-1 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
-                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
-                      Standby Ready
+                    <span className="flex items-center gap-1 text-[11px] font-semibold text-slate-500">
+                      <span className="h-1.5 w-1.5 rounded-full bg-slate-400"></span>
+                      Not checked
                     </span>
                   )}
                 </div>
@@ -188,27 +192,7 @@ export function FleetHealthTab({
                   </div>
                 </div>
 
-                {/* Per-Key Daily Cap Progress against Google 1,500 limit */}
-                <div className="flex flex-col gap-1 border-t border-slate-200/60 dark:border-slate-800/80 pt-2">
-                  <div className="flex justify-between text-[10px]">
-                    <span className="text-slate-500">Daily Quota (1,500 cap):</span>
-                    <span className="font-bold text-slate-700 dark:text-slate-300 font-mono">
-                      {k.routedRequestsToday || 0} / 1,500 ({Math.min(100, Math.round(((k.routedRequestsToday || 0) / 1500) * 100))}%)
-                    </span>
-                  </div>
-                  <div className="h-1.5 w-full rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
-                    <div
-                      style={{ width: `${Math.min(100, Math.max(2, Math.round(((k.routedRequestsToday || 0) / 1500) * 100)))}%` }}
-                      className={`h-full rounded-full ${
-                        (k.routedRequestsToday || 0) >= 1200
-                          ? 'bg-red-500'
-                          : (k.routedRequestsToday || 0) >= 750
-                          ? 'bg-amber-500'
-                          : 'bg-emerald-500'
-                      }`}
-                    />
-                  </div>
-                </div>
+                <p className="border-t border-slate-200/60 pt-2 text-xs text-slate-500 dark:border-slate-800">Provider quota: not measured</p>
 
                 {hasPing && (
                   <p className="text-[10px] text-slate-500 font-mono">

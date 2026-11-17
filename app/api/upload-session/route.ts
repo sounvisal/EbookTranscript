@@ -8,6 +8,7 @@ import { GEMINI_UNAVAILABLE, getConfiguredKeys } from '@/lib/geminiConfig'
 import { MAX_MEDIA_UPLOAD_BYTES } from '@/lib/uploadLimits'
 import { createUploadToken, geminiKeyFingerprint, parseGoogleUploadUrl } from '@/lib/uploadSession'
 import { checkUserQuota } from '@/lib/quota'
+import { getOperationsSettings } from '@/lib/operations'
 
 function getGeminiApiHost(): string {
   const raw = process.env.GEMINI_API_HOST || 'generativelanguage.googleapis.com'
@@ -46,6 +47,9 @@ export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}))
   const { fileName, mimeType, fileSize, preferredKeyIndex } = body ?? {}
   const purpose = body?.purpose ?? 'transcription'
+  if (purpose === 'transcription' && (await getOperationsSettings()).safeMode) {
+    return NextResponse.json({ error: 'New transcriptions are paused by Safe Mode.' }, { status: 503 })
+  }
   if ((purpose !== 'transcription' && purpose !== 'report')
     || typeof fileName !== 'string' || !fileName.trim() || fileName.length > 255
     || typeof mimeType !== 'string' || !/^[a-z0-9.+-]+\/[a-z0-9.+-]+$/i.test(mimeType)

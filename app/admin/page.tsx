@@ -21,6 +21,8 @@ import { AdminSkeleton } from './components/AdminSkeleton'
 import { AdminErrorBoundary } from './components/AdminErrorBoundary'
 
 // Modular tab panels
+import { JobsTab } from './components/tabs/JobsTab'
+import { OperationsTab } from './components/tabs/OperationsTab'
 import { OverviewTab } from './components/tabs/OverviewTab'
 import { LiveFeedTab } from './components/tabs/LiveFeedTab'
 import { UserManagementTab } from './components/tabs/UserManagementTab'
@@ -164,7 +166,9 @@ function AdminDashboardContent() {
         '5': 'cache',
         '6': 'audit',
         '7': 'tokens',
-        '8': 'errors'
+        '8': 'errors',
+        '9': 'jobs',
+        '0': 'settings'
       }
 
       if (tabMap[e.key]) {
@@ -231,25 +235,16 @@ function AdminDashboardContent() {
         </div>
       )}
 
-      {/* Time Machine Filter */}
-      <TimeMachineFilter
-        selectedRange={statsHook.selectedRange}
-        onRangeChange={statsHook.handleRangeChange}
-        startTime={stats?.range.startTime || ''}
-        endTime={stats?.range.endTime || ''}
-      />
-
-      {/* KPI Cards */}
-      {stats && <KPICards stats={stats} />}
-
-      {/* Navigation Tab Switcher */}
-      <TabNavigation
-        activeTab={activeTab}
-        onTabChange={setActiveTab}
-        usersCount={usersHook.users.length}
-        keyFleetCount={stats?.keyFleet?.length || 1}
-        recentErrorsCount={stats?.errors.recent.length || 0}
-      />
+      <div className="grid min-w-0 gap-6 lg:grid-cols-[190px_minmax(0,1fr)]">
+        <TabNavigation activeTab={activeTab} onTabChange={setActiveTab} usersCount={usersHook.users.length}
+          keyFleetCount={stats?.keyFleet?.length || 0} recentErrorsCount={stats?.errors.recent.length || 0} />
+        <main className="min-w-0 space-y-6">
+        {['overview', 'tokens', 'errors', 'feed', 'keys'].includes(activeTab) && <TimeMachineFilter
+          selectedRange={statsHook.selectedRange} onRangeChange={statsHook.handleRangeChange}
+          startTime={stats?.range.startTime || ''} endTime={stats?.range.endTime || ''} />}
+        {activeTab === 'overview' && stats && <KPICards stats={stats} />}
+        {activeTab === 'jobs' && <JobsTab />}
+        {activeTab === 'settings' && <OperationsTab />}
 
       {/* TAB 1: OVERVIEW & TELEMETRY */}
       {activeTab === 'overview' && stats && (
@@ -327,6 +322,9 @@ function AdminDashboardContent() {
           clearingErrors={clearingErrors}
         />
       )}
+
+        </main>
+      </div>
 
       {/* User Intelligence Dossier Drawer */}
       <UserDossierDrawer

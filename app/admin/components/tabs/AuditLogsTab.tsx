@@ -114,6 +114,8 @@ export function AuditLogsTab() {
               className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 px-3 py-1.5 text-xs text-slate-700 dark:text-slate-300 focus:outline-none"
             >
               <option value="all">All Actions</option>
+              <option value="SYSTEM_SETTING">System Settings</option>
+              <option value="JOB_RETRY">Job Retries</option>
               <option value="ROLE_CHANGE">Role Changes</option>
               <option value="QUOTA_RESET">Quota Resets</option>
               <option value="QUOTA_BOOST">Bonus Grants</option>

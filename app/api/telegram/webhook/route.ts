@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
+import { handleTelegramOperations, isTelegramOperator } from '@/lib/telegramOperations'
 import {
   getBotCredentials,
-  isChatIdAdmin,
   answerTelegramCallback,
   handleTelegramWelcome,
   handleTelegramTranscribeHelp,
@@ -139,10 +139,16 @@ export async function POST(req: Request) {
     language_code: update.message?.from?.language_code
   }
 
+  const operationSenderId = update.callback_query?.from?.id || update.message?.from?.id
+  if (operationSenderId && Number.isSafeInteger(update.update_id) && await handleTelegramOperations({
+    chatId: incomingChatId, senderId: operationSenderId, updateId: update.update_id,
+    text: update.message?.text, callback: update.callback_query
+  })) return NextResponse.json({ ok: true, action: 'operations' })
+
   // Background registration: ensure sender is registered in Database
   getOrCreateTelegramUser(sender).catch((e) => console.error('[Webhook User Sync]', e))
 
-  const isAdmin = isChatIdAdmin(incomingChatId)
+  const isAdmin = Boolean(operationSenderId && isTelegramOperator(incomingChatId, operationSenderId))
 
   // Handle Callback Query (Inline Button Click)
   if (isCallback && update.callback_query) {

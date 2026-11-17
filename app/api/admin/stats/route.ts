@@ -146,11 +146,11 @@ export async function GET(req: Request) {
       languageGroups
     ] = await Promise.all([
       prisma.usageMetric.findMany({
-        where: { createdAt: { gte: startTime, lte: endTime } },
+        where: { createdAt: { gte: startTime, lte: endTime }, inputType: { not: 'admin_grant' } },
         orderBy: { createdAt: 'desc' }
       }),
       prisma.usageMetric.findMany({
-        where: { createdAt: { gte: startOfToday } }
+        where: { createdAt: { gte: startOfToday }, inputType: { not: 'admin_grant' } }
       }),
       prisma.errorLog.findMany({
         take: 100,
@@ -308,10 +308,11 @@ export async function GET(req: Request) {
     }
 
     // Success rate calculation
-    const totalProcessedCount = allMetrics.length
-    const successRate = totalProcessedCount + errorCountTotal > 0
-      ? ((totalProcessedCount / (totalProcessedCount + errorCountTotal)) * 100).toFixed(1)
-      : '100.0'
+    const successes = allMetrics.filter(m => ['success', 'quota_reset'].includes(m.status)).length
+    const failures = allMetrics.filter(m => m.status === 'error').length
+    const successRate = successes + failures > 0
+      ? `${((successes / (successes + failures)) * 100).toFixed(1)}%`
+      : 'Not measured'
 
     // Format daily data array for charts in chronological left-to-right order
     const dailyStats = isHourly
@@ -345,21 +346,20 @@ export async function GET(req: Request) {
     // 4. Batch Processing Queue Metrics
     const batchMetrics = allMetrics.filter((m) => m.inputType === 'batch')
     const batchTotal = batchMetrics.length
-    const batchSuccess = batchMetrics.filter((m) => m.status === 'success').length
+    const batchSuccess = batchMetrics.filter((m) => ['success', 'quota_reset'].includes(m.status)).length
     const batchFailed = batchMetrics.filter((m) => m.status === 'error').length
     const batchSuccessRate = batchTotal > 0 ? `${((batchSuccess / batchTotal) * 100).toFixed(1)}%` : '--'
     const batchTotalAudioSeconds = batchMetrics.reduce((acc, m) => acc + (m.durationSeconds || 0), 0)
     
     // Calculate real turnaround if latency is available
-    let avgTurnaroundSpeed = 'Idle'
+    let avgTurnaroundSpeed = 'Not measured'
     if (batchTotal > 0) {
       const batchLatencies = batchMetrics.filter((m) => typeof m.latencyMs === 'number' && m.latencyMs > 0)
       const totalLatencySec = batchLatencies.reduce((acc, m) => acc + (m.latencyMs! / 1000), 0)
-      if (totalLatencySec > 0 && batchTotalAudioSeconds > 0) {
-        const speed = (batchTotalAudioSeconds / totalLatencySec).toFixed(1)
+      const measuredAudioSeconds = batchLatencies.reduce((acc, m) => acc + Math.max(0, m.durationSeconds || 0), 0)
+      if (totalLatencySec > 0 && measuredAudioSeconds > 0) {
+        const speed = (measuredAudioSeconds / totalLatencySec).toFixed(1)
         avgTurnaroundSpeed = `${speed}x real-time`
-      } else {
-        avgTurnaroundSpeed = '12.5x real-time'
       }
     }
 
@@ -461,12 +461,12 @@ export async function GET(req: Request) {
       .map((k) => k.trim().replace(/["'\r\n]/g, ''))
       .filter(Boolean)
 
-    const keyCount = Math.max(1, configuredKeys.length)
+
     const totalRequestsToday = todayMetrics.length
 
     const keyFleet = configuredKeys.map((key, idx) => {
-      const metricsTodayForKey = todayMetrics.filter((m) => (m.keyIndex ?? 0) === idx)
-      const metricsRangeForKey = allMetrics.filter((m) => (m.keyIndex ?? 0) === idx)
+      const metricsTodayForKey = todayMetrics.filter((m) => m.keyIndex === idx)
+      const metricsRangeForKey = allMetrics.filter((m) => m.keyIndex === idx)
       const routedRequestsToday = metricsTodayForKey.length
       const tokensTodayForKey = metricsTodayForKey.reduce((acc, m) => acc + m.totalTokens, 0)
       const requestsInRangeForKey = metricsRangeForKey.length
@@ -481,7 +481,7 @@ export async function GET(req: Request) {
 
       const loadSharePercent = totalRequestsToday > 0
         ? Number(((routedRequestsToday / totalRequestsToday) * 100).toFixed(1))
-        : Number((100 / keyCount).toFixed(1))
+        : 0
 
       return {
         index: idx,
@@ -519,7 +519,7 @@ export async function GET(req: Request) {
         totalAudioMinutes: Math.round(totalDurationSeconds / 60),
         totalAudioHours: (totalDurationSeconds / 3600).toFixed(1),
         totalWords,
-        successRate: `${successRate}%`
+        successRate
       },
       batchQueue: batchQueueStats,
       errorClusters: errorClusters.filter((c) => c.count > 0 || c.id === 'google_upload_400' || c.id === 'google_quota_429'),

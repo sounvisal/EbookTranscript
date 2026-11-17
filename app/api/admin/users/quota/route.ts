@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions, isUserAdmin } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { logAdminAction } from '@/lib/auditLog'
+import { resetUserQuota } from '@/lib/operations'
 
 export const dynamic = 'force-dynamic'
 
@@ -29,42 +30,14 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Target user not found.' }, { status: 404 })
     }
 
-    const now = new Date()
-    const localOffsetHours = 7
-    const localNow = new Date(now.getTime() + localOffsetHours * 3600 * 1000)
-    const localStart = new Date(Date.UTC(localNow.getUTCFullYear(), localNow.getUTCMonth(), localNow.getUTCDate(), 0, 0, 0))
-    const startOfDayUtc = new Date(localStart.getTime() - localOffsetHours * 3600 * 1000)
-
     if (action === 'reset') {
       // Archive today's successful usage metrics so checkUserQuota sees 0 minutes used today
-      const updated = await prisma.usageMetric.updateMany({
-        where: {
-          userId,
-          createdAt: { gte: startOfDayUtc },
-          status: 'success'
-        },
-        data: {
-          status: 'quota_reset'
-        }
-      })
-
-      await logAdminAction({
-        adminId: session.user.id || 'admin',
-        adminEmail: session.user.email,
-        action: 'QUOTA_RESET',
-        targetId: userId,
-        metadata: {
-          targetEmail: targetUser.email,
-          recordsReset: updated.count,
-          timestamp: new Date().toISOString()
-        },
-        req
-      })
+      const resetCount = await resetUserQuota(userId, { id: session.user.id, email: session.user.email })
 
       return NextResponse.json({
         success: true,
         message: `Successfully reset daily quota for ${targetUser.email || targetUser.name || 'user'}.`,
-        resetCount: updated.count
+        resetCount
       })
     }
 

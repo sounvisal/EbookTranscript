@@ -53,7 +53,7 @@ export async function GET(req: Request) {
       return {
         id: log.id,
         adminId: log.adminId,
-        adminEmail: log.adminEmail || 'Unknown Admin',
+        adminEmail: log.adminEmail || log.adminId || 'Unknown Admin',
         action: log.action,
         targetId: log.targetId,
         metadata: parsedMetadata,

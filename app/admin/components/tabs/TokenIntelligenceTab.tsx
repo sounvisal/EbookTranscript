@@ -51,7 +51,7 @@ export function TokenIntelligenceTab({ tokens }: TokenIntelligenceTabProps) {
             <span>Estimated Gemini API Cost Projection</span>
           </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            Standard tier rates: $0.075 / 1M audio input tokens, $0.30 / 1M text output tokens.
+            Legacy estimate assumptions (not provider billing): $0.075 / 1M audio input tokens, $0.30 / 1M text output tokens.
           </p>
         </div>
 
@@ -63,7 +63,7 @@ export function TokenIntelligenceTab({ tokens }: TokenIntelligenceTabProps) {
             ${tokens.estimatedCostRangeUSD}
           </p>
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            Today&apos;s Cost: ${tokens.estimatedCostTodayUSD} USD (Free tier quota provides 1,500 daily requests per key).
+            Today&apos;s estimate: ${tokens.estimatedCostTodayUSD} USD. Provider quotas and actual charges are not measured here.
           </p>
         </div>
       </div>

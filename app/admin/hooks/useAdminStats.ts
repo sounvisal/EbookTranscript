@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import type { AdminStats, DateRangeOption, RefreshIntervalOption } from '../types'
 
 export function useAdminStats() {
@@ -9,7 +9,10 @@ export function useAdminStats() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [selectedRange, setSelectedRange] = useState<DateRangeOption>('30d')
   const [isSyncing, setIsSyncing] = useState(false)
-  const [lastSyncTime, setLastSyncTime] = useState<Date>(new Date())
+  const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null)
+
+  const requestSequence = useRef(0)
+  useEffect(() => () => { requestSequence.current++ }, [])
 
   // Configurable Refresh Interval ('off' | '15s' | '30s' | '60s')
   const [refreshInterval, setRefreshInterval] = useState<RefreshIntervalOption>(() => {
@@ -30,6 +33,7 @@ export function useAdminStats() {
   // Fetch stats with dynamic date range
   const fetchStats = useCallback(
     async (silent = false, range: DateRangeOption = selectedRange) => {
+      const sequence = ++requestSequence.current
       if (!silent) setLoading(true)
       setIsSyncing(true)
       setErrorMsg(null)
@@ -42,14 +46,15 @@ export function useAdminStats() {
           throw new Error('Failed to load admin statistics.')
         }
         const data: AdminStats = await res.json()
+        if (sequence !== requestSequence.current) return
         setStats(data)
         setLastSyncTime(new Date())
       } catch (err) {
+        if (sequence !== requestSequence.current) return
         console.error(err)
         setErrorMsg(err instanceof Error ? err.message : 'Error loading dashboard.')
       } finally {
-        if (!silent) setLoading(false)
-        setIsSyncing(false)
+        if (sequence === requestSequence.current) { setLoading(false); setIsSyncing(false) }
       }
     },
     [selectedRange]

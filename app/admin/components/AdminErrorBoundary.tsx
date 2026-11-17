@@ -52,7 +52,7 @@ export class AdminErrorBoundary extends Component<Props, State> {
               Admin Console Error
             </h2>
             <p className="mt-2 text-sm text-slate-600 dark:text-slate-400 max-w-md">
-              An unexpected render issue occurred while computing telemetry. Other services and the background speech pipelines remain operational.
+              An unexpected issue prevented the dashboard from displaying. Refresh to try again; service status could not be confirmed here.
             </p>
 
             {this.state.error && (

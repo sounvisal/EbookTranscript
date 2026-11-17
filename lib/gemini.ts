@@ -1,4 +1,5 @@
 import { cleanGeminiModelName, DEFAULT_GEMINI_MODELS, getConfiguredKeys, getConfiguredModels } from './geminiConfig'
+import { getOperationsSettings, SafeModeError } from './operations'
 import { randomBytes } from 'node:crypto'
 import { checkTranscriptIncompleteness } from './transcript'
 
@@ -511,7 +512,9 @@ export async function transcribeAudioBufferWithGemini(
     throw new Error('No Gemini API keys configured in environment.')
   }
 
-  const models = getConfiguredModels()
+  const operations = await getOperationsSettings()
+  if (operations.safeMode) throw new SafeModeError()
+  const models = operations.model === 'auto' ? getConfiguredModels() : [operations.model]
 
   const prompt = [
     'You are an expert multilingual audio transcription AI specialized in automatic language detection (Khmer / ភាសាខ្មែរ, English, and bilingual speech) and noisy audio extraction.',

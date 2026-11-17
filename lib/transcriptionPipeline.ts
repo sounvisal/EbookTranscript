@@ -22,6 +22,7 @@ import {
 import { getConfiguredModels } from '@/lib/geminiConfig'
 import { geminiKeyFingerprint, readUploadToken } from '@/lib/uploadSession'
 import { MAX_INLINE_UPLOAD_BYTES } from '@/lib/uploadLimits'
+import { assertTranscriptionEnabled, getOperationsSettings, SafeModeError } from '@/lib/operations'
 import type { EngineProgressEvent } from '@/lib/transcriptionActivity'
 import {
   getOptimalModelOrder,
@@ -472,6 +473,7 @@ export type ProgressEvent =
   | { type: 'error'; error: string; code?: 'UPLOAD_EXPIRED' }
 
 export function classifyTranscriptionError(error: unknown) {
+  if (error instanceof SafeModeError) return { message: error.message, status: 503 }
   if (error instanceof ExpiredUploadError) return { message: error.message, status: 400, code: 'UPLOAD_EXPIRED' as const }
   const message = error instanceof Error ? error.message : 'Failed to transcribe media.'
   let status = 500
@@ -493,8 +495,9 @@ export function classifyTranscriptionError(error: unknown) {
 // Self-Healing Fleet Model Order:
 // Dynamically orders models so that fast, healthy models are prioritized.
 // Quarantines models experiencing 503 high demand or 429 rate limits until their cooldown passes.
-function getGeminiModels(durationSeconds?: number): string[] {
-  return getOptimalModelOrder(durationSeconds)
+async function getGeminiModels(durationSeconds?: number): Promise<string[]> {
+  const { model } = await getOperationsSettings()
+  return model === 'auto' ? getOptimalModelOrder(durationSeconds) : [model]
 }
 
 function buildMockResult(): TranscriptResultPayload {
@@ -710,7 +713,7 @@ async function transcribeWithKey(
     emit({ type: 'status', phase: 'processing', duration: totalDuration })
 
     // For long media (>= 90s), re-order models using duration-aware fleet order so long-context models lead
-    let activeModels = totalDuration >= 90 ? getGeminiModels(totalDuration) : models
+    const activeModels = totalDuration >= 90 ? await getGeminiModels(totalDuration) : models
 
     let lastProgress = 0
     let lastError: unknown
@@ -1094,7 +1097,7 @@ export async function transcribeUploadedMedia(
       assignedKey,
       { ...media, keepUploadedFile },
       media.sourceName,
-      getGeminiModels(media.durationSeconds),
+      await getGeminiModels(media.durationSeconds),
       emit,
       buildTranscriptionPrompt(media.options),
       media.keyIndex
@@ -1121,6 +1124,7 @@ export async function runTranscriptionPipeline(
   keys: string[],
   emit: (event: ProgressEvent) => void
 ): Promise<TranscriptResultPayload> {
+  await assertTranscriptionEnabled()
   if (!keys.length) {
     // No API key configured: return a mock transcript with staged progress.
     emit({ type: 'status', phase: 'processing', duration: 12.5 })
@@ -1138,7 +1142,7 @@ export async function runTranscriptionPipeline(
     emit({ type: 'status', phase: 'uploading' })
   }
   const mediaInput = await getMediaInputFromRequest(req, userId, keys)
-  const models = getGeminiModels(mediaInput.durationSeconds)
+  const models = await getGeminiModels(mediaInput.durationSeconds)
   const promptText = buildTranscriptionPrompt(mediaInput.options)
 
   if (mediaInput.fileUri && mediaInput.keyIndex !== undefined) {

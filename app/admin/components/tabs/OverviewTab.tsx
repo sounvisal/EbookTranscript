@@ -34,11 +34,11 @@ export function OverviewTab({ stats, currentTime, selectedRange }: OverviewTabPr
                   }`}
                 />
                 <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                  Batch Processing Queue Health & Turnaround
+                  Recorded batch activity
                 </h3>
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                Telemetry metrics for multi-file bulk uploads and parallel speech recognition pipelines.
+                Only requests explicitly recorded as batch are included. Use Jobs for current background work.
               </p>
             </div>
             <span
@@ -48,13 +48,13 @@ export function OverviewTab({ stats, currentTime, selectedRange }: OverviewTabPr
                   : 'bg-slate-100 dark:bg-slate-800/80 text-slate-500 dark:text-slate-400'
               }`}
             >
-              {stats.batchQueue.avgSpeed} Turnaround
+              Speed: {stats.batchQueue.avgSpeed}
             </span>
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-4">
             <div className="p-3.5 rounded-2xl bg-white/80 dark:bg-slate-900/60 border border-slate-200/60 dark:border-slate-800">
-              <span className="text-xs text-slate-400 font-medium">Total Batch Jobs</span>
+              <span className="text-xs text-slate-400 font-medium">Recorded batch requests</span>
               <p className="text-xl font-extrabold text-slate-900 dark:text-white mt-0.5">
                 {stats.batchQueue.totalBatches}
               </p>
