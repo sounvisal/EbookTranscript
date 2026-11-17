@@ -63,6 +63,12 @@ interface TelegramWebhookUpdate {
       mime_type?: string
       file_size?: number
     }
+    video_note?: {
+      file_id: string
+      duration: number
+      length?: number
+      file_size?: number
+    }
     document?: {
       file_id: string
       file_name?: string
@@ -210,7 +216,8 @@ export async function POST(req: Request) {
       mimeType: msg.voice.mime_type || 'audio/ogg',
       fileSize: msg.voice.file_size,
       durationSeconds: msg.voice.duration,
-      sender
+      sender,
+      replyToMessageId: msg.message_id
     })
     return NextResponse.json({ ok: true, type: 'voice' })
   }
@@ -224,7 +231,8 @@ export async function POST(req: Request) {
       mimeType: msg.audio.mime_type || 'audio/mpeg',
       fileSize: msg.audio.file_size,
       durationSeconds: msg.audio.duration,
-      sender
+      sender,
+      replyToMessageId: msg.message_id
     })
     return NextResponse.json({ ok: true, type: 'audio' })
   }
@@ -238,9 +246,25 @@ export async function POST(req: Request) {
       mimeType: msg.video.mime_type || 'video/mp4',
       fileSize: msg.video.file_size,
       durationSeconds: msg.video.duration,
-      sender
+      sender,
+      replyToMessageId: msg.message_id
     })
     return NextResponse.json({ ok: true, type: 'video' })
+  }
+
+  // 3b. Video Note (Round camera bubble)
+  if (msg?.video_note) {
+    await handleTelegramAudioUpload({
+      chatId: incomingChatId,
+      fileId: msg.video_note.file_id,
+      fileName: `video-note-${new Date().toISOString().slice(11, 19).replace(/:/g, '')}.mp4`,
+      mimeType: 'video/mp4',
+      fileSize: msg.video_note.file_size,
+      durationSeconds: msg.video_note.duration,
+      sender,
+      replyToMessageId: msg.message_id
+    })
+    return NextResponse.json({ ok: true, type: 'video_note' })
   }
 
   // 4. File Uploaded as Document Attachment
@@ -259,7 +283,8 @@ export async function POST(req: Request) {
         fileName: doc.file_name || `media-${Date.now()}.mp3`,
         mimeType: doc.mime_type || 'audio/mpeg',
         fileSize: doc.file_size,
-        sender
+        sender,
+        replyToMessageId: msg.message_id
       })
       return NextResponse.json({ ok: true, type: 'document_media' })
     } else {
@@ -270,7 +295,10 @@ export async function POST(req: Request) {
           `Please send an audio or video file (e.g. <code>.mp3, .m4a, .wav, .aac, .ogg, .mp4</code>) or a voice note.`,
           '',
           `💡 <i>Voice notes can be recorded by holding the mic button in Telegram.</i>`
-        ].join('\n')
+        ].join('\n'),
+        undefined,
+        true,
+        msg.message_id
       )
       return NextResponse.json({ ok: true, type: 'document_unsupported' })
     }
@@ -285,7 +313,8 @@ export async function POST(req: Request) {
     await handleTelegramYouTubeLink({
       chatId: incomingChatId,
       url: ytMatch[1],
-      sender
+      sender,
+      replyToMessageId: msg?.message_id
     })
     return NextResponse.json({ ok: true, type: 'youtube_url' })
   }

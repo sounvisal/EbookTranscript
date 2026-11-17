@@ -968,7 +968,8 @@ export async function sendTelegramMessage(
   chatId: string | number,
   text: string,
   inlineKeyboard?: Array<Array<{ text: string; callback_data?: string; url?: string }>>,
-  includeMainKeyboard: boolean = false
+  includeMainKeyboard: boolean = false,
+  replyToMessageId?: number
 ): Promise<{ success: boolean; messageId?: number }> {
   const { token } = getBotCredentials()
   if (!token) return { success: false }
@@ -988,6 +989,10 @@ export async function sendTelegramMessage(
   }
   if (replyMarkup) {
     body.reply_markup = replyMarkup
+  }
+  if (replyToMessageId) {
+    body.reply_to_message_id = replyToMessageId
+    body.allow_sending_without_reply = true
   }
 
   try {
@@ -1056,9 +1061,10 @@ export async function sendTelegramResponse(
   chatId: string | number,
   text: string,
   inlineKeyboard?: Array<Array<{ text: string; callback_data?: string; url?: string }>>,
-  includeMainKeyboard: boolean = true
+  includeMainKeyboard: boolean = true,
+  replyToMessageId?: number
 ): Promise<boolean> {
-  const res = await sendTelegramMessage(chatId, text, inlineKeyboard, includeMainKeyboard)
+  const res = await sendTelegramMessage(chatId, text, inlineKeyboard, includeMainKeyboard, replyToMessageId)
   return res.success
 }
 
@@ -1463,7 +1469,8 @@ export async function sendTelegramDocument(
   chatId: string | number,
   fileName: string,
   content: string | Buffer,
-  caption?: string
+  caption?: string,
+  replyToMessageId?: number
 ): Promise<boolean> {
   const { token } = getBotCredentials()
   if (!token) return false
@@ -1473,6 +1480,10 @@ export async function sendTelegramDocument(
   if (caption) {
     formData.append('caption', caption)
     formData.append('parse_mode', 'HTML')
+  }
+  if (replyToMessageId) {
+    formData.append('reply_to_message_id', String(replyToMessageId))
+    formData.append('allow_sending_without_reply', 'true')
   }
 
   const blob = typeof content === 'string'
@@ -1502,11 +1513,18 @@ export async function handleTelegramAudioUpload(params: {
   fileSize?: number
   durationSeconds?: number
   sender?: TelegramSenderInfo
+  replyToMessageId?: number
 }): Promise<boolean> {
   const { token } = getBotCredentials()
   if (!token) return false
   if ((await getOperationsSettings()).safeMode) {
-    await sendTelegramResponse(params.chatId, 'New transcriptions are paused by Safe Mode. Please try again later.')
+    await sendTelegramResponse(
+      params.chatId,
+      'New transcriptions are paused by Safe Mode. Please try again later.',
+      undefined,
+      true,
+      params.replyToMessageId
+    )
     return false
   }
 
@@ -1521,7 +1539,10 @@ export async function handleTelegramAudioUpload(params: {
         '',
         `💡 <i>For large multi-hour recordings, upload directly to the Web Dashboard (which supports up to 2GB):</i>`,
         `🌐 https://ebook-transcript.vercel.app`
-      ].join('\n')
+      ].join('\n'),
+      undefined,
+      true,
+      params.replyToMessageId
     )
     return false
   }
@@ -1557,7 +1578,8 @@ export async function handleTelegramAudioUpload(params: {
       `Please wait a few seconds ⚡`
     ].join('\n'),
     undefined,
-    false
+    false,
+    params.replyToMessageId
   )
   const loadingMsgId = loading.messageId
   await sendTelegramChatAction(params.chatId, 'typing')
@@ -1587,7 +1609,10 @@ export async function handleTelegramAudioUpload(params: {
       if (loadingMsgId) await deleteTelegramMessage(params.chatId, loadingMsgId)
       await sendTelegramResponse(
         params.chatId,
-        `⚠️ <b>No audible speech detected:</b> The audio file appears to contain silence or background noise with no distinguishable words.`
+        `⚠️ <b>No audible speech detected:</b> The audio file appears to contain silence or background noise with no distinguishable words.`,
+        undefined,
+        true,
+        params.replyToMessageId
       )
       return true
     }
@@ -1661,18 +1686,19 @@ export async function handleTelegramAudioUpload(params: {
     // If text fits in Telegram's 4096 char limit
     if (text.length <= 3200) {
       const fullMessage = `${header}${escapeHtml(text)}\n\n⚡ <i>Synced to your Web History & Dashboard.</i>`
-      await sendTelegramResponse(params.chatId, fullMessage, inlineKeyboard, true)
+      await sendTelegramResponse(params.chatId, fullMessage, inlineKeyboard, true, params.replyToMessageId)
     } else {
       // Long transcript: send preview + full document attachment
       const previewText = text.slice(0, 2600) + '...\n\n<i>[Full transcript continues in the document attachment below ⬇️]</i>'
-      await sendTelegramResponse(params.chatId, `${header}${escapeHtml(previewText)}`, inlineKeyboard, true)
+      await sendTelegramResponse(params.chatId, `${header}${escapeHtml(previewText)}`, inlineKeyboard, true, params.replyToMessageId)
 
       const docName = `${fileName.replace(/\.[^/.]+$/, '')}_transcript.txt`
       await sendTelegramDocument(
         params.chatId,
         docName,
         text,
-        `📄 <b>Full Transcript Attachment:</b> <code>${escapeHtml(docName)}</code> (${wordCount.toLocaleString()} words)`
+        `📄 <b>Full Transcript Attachment:</b> <code>${escapeHtml(docName)}</code> (${wordCount.toLocaleString()} words)`,
+        params.replyToMessageId
       )
     }
 
@@ -1691,7 +1717,10 @@ export async function handleTelegramAudioUpload(params: {
         '',
         `💡 <i>You can also upload this file on the Web Dashboard:</i>`,
         `🌐 https://ebook-transcript.vercel.app`
-      ].join('\n')
+      ].join('\n'),
+      undefined,
+      true,
+      params.replyToMessageId
     )
     return false
   }
@@ -1701,11 +1730,18 @@ export async function handleTelegramYouTubeLink(params: {
   chatId: string | number
   url: string
   sender?: TelegramSenderInfo
+  replyToMessageId?: number
 }): Promise<boolean> {
   const { token } = getBotCredentials()
   if (!token) return false
   if ((await getOperationsSettings()).safeMode) {
-    await sendTelegramResponse(params.chatId, 'New transcriptions are paused by Safe Mode. Please try again later.')
+    await sendTelegramResponse(
+      params.chatId,
+      'New transcriptions are paused by Safe Mode. Please try again later.',
+      undefined,
+      true,
+      params.replyToMessageId
+    )
     return false
   }
 
@@ -1723,7 +1759,8 @@ export async function handleTelegramYouTubeLink(params: {
       `Please wait a few seconds ⚡`
     ].join('\n'),
     undefined,
-    false
+    false,
+    params.replyToMessageId
   )
   const loadingMsgId = loading.messageId
   await sendTelegramChatAction(params.chatId, 'typing')
@@ -1769,7 +1806,10 @@ export async function handleTelegramYouTubeLink(params: {
       if (loadingMsgId) await deleteTelegramMessage(params.chatId, loadingMsgId)
       await sendTelegramResponse(
         params.chatId,
-        `⚠️ <b>No audible speech or subtitles detected:</b> The YouTube video appears to have no distinguishable speech or captions.`
+        `⚠️ <b>No audible speech or subtitles detected:</b> The YouTube video appears to have no distinguishable speech or captions.`,
+        undefined,
+        true,
+        params.replyToMessageId
       )
       return true
     }
@@ -1844,18 +1884,19 @@ export async function handleTelegramYouTubeLink(params: {
     // If text fits in Telegram's 4096 char limit
     if (text.length <= 3200) {
       const fullMessage = `${header}${escapeHtml(text)}\n\n⚡ <i>Synced to your Web History & Dashboard.</i>`
-      await sendTelegramResponse(params.chatId, fullMessage, inlineKeyboard, true)
+      await sendTelegramResponse(params.chatId, fullMessage, inlineKeyboard, true, params.replyToMessageId)
     } else {
       // Long transcript: send preview + full document attachment
       const previewText = text.slice(0, 2600) + '...\n\n<i>[Full transcript continues in the document attachment below ⬇️]</i>'
-      await sendTelegramResponse(params.chatId, `${header}${escapeHtml(previewText)}`, inlineKeyboard, true)
+      await sendTelegramResponse(params.chatId, `${header}${escapeHtml(previewText)}`, inlineKeyboard, true, params.replyToMessageId)
 
       const docName = `${fileName.replace(/[<>:"/\\|?*]/g, '').trim() || 'transcript'}_transcript.txt`
       await sendTelegramDocument(
         params.chatId,
         docName,
         text,
-        `📄 <b>Full Transcript Attachment:</b> <code>${escapeHtml(docName)}</code> (${wordCount.toLocaleString()} words)`
+        `📄 <b>Full Transcript Attachment:</b> <code>${escapeHtml(docName)}</code> (${wordCount.toLocaleString()} words)`,
+        params.replyToMessageId
       )
     }
 
@@ -1874,7 +1915,10 @@ export async function handleTelegramYouTubeLink(params: {
         '',
         `💡 <i>You can also paste this YouTube link on the Web Dashboard:</i>`,
         `🌐 https://ebook-transcript.vercel.app`
-      ].join('\n')
+      ].join('\n'),
+      undefined,
+      true,
+      params.replyToMessageId
     )
     return false
   }
