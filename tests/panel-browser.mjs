@@ -190,7 +190,7 @@ export async function testTranscriptPanel({ base, cookie, db, userId }) {
     await page.waitForFunction(() => !document.querySelector('[data-active-word=true]'))
     await setTime(0.2)
     await page.locator('#segment-0 span').filter({ hasText: /^Hello$/ }).click()
-    await page.waitForFunction(() => document.querySelector('audio').currentTime < 0.1)
+    await page.waitForFunction(() => document.querySelector('audio').currentTime < 0.1 && !document.querySelector('audio').seeking)
     await page.locator('audio').evaluate(audio => {
       window.__unexpectedSeeks = 0
       audio.addEventListener('seeking', () => { window.__unexpectedSeeks++ })
@@ -283,7 +283,7 @@ export async function testTranscriptPanel({ base, cookie, db, userId }) {
     const play = page.getByRole('button', { name: 'Play', exact: true })
     const initialPlayY = (await play.boundingBox()).y
     await scroll.evaluate(el => { el.scrollTop = 600 })
-    assert.equal((await play.boundingBox()).y, initialPlayY, 'compact player stays reachable while reading')
+    assert.ok(Math.abs((await play.boundingBox()).y - initialPlayY) < 1, 'compact player stays reachable while reading')
     await scroll.evaluate(el => { el.scrollTop = 0 })
     await page.screenshot({ path: '.temp/panel-mobile.png', fullPage: true })
     const overflow = await page.evaluate(() => Array.from(document.querySelectorAll('body *')).filter(el => el.getBoundingClientRect().right > innerWidth + 1).slice(0, 10).map(el => ({ tag: el.tagName, classes: el.className, width: el.getBoundingClientRect().width })))

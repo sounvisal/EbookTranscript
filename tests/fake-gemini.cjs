@@ -1,6 +1,7 @@
 const realFetch = globalThis.fetch
 globalThis.fetch = async (input, init) => {
   const url = new URL(typeof input === 'string' ? input : input.url ?? input.href)
+  if (url.hostname === 'api.telegram.org') return Response.json({ ok: true, result: { message_id: 123 } })
   if (url.hostname !== 'generativelanguage.googleapis.com') return realFetch(input, init)
   const headers = new Headers(init?.headers)
   if (url.pathname === '/upload/v1beta/files') {

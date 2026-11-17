@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { testAdminBaseline, testAdminOperations } from './admin-operations.mjs'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { readFile } from 'node:fs/promises'
@@ -32,7 +33,7 @@ const app = spawn(process.execPath, ['node_modules/next/dist/bin/next', 'start',
     ...process.env, DATABASE_URL: 'postgresql://postgres:postgres@' + databaseConnection + '/postgres?connection_limit=1',
     NEXTAUTH_URL: base, NEXTAUTH_SECRET: 'local-test-secret-not-a-production-secret',
     GOOGLE_CLIENT_ID: '', GOOGLE_CLIENT_SECRET: '', RESEND_API_KEY: '', EMAIL_SERVER_HOST: '',
-    TELEGRAM_BOT_TOKEN: '', TELEGRAM_CHAT_ID: '', ADMIN_EMAILS: '', ADMIN_EMAIL: '',
+    TELEGRAM_BOT_TOKEN: 'local-test-bot', TELEGRAM_CHAT_ID: '-1001234', TELEGRAM_ADMIN_USER_IDS: '1234', ADMIN_CHAT_IDS: '', TELEGRAM_WEBHOOK_SECRET: 'local-webhook-secret', ADMIN_EMAILS: '', ADMIN_EMAIL: '',
     GEMINI_API_KEYS: 'local-test-provider-key', GEMINI_API_KEY: '', GEMINI_API_HOST: 'generativelanguage.googleapis.com',
     TRANSCRIPTION_QUEUE_ENABLED: 'false', NODE_OPTIONS: '--require=./tests/fake-gemini.cjs'
   },
@@ -113,6 +114,7 @@ try {
       }
     }
     await checkAdmin(2, 0)
+    await testAdminBaseline({ base, owner, other })
     if (process.argv.includes('--panel')) await testTranscriptPanel({ base, cookie: owner, db, userId: users[0] })
     const legacyHistory = await (await expectStatus(historyBefore, 200)).json()
     assert.equal(legacyHistory.total, 1)
@@ -200,6 +202,7 @@ try {
     ])
     assert.equal(chunkEvents.at(-1).type, 'result')
     console.log('Passed confirmed section progress for a split audio file.')
+    await testAdminOperations({ base, owner, other, db, browser: process.argv.includes('--panel') })
 
   }
 } finally {
