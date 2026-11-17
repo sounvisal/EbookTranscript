@@ -5,9 +5,20 @@ export const OPERATION_MODELS = ['auto', 'gemini-2.5-flash', 'gemini-2.5-flash-l
 export type OperationModel = typeof OPERATION_MODELS[number]
 export type OperationActor = { id: string; email?: string | null; commandId?: string }
 
+let cachedSettings: { data: { model: OperationModel; safeMode: boolean; configuredModels: string[]; updatedAt: string | null }; expiresAt: number } | null = null
+
+export function invalidateOperationsSettingsCache() {
+  cachedSettings = null
+}
+
 // Each setting is an audited, durable event in the existing administration log.
 // This also works on deployments that have not added the background-job tables.
 export async function getOperationsSettings() {
+  const now = Date.now()
+  if (cachedSettings && cachedSettings.expiresAt > now) {
+    return cachedSettings.data
+  }
+
   const [model, safeMode] = await Promise.all(['transcription.model', 'transcription.safe_mode'].map(targetId =>
     prisma.adminAuditLog.findFirst({ where: { action: 'SYSTEM_SETTING', targetId }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] })
   ))
@@ -15,12 +26,15 @@ export async function getOperationsSettings() {
     try { return value ? JSON.parse(value).value : undefined } catch { return undefined }
   }
   const configured = parse(model?.metadata)
-  return {
+  const data = {
     model: (OPERATION_MODELS.includes(configured) ? configured : 'auto') as OperationModel,
     safeMode: parse(safeMode?.metadata) === true,
     configuredModels: getConfiguredModels(),
     updatedAt: [model?.createdAt, safeMode?.createdAt].filter(Boolean).sort((a, b) => b!.getTime() - a!.getTime())[0]?.toISOString() || null
   }
+
+  cachedSettings = { data, expiresAt: now + 5000 }
+  return data
 }
 
 export class SafeModeError extends Error {
@@ -44,6 +58,7 @@ export async function changeOperation(setting: 'model' | 'safeMode', value: unkn
   } catch (error) {
     if (!id || !await prisma.adminAuditLog.findUnique({ where: { id }, select: { id: true } })) throw error
   }
+  invalidateOperationsSettingsCache()
   return getOperationsSettings()
 }
 

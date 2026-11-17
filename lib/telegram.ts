@@ -1019,6 +1019,39 @@ export async function deleteTelegramMessage(chatId: string | number, messageId: 
   }
 }
 
+export async function editTelegramMessage(
+  chatId: string | number,
+  messageId: number,
+  text: string,
+  inlineKeyboard?: Array<Array<{ text: string; callback_data?: string; url?: string }>>
+): Promise<boolean> {
+  const { token } = getBotCredentials()
+  if (!token || !messageId) return false
+
+  const body: Record<string, unknown> = {
+    chat_id: chatId,
+    message_id: messageId,
+    text,
+    parse_mode: 'HTML',
+    disable_web_page_preview: true
+  }
+  if (inlineKeyboard && inlineKeyboard.length > 0) {
+    body.reply_markup = { inline_keyboard: inlineKeyboard }
+  }
+
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${token}/editMessageText`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+    return res.ok
+  } catch (err) {
+    console.error('[Telegram] Failed to edit message:', err)
+    return false
+  }
+}
+
 export async function sendTelegramResponse(
   chatId: string | number,
   text: string,
