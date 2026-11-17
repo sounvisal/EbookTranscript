@@ -12,40 +12,23 @@ export async function POST(req: Request) {
 }
 
 function isAuthorizedCron(req: Request): boolean {
-  const cronSecret = process.env.CRON_SECRET || 'signal-cron-daily-report-secure-key'
-  const authHeader = req.headers.get('authorization')?.trim()
-
-  // 1. Bearer Token match (configured CRON_SECRET or default secret)
-  if (authHeader === `Bearer ${cronSecret}`) {
-    return true
-  }
-
-  // 2. Query parameter match (?key=... or ?secret=...)
-  const url = new URL(req.url)
-  const querySecret = url.searchParams.get('key') || url.searchParams.get('secret')
-  if (querySecret === cronSecret) {
-    return true
-  }
-
-  // 3. Vercel Cron invocation (Vercel automatically sets x-vercel-cron header for scheduled crons)
-  const isVercelCron =
-    req.headers.get('x-vercel-cron') === '1' ||
-    Boolean(req.headers.get('user-agent')?.toLowerCase().includes('vercel-cron'))
-  if (isVercelCron) {
-    return true
-  }
-
-  // 4. GitHub Actions workflow signature
-  if (req.headers.get('x-signal-cron') === 'daily-digest') {
-    return true
-  }
-
-  // 5. In local development environment, allow easy testing
   if (process.env.NODE_ENV === 'development') {
     return true
   }
 
-  return false
+  const cronSecret = process.env.CRON_SECRET
+  if (!cronSecret) {
+    return false
+  }
+
+  const authHeader = req.headers.get('authorization')?.trim()
+  if (authHeader === `Bearer ${cronSecret}`) {
+    return true
+  }
+
+  const url = new URL(req.url)
+  const querySecret = url.searchParams.get('key') || url.searchParams.get('secret')
+  return querySecret === cronSecret
 }
 
 async function handleDailyReport(req: Request) {

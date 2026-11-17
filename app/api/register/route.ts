@@ -61,14 +61,15 @@ export async function POST(req: Request) {
     }
 
     const passwordHash = hashPassword(password)
-    const isAdmin = isUserAdmin(email)
 
+    // Public password registration always assigns standard user role.
+    // Admin access requires verified Google OAuth identity or server promotion.
     const user = await prisma.user.create({
       data: {
         name: name || email.split('@')[0],
         email,
         passwordHash,
-        role: isAdmin ? 'admin' : 'user'
+        role: 'user'
       },
       select: {
         id: true,

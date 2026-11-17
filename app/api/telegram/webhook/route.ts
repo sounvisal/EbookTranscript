@@ -99,15 +99,18 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-  // Security verification: If TELEGRAM_WEBHOOK_SECRET is set, reject unverified incoming requests
+  // Security verification: require and verify webhook secret in production
   const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET
+  if (process.env.NODE_ENV === 'production' && !webhookSecret) {
+    console.error('[Telegram Webhook] TELEGRAM_WEBHOOK_SECRET must be configured in production.')
+    return NextResponse.json({ ok: false, error: 'Telegram webhook secret not configured' }, { status: 503 })
+  }
+
   if (webhookSecret) {
     const receivedSecret = req.headers.get('x-telegram-bot-api-secret-token')
     if (receivedSecret !== webhookSecret) {
       return NextResponse.json({ ok: false, error: 'Unauthorized webhook request' }, { status: 401 })
     }
-  } else if (process.env.NODE_ENV === 'production') {
-    console.warn('[Telegram Webhook] Notice: TELEGRAM_WEBHOOK_SECRET is not configured. Set this env var to verify incoming Telegram webhooks.')
   }
 
   let update: TelegramWebhookUpdate
