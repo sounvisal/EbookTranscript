@@ -1009,6 +1009,21 @@ export async function sendTelegramMessage(
       body: JSON.stringify(body)
     })
     const data = await res.json()
+    if (!res.ok || !data.ok) {
+      console.error('[Telegram] sendMessage rejected by API:', data.description || res.statusText)
+      // Resilient fallback: if custom reply markup (e.g. invalid button property) caused 400, retry without it
+      if (body.reply_markup && (data.description?.includes('BUTTON') || data.description?.includes('markup') || data.description?.includes('reply_markup'))) {
+        console.warn('[Telegram] Retrying sendMessage without reply_markup fallback...')
+        delete body.reply_markup
+        const retryRes = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        })
+        const retryData = await retryRes.json()
+        return { success: retryRes.ok && retryData.ok, messageId: retryData.result?.message_id }
+      }
+    }
     return { success: res.ok && data.ok, messageId: data.result?.message_id }
   } catch (err) {
     console.error('[Telegram] Failed to send message:', err)
@@ -1747,7 +1762,7 @@ export async function handleTelegramAudioUpload(params: {
 
     const inlineKeyboard: Array<Array<TelegramInlineKeyboardButton>> = [
       [
-        ...(formattedText.length <= 4096 ? [{ text: '📋 Copy Transcript', copy_text: { text: formattedText } }] : []),
+        ...(formattedText.length <= 256 ? [{ text: '📋 Copy Transcript', copy_text: { text: formattedText } }] : []),
         { text: '🌐 View in Web History', url: 'https://ebook-transcript.vercel.app/history' }
       ],
       ...(isChatIdAdmin(params.chatId) ? [[{ text: '📊 Live Stats', callback_data: 'stats' }]] : [])
@@ -1950,7 +1965,7 @@ export async function handleTelegramYouTubeLink(params: {
 
     const inlineKeyboard: Array<Array<TelegramInlineKeyboardButton>> = [
       [
-        ...(formattedText.length <= 4096 ? [{ text: '📋 Copy Transcript', copy_text: { text: formattedText } }] : []),
+        ...(formattedText.length <= 256 ? [{ text: '📋 Copy Transcript', copy_text: { text: formattedText } }] : []),
         { text: '🌐 View in Web History', url: 'https://ebook-transcript.vercel.app/history' }
       ],
       ...(isChatIdAdmin(params.chatId) ? [[{ text: '📊 Live Stats', callback_data: 'stats' }]] : [])
