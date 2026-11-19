@@ -499,13 +499,17 @@ let bufferTranscribeKeyCounter = 0
  * Transcribes an in-memory audio or video buffer using Gemini.
  * Supports inline transmission for files <= 8MB, and automatic
  * File API upload & cleanup for larger files up to 20MB.
- * Features automated key & model failover.
+ * Features automated multi-key fleet rotation & dynamic model failover.
  */
 export async function transcribeAudioBufferWithGemini(
   buffer: Buffer,
   mimeType: string,
-  displayName: string = 'telegram-audio'
-): Promise<{ text: string; language: string; model: string }> {
+  displayName: string = 'telegram-audio',
+  options?: {
+    preferredKeyIndex?: number
+    durationSeconds?: number
+  }
+): Promise<{ text: string; language: string; model: string; keyIndex: number }> {
   const keys = getConfiguredKeys()
 
   if (keys.length === 0) {
@@ -514,7 +518,27 @@ export async function transcribeAudioBufferWithGemini(
 
   const operations = await getOperationsSettings()
   if (operations.safeMode) throw new SafeModeError()
-  const models = operations.model === 'auto' ? getConfiguredModels() : [operations.model]
+
+  // Dynamically load fleet health router to prevent circular dependencies
+  const {
+    getOptimalKeyOrder,
+    recordKeySuccess,
+    recordKeyFailure,
+    getOptimalModelOrder,
+    recordModelSuccess,
+    recordModelFailure
+  } = await import('./fleet')
+
+  // Calculate starting key: respect preferredKeyIndex if provided (e.g. from unique update_id or message_id in batch uploads),
+  // otherwise fallback to global round-robin counter to distribute traffic uniformly across all available keys.
+  const preferredIdx = typeof options?.preferredKeyIndex === 'number'
+    ? options.preferredKeyIndex
+    : Math.abs(bufferTranscribeKeyCounter++) % keys.length
+
+  const orderedKeys = getOptimalKeyOrder(preferredIdx, keys)
+  const models = operations.model === 'auto'
+    ? getOptimalModelOrder(options?.durationSeconds)
+    : [operations.model, ...getConfiguredModels().filter((m) => m !== operations.model)]
 
   const prompt = [
     'You are an expert multilingual audio transcription AI specialized in automatic language detection (Khmer / ភាសាខ្មែរ, English, and bilingual speech) and noisy audio extraction.',
@@ -530,12 +554,10 @@ export async function transcribeAudioBufferWithGemini(
   ].join(' ')
 
   let lastError: Error | null = null
-  const startIndex = Math.abs(bufferTranscribeKeyCounter++) % keys.length
 
-  for (let offset = 0; offset < keys.length; offset++) {
-    const keyIdx = (startIndex + offset) % keys.length
-    const apiKey = keys[keyIdx]
+  for (const { index: keyIdx, key: apiKey } of orderedKeys) {
     for (const modelName of models) {
+      const t0 = Date.now()
       try {
         let rawResponseText = ''
 
@@ -607,12 +629,19 @@ export async function transcribeAudioBufferWithGemini(
           continue
         }
 
-        return { text, language, model: modelName }
+        const latencyMs = Date.now() - t0
+        recordKeySuccess(keyIdx)
+        recordModelSuccess(modelName, latencyMs)
+
+        return { text, language, model: modelName, keyIndex: keyIdx }
       } catch (err) {
+        const latencyMs = Date.now() - t0
         lastError = err instanceof Error ? err : new Error(String(err))
-        console.warn(`[Gemini Transcribe] Failover from ${modelName}:`, lastError.message)
+        recordModelFailure({ model: modelName, error: lastError, latencyMs, skipTelegramAlert: true })
+        console.warn(`[Gemini Transcribe] Failover from ${modelName} on Key #${keyIdx + 1}:`, lastError.message)
         const is429 = /429|resource_exhausted|rate limit|quota/i.test(lastError.message)
         if (is429 && keys.length > 1) {
+          recordKeyFailure(keyIdx, lastError)
           console.warn(`[Gemini Transcribe] Key #${keyIdx + 1} hit 429 rate limit. Rotating immediately to next fleet key.`)
           break
         }

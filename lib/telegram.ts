@@ -9,6 +9,7 @@ import { prisma } from './prisma'
 import { getOperationsSettings } from './operations'
 import { transcribeAudioBufferWithGemini } from './gemini'
 import { extractYouTubeMedia, extractYouTubeTranscript } from './youtube'
+import { getConfiguredKeys } from './geminiConfig'
 
 
 type TelegramAlertParams = {
@@ -1597,6 +1598,7 @@ export async function handleTelegramAudioUpload(params: {
   durationSeconds?: number
   sender?: TelegramSenderInfo
   replyToMessageId?: number
+  updateId?: number
 }): Promise<boolean> {
   const { token } = getBotCredentials()
   if (!token) return false
@@ -1685,8 +1687,20 @@ export async function handleTelegramAudioUpload(params: {
     const arrayBuffer = await audioRes.arrayBuffer()
     const buffer = Buffer.from(arrayBuffer)
 
-    // 6. Transcribe with Gemini
-    const { text, language, model } = await transcribeAudioBufferWithGemini(buffer, mimeType, fileName)
+    // 6. Transcribe with Gemini across key fleet
+    const configuredKeys = getConfiguredKeys()
+    const keySeed = params.updateId ?? params.replyToMessageId ?? Date.now()
+    const preferredKeyIndex = configuredKeys.length > 0 ? Math.abs(keySeed) % configuredKeys.length : 0
+
+    const { text, language, model, keyIndex } = await transcribeAudioBufferWithGemini(
+      buffer,
+      mimeType,
+      fileName,
+      {
+        preferredKeyIndex,
+        durationSeconds: params.durationSeconds
+      }
+    )
 
     if (!text || !text.trim()) {
       if (loadingMsgId) await deleteTelegramMessage(params.chatId, loadingMsgId)
@@ -1704,6 +1718,7 @@ export async function handleTelegramAudioUpload(params: {
     const formattedText = formatCleanParagraphs(text)
     const wordCount = formattedText.trim().split(/\s+/).filter(Boolean).length
     const durationSeconds = params.durationSeconds || Math.max(1, Math.round(buffer.length / 16000))
+    const actualKeyIndex = typeof keyIndex === 'number' ? keyIndex : preferredKeyIndex
 
     // Resolve or create user in database
     const dbUser = await getOrCreateTelegramUser(params.sender || { id: params.chatId }).catch((err) => {
@@ -1730,6 +1745,7 @@ export async function handleTelegramAudioUpload(params: {
       data: {
         userId: dbUser?.id || null,
         model,
+        keyIndex: actualKeyIndex,
         inputType: 'telegram',
         fileFormat: ext,
         fileSizeBytes: buffer.length,
@@ -1748,13 +1764,14 @@ export async function handleTelegramAudioUpload(params: {
     const mins = Math.floor(durationSeconds / 60)
     const secs = Math.round(durationSeconds % 60)
     const durationStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`
+    const keyInfo = typeof actualKeyIndex === 'number' ? ` (Key #${actualKeyIndex + 1})` : ''
 
     const header = [
       `✅ <b>TRANSCRIPTION COMPLETE</b>`,
       `📁 <code>${escapeHtml(fileName)}</code>`,
       `🌐 <b>Language:</b> <code>${escapeHtml(language)}</code>`,
       `⏱ <b>Duration:</b> <code>${durationStr}</code> • <b>Words:</b> <code>${wordCount.toLocaleString()}</code>`,
-      `🤖 <b>Model:</b> <code>${escapeHtml(model)}</code>`,
+      `🤖 <b>Model:</b> <code>${escapeHtml(model)}${keyInfo}</code>`,
       '',
       '━━━━━━━━━━━━━━━━━━━━━',
       ''
@@ -1819,6 +1836,7 @@ export async function handleTelegramYouTubeLink(params: {
   url: string
   sender?: TelegramSenderInfo
   replyToMessageId?: number
+  updateId?: number
 }): Promise<boolean> {
   const { token } = getBotCredentials()
   if (!token) return false
@@ -1880,10 +1898,18 @@ export async function handleTelegramYouTubeLink(params: {
       fileName = extracted.sourceName || 'youtube_video'
       durationSeconds = extracted.durationSeconds || 0
 
+      const configuredKeys = getConfiguredKeys()
+      const keySeed = params.updateId ?? params.replyToMessageId ?? Date.now()
+      const preferredKeyIndex = configuredKeys.length > 0 ? Math.abs(keySeed) % configuredKeys.length : 0
+
       const geminiResult = await transcribeAudioBufferWithGemini(
         extracted.buffer,
         extracted.mimeType,
-        extracted.displayName
+        extracted.displayName,
+        {
+          preferredKeyIndex,
+          durationSeconds
+        }
       )
       text = geminiResult.text
       language = geminiResult.language
@@ -1929,10 +1955,15 @@ export async function handleTelegramYouTubeLink(params: {
     }).catch((e) => console.error('[Telegram DB Sync] Transcript save error:', e))
 
     // Save to prisma.usageMetric (telemetry & per-user quota calculation)
+    const configuredKeys = getConfiguredKeys()
+    const keySeed = params.updateId ?? params.replyToMessageId ?? Date.now()
+    const preferredKeyIndex = configuredKeys.length > 0 ? Math.abs(keySeed) % configuredKeys.length : 0
+
     await prisma.usageMetric.create({
       data: {
         userId: dbUser?.id || null,
         model,
+        keyIndex: preferredKeyIndex,
         inputType: 'youtube',
         fileFormat: 'youtube',
         fileSizeBytes: 0,

@@ -6,12 +6,16 @@ export function cleanGeminiModelName(value?: string | null): string {
   try {
     model = decodeURIComponent(model)
   } catch {}
-  // Strip accidental env var name concatenations (e.g. GEMINI_MODEL...GEMINI_MODELS...)
-  model = model.replace(/GEMINI_MODELS?/gi, '')
+  // Extract clean model pattern if environment variable name or concatenation was accidentally included
+  const patternMatch = model.match(/gemini-(?:[0-9]+(?:\.[0-9]+)?-)?(?:flash|pro)(?:-(?:lite|latest|[a-z0-9]+))?/i)?.[0]
+  if (patternMatch) {
+    model = patternMatch
+  }
   return model
     .replace(/:.*$/, '')
-    .replace(/["'\\`\s]/g, '')
+    .replace(/["'\\`\s=]/g, '')
     .replace(/^(models\/)+/i, '')
+    .replace(/GEMINI_MODELS?/gi, '')
     .replace(/[^a-zA-Z0-9_.-]/g, '')
 }
 

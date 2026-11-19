@@ -258,7 +258,8 @@ export async function POST(req: Request) {
           fileSize: msg.voice!.file_size,
           durationSeconds: msg.voice!.duration,
           sender,
-          replyToMessageId: msg.message_id
+          replyToMessageId: msg.message_id,
+          updateId: update.update_id
         })
       } catch (err) {
         console.error('[Telegram Voice Handler Background Error]', err)
@@ -284,7 +285,8 @@ export async function POST(req: Request) {
           fileSize: msg.audio!.file_size,
           durationSeconds: msg.audio!.duration,
           sender,
-          replyToMessageId: msg.message_id
+          replyToMessageId: msg.message_id,
+          updateId: update.update_id
         })
       } catch (err) {
         console.error('[Telegram Audio Handler Background Error]', err)
@@ -310,7 +312,8 @@ export async function POST(req: Request) {
           fileSize: msg.video!.file_size,
           durationSeconds: msg.video!.duration,
           sender,
-          replyToMessageId: msg.message_id
+          replyToMessageId: msg.message_id,
+          updateId: update.update_id
         })
       } catch (err) {
         console.error('[Telegram Video Handler Background Error]', err)
@@ -336,7 +339,8 @@ export async function POST(req: Request) {
           fileSize: msg.video_note!.file_size,
           durationSeconds: msg.video_note!.duration,
           sender,
-          replyToMessageId: msg.message_id
+          replyToMessageId: msg.message_id,
+          updateId: update.update_id
         })
       } catch (err) {
         console.error('[Telegram VideoNote Handler Background Error]', err)
@@ -369,7 +373,8 @@ export async function POST(req: Request) {
             mimeType: doc.mime_type || 'audio/mpeg',
             fileSize: doc.file_size,
             sender,
-            replyToMessageId: msg.message_id
+            replyToMessageId: msg.message_id,
+            updateId: update.update_id
           })
         } catch (err) {
           console.error('[Telegram Document Handler Background Error]', err)
@@ -411,7 +416,8 @@ export async function POST(req: Request) {
           chatId: incomingChatId,
           url: ytMatch[1],
           sender,
-          replyToMessageId: replyMsgId
+          replyToMessageId: replyMsgId,
+          updateId: update.update_id
         })
       } catch (err) {
         console.error('[Telegram YouTube Handler Background Error]', err)
