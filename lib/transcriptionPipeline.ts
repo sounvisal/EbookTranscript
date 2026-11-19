@@ -693,22 +693,25 @@ async function transcribeWithKey(
 
     // If total duration is unknown, probe duration quickly
     if (totalDuration <= 0 && (fileUri || audioInput.buffer)) {
-      try {
-        const probeRes = await streamGeminiTranscript(apiKey, {
-          modelName: models[0],
-          prompt: 'What is the total duration of this audio file in seconds? Return strictly JSON: {"duration": 123.4}',
-          mimeType: mediaMimeType,
-          ...(fileUri ? { fileUri } : { inlineData: audioInput.buffer })
-        })
-        const match = probeRes.match(/"duration"\s*:\s*([0-9.]+)/i)
-        if (match) {
-          const val = Number(match[1])
-          if (Number.isFinite(val) && val > 0) {
-            totalDuration = val
+      for (const probeModel of models) {
+        try {
+          const probeRes = await streamGeminiTranscript(apiKey, {
+            modelName: probeModel,
+            prompt: 'What is the total duration of this audio file in seconds? Return strictly JSON: {"duration": 123.4}',
+            mimeType: mediaMimeType,
+            ...(fileUri ? { fileUri } : { inlineData: audioInput.buffer })
+          })
+          const match = probeRes.match(/"duration"\s*:\s*([0-9.]+)/i)
+          if (match) {
+            const val = Number(match[1])
+            if (Number.isFinite(val) && val > 0) {
+              totalDuration = val
+              break
+            }
           }
+        } catch (probeErr) {
+          console.warn(`Duration probe skipped for model ${probeModel}:`, probeErr)
         }
-      } catch (probeErr) {
-        console.warn('Duration probe skipped:', probeErr)
       }
     }
 
