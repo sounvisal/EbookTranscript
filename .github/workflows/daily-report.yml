@@ -30,13 +30,13 @@ jobs:
             CRON_KEY="signal-cron-daily-report-secure-key"
           fi
 
-          QUERY=""
+          QUERY="key=$CRON_KEY"
           if [ "${{ inputs.force }}" = "true" ]; then
-            QUERY="?force=true"
+            QUERY="key=$CRON_KEY&force=true"
           fi
 
           RESPONSE_FILE=$(mktemp)
-          HTTP_STATUS=$(curl -s -o "$RESPONSE_FILE" -w "%{http_code}" -X POST "https://ebook-transcript.vercel.app/api/cron/daily-report$QUERY" \
+          HTTP_STATUS=$(curl -s -o "$RESPONSE_FILE" -w "%{http_code}" -X POST "https://ebook-transcript.vercel.app/api/cron/daily-report?$QUERY" \
             -H "Authorization: Bearer $CRON_KEY" \
             -H "x-signal-cron: daily-digest" \
             -H "Content-Type: application/json")

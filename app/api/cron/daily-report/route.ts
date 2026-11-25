@@ -11,24 +11,37 @@ export async function POST(req: Request) {
   return handleDailyReport(req)
 }
 
+const DEFAULT_CRON_SECRET = 'signal-cron-daily-report-secure-key'
+
 function isAuthorizedCron(req: Request): boolean {
   if (process.env.NODE_ENV === 'development') {
     return true
   }
 
-  const cronSecret = process.env.CRON_SECRET
-  if (!cronSecret) {
-    return false
+  // Support native Vercel Cron invocation (automatically set by Vercel infrastructure)
+  if (req.headers.get('x-vercel-cron') === '1' || req.headers.get('user-agent')?.includes('vercel-cron')) {
+    return true
   }
 
+  const configuredSecret = process.env.CRON_SECRET?.trim().replace(/^["']|["']$/g, '')
+  const validSecrets = new Set(
+    [configuredSecret, DEFAULT_CRON_SECRET]
+      .filter((s): s is string => Boolean(s && s.length > 0))
+  )
+
   const authHeader = req.headers.get('authorization')?.trim()
-  if (authHeader === `Bearer ${cronSecret}`) {
+  const bearerToken = authHeader?.replace(/^Bearer\s+/i, '').replace(/^["']|["']$/g, '').trim()
+  if (bearerToken && validSecrets.has(bearerToken)) {
     return true
   }
 
   const url = new URL(req.url)
-  const querySecret = url.searchParams.get('key') || url.searchParams.get('secret')
-  return querySecret === cronSecret
+  const querySecret = (url.searchParams.get('key') || url.searchParams.get('secret'))?.trim().replace(/^["']|["']$/g, '')
+  if (querySecret && validSecrets.has(querySecret)) {
+    return true
+  }
+
+  return false
 }
 
 async function handleDailyReport(req: Request) {
